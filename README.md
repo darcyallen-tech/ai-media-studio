@@ -206,6 +206,8 @@ Optional field (address, client, shoot date) shared by all generate surfaces. La
 
 Library can filter or group by job; cards show the job label. History JSON stays at the output root. No cloud sync.
 
+**Assign later:** each Library card has **Assign to ▾** (Image / Video / Audio). Pick an existing job, **New Job / Listing…**, or **Clear job (Ungrouped)**. Metadata always updates so filters and grouping work; files under the output folder are moved into `jobs/<slug>/…` when safe. Paths outside the output root stay put.
+
 ### Prompt favorites + packs
 
 - **★ Star** saves the current prompt (user or post-Enhance) under app data  
@@ -215,6 +217,10 @@ Library can filter or group by job; cards show the job label. History JSON stays
 ### Local spend
 
 Library (and Settings) show a **local spend** summary from generation history: today / week / month / all-time totals, top models, and provider buckets. Uses the cost labels already logged per generate — no extra billing APIs. Rows with missing or $0 cost are skipped.
+
+### Before / after export (stills)
+
+On **Studio Image** and **Tools** image results with a known source still: **Export before/after ▾** builds a labeled side-by-side or vertical phone stack and saves it under the current job/dated output folder. Video before/after is not included yet.
 
 Storage prefs (output path, retention, clear caches, cost guard) live in **Settings**.
 

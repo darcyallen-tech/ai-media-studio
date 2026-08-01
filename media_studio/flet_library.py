@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import flet as ft
 
 from media_studio.folder_util import show_in_folder
-from media_studio.flet_dialogs import show_snack
+from media_studio.flet_dialogs import close_dialog, show_dialog, show_snack
 from media_studio.flet_theme import (
     ACCENT,
     ACCENT_BRIGHT,
@@ -27,6 +27,7 @@ from media_studio.flet_theme import (
 )
 from media_studio.history import (
     HistoryEntry,
+    assign_entry_job,
     first_audio_path,
     first_image_path,
     first_video_path,
@@ -54,7 +55,8 @@ class LibraryView:
     def __init__(self, page: ft.Page, state: StudioState) -> None:
         self.page = page
         self.state = state
-        self._list = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
+        # Scrollable results only — never a flex spacer between filters and cards
+        self._list = ft.ListView(spacing=10, expand=True, padding=ft.Padding.only(top=4))
         self._status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=2)
         self._count = ft.Text("", size=FONT_SM, color=TEXT_MUTED)
         self.btn_refresh = ft.OutlinedButton(
@@ -80,6 +82,8 @@ class LibraryView:
             on_change=self._on_filter_change,
         )
         # Job / Listing filter (All jobs + known labels from history)
+        # expand=False: in a Column, expand=True steals vertical space (giant gap).
+        # Horizontal fill via a tight Row below.
         self._job_filter = getattr(state, "library_job_filter", None) or ""
         state.library_job_filter = self._job_filter
         self.job_dd = styled_dropdown(
@@ -87,7 +91,7 @@ class LibraryView:
             options=[_JOB_ALL],
             value=_JOB_ALL,
             on_select=self._on_job_filter,
-            expand=True,
+            expand=True,  # only meaningful inside a Row (horizontal)
         )
         # Optional open-large dialog host
         self._lightbox_src = ft.Image(src="", fit=ft.BoxFit.CONTAIN, expand=True)
@@ -103,34 +107,49 @@ class LibraryView:
 
     def build(self) -> ft.Control:
         self.refresh()
+        # Header is tight (intrinsic height). Only the ListView expands/scrolls —
+        # no expand=True spacer between Job/Listing and cards.
+        header = ft.Column(
+            [
+                ft.Row(
+                    [
+                        section_title("Library"),
+                        ft.Container(expand=True),
+                        self._count,
+                        self.btn_refresh,
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                ft.Text(
+                    "Successful generations (newest first). "
+                    "Send assets back to Image / Video / Tools, or to Resolve. "
+                    "Filter by Job / Listing when you used that field on generate. "
+                    "Missing media can be hidden in Settings → Storage.",
+                    size=FONT_SM,
+                    color=TEXT_MUTED,
+                ),
+                self.spend_panel,
+                self._filter_nav.control,
+                # Row so job_dd expand is horizontal only (not a tall empty band)
+                ft.Row(
+                    [self.job_dd],
+                    spacing=0,
+                    tight=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                self._status,
+            ],
+            spacing=8,
+            tight=True,
+        )
         return panel(
             ft.Column(
                 [
-                    ft.Row(
-                        [
-                            section_title("Library"),
-                            ft.Container(expand=True),
-                            self._count,
-                            self.btn_refresh,
-                        ],
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    ft.Text(
-                        "Successful generations (newest first). "
-                        "Send assets back to Image / Video / Tools, or to Resolve. "
-                        "Filter by Job / Listing when you used that field on generate. "
-                        "Missing media can be hidden in Settings → Storage.",
-                        size=FONT_SM,
-                        color=TEXT_MUTED,
-                    ),
-                    self.spend_panel,
-                    self._filter_nav.control,
-                    self.job_dd,
-                    self._status,
-                    ft.Container(content=self._list, expand=True),
+                    header,
+                    self._list,
                 ],
                 expand=True,
-                spacing=10,
+                spacing=6,
             ),
             expand=True,
             padding=16,
@@ -353,6 +372,11 @@ class LibraryView:
 
         actions: list[ft.Control] = []
 
+        # Assign to Job / Listing (all media types)
+        assign_menu = self._make_assign_menu(entry)
+        if assign_menu is not None:
+            actions.append(assign_menu)
+
         # Audio: play in-app, folder, Resolve (no image/video Send-to tools)
         if media == "Audio" and aud_path:
             actions.append(
@@ -470,6 +494,148 @@ class LibraryView:
             self.page.update()
         except Exception:
             pass
+
+    def _make_assign_menu(self, entry: HistoryEntry) -> ft.Control | None:
+        """Assign to Job / Listing — existing names, New…, Clear."""
+        items: list[ft.Control] = [
+            ft.PopupMenuItem(
+                content="New Job / Listing…",
+                on_click=self._make_new_job_assign(entry.id),
+            ),
+        ]
+        jobs = list_job_names(self.state.output_dir)
+        current = (entry.job or "").strip()
+        if jobs:
+            items.append(ft.PopupMenuItem())  # separator
+            for name in jobs:
+                label = f"✓ {name}" if name == current else name
+                items.append(
+                    ft.PopupMenuItem(
+                        content=label,
+                        on_click=self._make_assign_to(entry.id, name),
+                    )
+                )
+        if current:
+            items.append(ft.PopupMenuItem())
+            items.append(
+                ft.PopupMenuItem(
+                    content="Clear job (Ungrouped)",
+                    on_click=self._make_assign_to(entry.id, ""),
+                )
+            )
+        return ft.Container(
+            content=ft.PopupMenuButton(
+                content=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.FOLDER_SPECIAL_OUTLINED, size=16, color=TEXT),
+                        ft.Text("Assign to ▾", size=FONT_SM, color=TEXT),
+                    ],
+                    spacing=6,
+                    tight=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                items=items,
+                tooltip="File this item under a Job / Listing (or create a new one)",
+                menu_position=ft.PopupMenuPosition.UNDER,
+            ),
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+            padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+        )
+
+    def _make_assign_to(self, entry_id: str, job_name: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            await self._assign_job(entry_id, job_name)
+
+        return _click
+
+    def _make_new_job_assign(self, entry_id: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            await self._prompt_new_job(entry_id)
+
+        return _click
+
+    async def _assign_job(self, entry_id: str, job_name: str) -> None:
+        try:
+            _entry, msg = assign_entry_job(
+                entry_id,
+                job_name or None,
+                output_dir=self.state.output_dir,
+                move_files=True,
+            )
+            self._on_action_status(msg, False)
+            try:
+                show_snack(self.page, msg)
+            except Exception:
+                pass
+        except Exception as exc:
+            self._on_action_status(f"Assign failed: {exc}", True)
+            return
+        self.refresh()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _prompt_new_job(self, entry_id: str) -> None:
+        name_field = ft.TextField(
+            label="Job / Listing name",
+            hint_text="e.g. 123 Oak St · Smith · 2026-08-01",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            autofocus=True,
+        )
+        err = ft.Text("", size=FONT_SM, color="#e57373")
+
+        async def _cancel(_e: ft.ControlEvent) -> None:
+            close_dialog(self.page, dlg)
+
+        async def _ok(_e: ft.ControlEvent) -> None:
+            name = (name_field.value or "").strip()
+            if not name:
+                err.value = "Enter a name."
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+                return
+            close_dialog(self.page, dlg)
+            await self._assign_job(entry_id, name)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("New Job / Listing", color=TEXT),
+            content=ft.Column(
+                [
+                    ft.Text(
+                        "Assign this Library item to a new job. Media under the "
+                        "output folder moves into jobs/<name>/ when safe.",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                    ),
+                    name_field,
+                    err,
+                ],
+                tight=True,
+                spacing=10,
+                width=400,
+            ),
+            actions=[
+                ft.TextButton(content="Cancel", on_click=_cancel),
+                ft.FilledButton(
+                    content="Assign",
+                    on_click=_ok,
+                    style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        show_dialog(self.page, dlg)
 
     def _make_send_menu(
         self,

@@ -45,6 +45,7 @@ Vision, Tools, Frame Editor, Audio):
         <output_root>/<YYYY-MM-DD>/
   - History / Library metadata store the job label; no cloud sync
   - Caches (_region, previews, Aleph proxies) stay under the output root
+  - Library can also assign (or clear) a job after the fact — see LIBRARY
 
 ==============================================================================
 SCENARIOS (app-level)
@@ -80,6 +81,9 @@ STUDIO — IMAGE
 - Comparison viewer with Overlay / A/B + opacity
 - Versions history
 - Cost estimate (job total), generate, Show in folder, Send to Resolve, Send to ▾
+- Export before/after ▾ when source still + result exist:
+    Side-by-side (labeled) or vertical stack (phone posts)
+    Saves under job/dated output folder; reveals in Explorer/Finder
 
 Region edit:
   - Draw/place colored boxes on the still
@@ -119,7 +123,8 @@ Video tools:
 
 Each tool: model select, prompt + Enhance where prompts exist (not pure Topaz
 control jobs), cost estimate as job total, result → play / Show in folder /
-Resolve / Library.
+Resolve / Library. Image tools with source: Export before/after ▾
+(side-by-side or vertical stack) on the large result pane.
 
 ==============================================================================
 CREATIVE VISION
@@ -226,6 +231,14 @@ LIBRARY
 - Job / Listing dropdown: All jobs or a specific label from history
 - Visual group headers by job when viewing All jobs
 - Job label shown on cards when set
+- Assign to ▾ on every card (Image / Video / Audio) — same weight as Send to:
+    New Job / Listing… (prompt → create + assign)
+    Existing job names from history + jobs/ folders
+    Clear job (Ungrouped)
+    Always updates history metadata; safely moves files under
+    outputs/jobs/<slug>/<date>/ when they already live under the output root
+    (outside-root paths stay put — metadata only). Clear does not reverse-move.
+    Grouping / filters refresh immediately after assign
 - Local spend panel (from history costs only):
     Today / This week / This month / All time totals
     Top models + by provider; missing or $0 cost rows skipped
@@ -233,7 +246,8 @@ LIBRARY
 - Hide missing media (Settings)
 - Thumbnails + metadata (model, job, scenario, cost, time)
 - Send to ▾ (Image, Video, tools, Frame Editor, Resolve, etc.)
-- Show in folder
+- Show in folder (uses updated path after assign-move)
+- Open large (stills / posters)
 - History cap; media retention follows Settings policy
 
 ==============================================================================

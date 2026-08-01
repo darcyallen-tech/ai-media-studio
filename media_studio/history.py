@@ -228,15 +228,191 @@ def append_history(
 
 
 def list_job_names(output_dir: str | Path | None = None) -> list[str]:
-    """Distinct non-empty job labels from history (newest-first order preserved)."""
+    """
+    Distinct non-empty job labels for filters / Assign menus.
+
+    Prefer human labels from history (newest first), then any folder names under
+    ``outputs/jobs/`` that are not already represented.
+    """
     seen: set[str] = set()
     out: list[str] = []
     for e in load_history(output_dir):
         j = (e.job or "").strip()
-        if j and j not in seen:
-            seen.add(j)
+        if j and j.lower() not in seen:
+            seen.add(j.lower())
             out.append(j)
+    # Folder slugs from disk (older jobs that only exist as directories)
+    try:
+        root = ensure_output_dir(Path(output_dir) if output_dir else None)
+        jobs_dir = root / "jobs"
+        if jobs_dir.is_dir():
+            for p in sorted(jobs_dir.iterdir(), key=lambda x: x.name.lower()):
+                if not p.is_dir() or p.name.startswith("."):
+                    continue
+                # Prefer pretty label; skip if a history label already maps to this slug
+                label = p.name.replace("-", " ").strip()
+                if not label:
+                    continue
+                if label.lower() in seen or p.name.lower() in seen:
+                    continue
+                # Also skip if any existing job slug-matches this folder
+                try:
+                    from media_studio.naming import job_name_slug
+
+                    if any(job_name_slug(x) == p.name for x in out):
+                        continue
+                except Exception:
+                    pass
+                seen.add(label.lower())
+                out.append(label)
+    except OSError:
+        pass
     return out
+
+
+def _safe_move_under_job(
+    file_path: str,
+    *,
+    output_dir: str | Path,
+    job_label: str,
+    stamp_hint: str = "",
+) -> tuple[str, str | None]:
+    """
+    Move a media file into jobs/<slug>/<date>/ when it lives under output_dir.
+
+    Returns (new_or_same_path, note_or_None). Never moves files outside the
+    output root. Clear-job (empty label) does not move.
+    """
+    try:
+        from media_studio.naming import date_bucket, job_name_slug
+    except Exception:
+        return file_path, None
+
+    slug = job_name_slug(job_label)
+    if not slug:
+        return file_path, None
+
+    try:
+        src = Path(file_path).expanduser().resolve()
+        if not src.is_file():
+            return file_path, None
+        root = Path(output_dir).expanduser().resolve()
+        try:
+            src.relative_to(root)
+        except ValueError:
+            # Outside app output tree — leave path as-is (metadata-only assign)
+            return str(src), "file outside output folder — path unchanged"
+    except OSError:
+        return file_path, None
+
+    # Prefer existing date folder segment if present
+    day = None
+    parts = src.parts
+    for part in reversed(parts):
+        if len(part) == 10 and part[4] == "-" and part[7] == "-":
+            day = part
+            break
+    if not day:
+        day = date_bucket(stamp_hint)
+
+    dest_dir = root / "jobs" / slug / day
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return str(src), f"could not create job folder: {exc}"
+
+    dest = dest_dir / src.name
+    if dest.resolve() == src:
+        return str(src), None
+    if dest.exists():
+        stem, ext = src.stem, src.suffix
+        n = 1
+        while dest.exists():
+            dest = dest_dir / f"{stem}_{n}{ext}"
+            n += 1
+    try:
+        src.replace(dest)  # atomic move on same volume
+        return str(dest.resolve()), None
+    except OSError:
+        try:
+            import shutil
+
+            shutil.move(str(src), str(dest))
+            return str(dest.resolve()), None
+        except OSError as exc:
+            return str(src), f"move failed: {exc}"
+
+
+def assign_entry_job(
+    entry_id: str,
+    job_name: str | None,
+    *,
+    output_dir: str | Path | None = None,
+    move_files: bool = True,
+) -> tuple[HistoryEntry | None, str]:
+    """
+    Assign (or clear) Job / Listing on an existing history row.
+
+    Updates metadata always. When ``move_files`` and job is non-empty, attempts
+    to move media under ``outputs/jobs/<slug>/<date>/`` if files live under the
+    output root. Clearing a job only updates metadata (no reverse move).
+
+    Returns ``(entry, status_message)``.
+    """
+    eid = (entry_id or "").strip()
+    if not eid:
+        return None, "Missing history id."
+
+    new_job = (job_name or "").strip()
+    notes: list[str] = []
+
+    with _lock:
+        items = load_history(output_dir)
+        found: HistoryEntry | None = None
+        idx = -1
+        for i, e in enumerate(items):
+            if e.id == eid:
+                found = e
+                idx = i
+                break
+        if found is None:
+            return None, f"History item not found: {eid}"
+
+        old_job = (found.job or "").strip()
+        if old_job == new_job:
+            return found, (
+                f"Already under “{new_job}”." if new_job else "Already ungrouped."
+            )
+
+        # Optional relocate media into job folder
+        new_files: list[str] = []
+        if move_files and new_job:
+            root = ensure_output_dir(Path(output_dir) if output_dir else None)
+            for f in found.files:
+                nf, note = _safe_move_under_job(
+                    f,
+                    output_dir=root,
+                    job_label=new_job,
+                    stamp_hint=found.timestamp or found.id,
+                )
+                new_files.append(nf)
+                if note:
+                    notes.append(note)
+            found.files = new_files
+        # Clear job: keep files where they are (safer)
+
+        found.job = new_job
+        found.label = make_label(found)
+        items[idx] = found
+        save_history(items, output_dir)
+
+    if new_job:
+        msg = f"Assigned to job “{new_job}”."
+    else:
+        msg = "Cleared job — now Ungrouped."
+    if notes:
+        msg += " " + "; ".join(notes[:2])
+    return found, msg
 
 
 def history_dropdown_choices(output_dir: str | Path | None = None) -> list[str]:

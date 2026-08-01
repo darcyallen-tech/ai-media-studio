@@ -694,7 +694,11 @@ class StudioImageView:
                 "If you sent a frame from Frame Editor, it re-pins the same slot/time."
             ),
         )
-        from media_studio.flet_result_actions import make_result_action_row
+        from media_studio.flet_result_actions import (
+            make_before_after_button,
+            make_result_action_row,
+            show_result_actions,
+        )
 
         def _image_result_path() -> str | None:
             gen = self._selected_gen()
@@ -704,6 +708,14 @@ class StudioImageView:
                 return self.state.comparison[-1]
             return None
 
+        self.btn_before_after = make_before_after_button(
+            page,
+            get_before=lambda: self.state.source_path,
+            get_after=_image_result_path,
+            get_output_dir=lambda: self.state.output_dir,
+            get_job_name=lambda: getattr(self.state, "job_name", None),
+            on_status=lambda msg, err: self._set_status(msg),
+        )
         (
             self.result_actions_row,
             self.btn_show_folder,
@@ -712,6 +724,7 @@ class StudioImageView:
             page,
             get_path=_image_result_path,
             on_status=lambda msg, err: self._set_status(msg),
+            before_after_btn=self.btn_before_after,
         )
         self.btn_pick = ft.OutlinedButton(
             content="Upload source",
@@ -2019,6 +2032,16 @@ class StudioImageView:
             self.compare_label.value = f"Version {self.state.compare_index + 1} / {n}"
         else:
             self.compare_label.value = "Generate to compare versions"
+        # Before/after when source + selected result exist
+        try:
+            has_src = bool(
+                self.state.source_path and Path(self.state.source_path).is_file()
+            )
+            has_gen = bool(self._selected_gen())
+            if hasattr(self, "btn_before_after"):
+                self.btn_before_after.visible = has_src and has_gen
+        except Exception:
+            pass
 
     def _refresh_compare_rail(self) -> None:
         """Rebuild left-rail source pin + version thumbnails."""
@@ -2499,6 +2522,13 @@ class StudioImageView:
                 self.btn_send_aleph.visible = True
                 self.btn_show_folder.visible = True
                 self.btn_send_resolve.visible = True
+                try:
+                    has_src = bool(
+                        self.state.source_path and Path(self.state.source_path).is_file()
+                    )
+                    self.btn_before_after.visible = has_src
+                except Exception:
+                    pass
                 done = (
                     f"OK · {len(result.image_paths)} image(s) · "
                     f"{result.metrics_line or result.cost_estimate or 'done'}"

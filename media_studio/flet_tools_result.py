@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING, Any, Callable
 import flet as ft
 
 from media_studio.flet_dialogs import close_dialog, show_dialog, show_snack
-from media_studio.flet_result_actions import make_result_action_row, show_result_actions
+from media_studio.flet_result_actions import (
+    make_before_after_button,
+    make_result_action_row,
+    show_result_actions,
+)
 from media_studio.flet_theme import (
     ACCENT,
     BORDER,
@@ -335,6 +339,14 @@ class ToolsResultPane:
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
             visible=False,
         )
+        self.btn_before_after = make_before_after_button(
+            page,
+            get_before=lambda: self.source_path,
+            get_after=lambda: self.result_path,
+            get_output_dir=lambda: self.state.output_dir,
+            get_job_name=lambda: getattr(self.state, "job_name", None),
+            on_status=self._status,
+        )
         (
             self.actions_row,
             self.btn_folder,
@@ -344,6 +356,7 @@ class ToolsResultPane:
             get_path=lambda: self.result_path,
             on_status=self._status,
             extra_leading=[self.btn_open_large],
+            before_after_btn=self.btn_before_after,
             start_visible=False,
         )
         self.send_host = ft.Container(visible=False)
@@ -441,6 +454,17 @@ class ToolsResultPane:
         self._apply_visuals()
         show_result_actions(self.btn_folder, self.btn_resolve, visible=True)
         self.btn_open_large.visible = True
+        # Before/after only when both are still images
+        try:
+            ba_ok = bool(
+                self.source_path
+                and self.result_path
+                and _is_image(self.source_path)
+                and _is_image(self.result_path)
+            )
+            self.btn_before_after.visible = ba_ok
+        except Exception:
+            pass
         try:
             self.page.update()
         except Exception:
@@ -454,6 +478,10 @@ class ToolsResultPane:
         self._overlay_opacity = 0.5
         show_result_actions(self.btn_folder, self.btn_resolve, visible=False)
         self.btn_open_large.visible = False
+        try:
+            self.btn_before_after.visible = False
+        except Exception:
+            pass
         self.send_host.content = None
         self.send_host.visible = False
         self._apply_visuals()

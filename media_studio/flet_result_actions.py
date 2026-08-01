@@ -1,4 +1,4 @@
-"""Reusable result actions: Show in folder + Send to Resolve."""
+"""Reusable result actions: Show in folder + Send to Resolve + before/after."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import flet as ft
 from media_studio.folder_util import show_in_folder
 from media_studio.flet_dialogs import show_snack
 from media_studio.flet_resolve_button import make_send_to_resolve_button
-from media_studio.flet_theme import BORDER, TEXT
+from media_studio.flet_theme import BORDER, PANEL_ELEVATED, TEXT
 
 
 def make_show_in_folder_button(
@@ -61,6 +61,138 @@ def make_show_in_folder_button(
     return btn
 
 
+def make_before_after_button(
+    page: ft.Page,
+    *,
+    get_before: Callable[[], str | None],
+    get_after: Callable[[], str | None],
+    get_output_dir: Callable[[], str],
+    on_status: Callable[[str, bool], None] | None = None,
+    get_job_name: Callable[[], str | None] | None = None,
+) -> ft.Control:
+    """
+    Export before/after still composite (side-by-side or vertical stack).
+
+    Hidden until the caller sets ``visible=True`` when both source + result exist.
+    """
+
+    async def _export(layout: str) -> None:
+        import asyncio
+
+        before = get_before() if get_before else None
+        after = get_after() if get_after else None
+        if not before or not Path(before).is_file():
+            msg = "Export before/after needs a source still."
+            if on_status:
+                on_status(msg, True)
+            try:
+                show_snack(page, msg)
+            except Exception:
+                pass
+            return
+        if not after or not Path(after).is_file():
+            msg = "Export before/after needs a result still — generate first."
+            if on_status:
+                on_status(msg, True)
+            try:
+                show_snack(page, msg)
+            except Exception:
+                pass
+            return
+        out = get_output_dir() if get_output_dir else ""
+        if not out:
+            msg = "No output folder set."
+            if on_status:
+                on_status(msg, True)
+            return
+        job = None
+        if get_job_name:
+            try:
+                job = get_job_name()
+            except Exception:
+                job = None
+
+        def _run():
+            from media_studio.before_after import export_before_after
+            from media_studio.job_context import job_name_scope
+
+            with job_name_scope(job):
+                return export_before_after(
+                    before,
+                    after,
+                    output_dir=out,
+                    layout="stack" if layout == "stack" else "side_by_side",
+                    labels=True,
+                    job_name=job,
+                )
+
+        try:
+            result = await asyncio.to_thread(_run)
+        except Exception as exc:
+            msg = f"Before/after export failed: {exc}"
+            if on_status:
+                on_status(msg, True)
+            try:
+                show_snack(page, msg)
+            except Exception:
+                pass
+            return
+
+        ok = bool(getattr(result, "ok", False))
+        msg = getattr(result, "status", None) or ("Exported." if ok else "Export failed.")
+        if on_status:
+            on_status(msg, not ok)
+        try:
+            show_snack(page, msg)
+        except Exception:
+            pass
+        if ok and getattr(result, "path", None):
+            try:
+                from media_studio.folder_util import show_in_folder
+
+                # Soft reveal so user can grab the file
+                show_in_folder(result.path)
+            except Exception:
+                pass
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    async def _side(_e: ft.ControlEvent) -> None:
+        await _export("side_by_side")
+
+    async def _stack(_e: ft.ControlEvent) -> None:
+        await _export("stack")
+
+    menu = ft.PopupMenuButton(
+        content=ft.Row(
+            [
+                ft.Icon(ft.Icons.COMPARE, size=16, color=TEXT),
+                ft.Text("Export before/after ▾", size=13, color=TEXT),
+            ],
+            spacing=6,
+            tight=True,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        items=[
+            ft.PopupMenuItem(content="Side-by-side (labeled)", on_click=_side),
+            ft.PopupMenuItem(content="Vertical stack (phone)", on_click=_stack),
+        ],
+        tooltip="Save a labeled before/after still (needs source + result)",
+        menu_position=ft.PopupMenuPosition.UNDER,
+    )
+    btn = ft.Container(
+        content=menu,
+        bgcolor=PANEL_ELEVATED,
+        border=ft.Border.all(1, BORDER),
+        border_radius=6,
+        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+        visible=False,
+    )
+    return btn
+
+
 def make_result_action_row(
     page: ft.Page,
     *,
@@ -68,9 +200,11 @@ def make_result_action_row(
     on_status: Callable[[str, bool], None] | None = None,
     extra_leading: list[ft.Control] | None = None,
     start_visible: bool = False,
+    before_after_btn: ft.Control | None = None,
 ) -> tuple[ft.Row, ft.OutlinedButton, ft.Control]:
     """
-    Build a standard result row: [optional leading] Show in folder + Send to Resolve.
+    Build a standard result row: [optional leading] Show in folder + Send to Resolve
+    (+ optional before/after export control).
 
     Returns ``(row, folder_btn, resolve_btn)``. Buttons start hidden unless
     ``start_visible``; call ``show_result_actions`` after a successful generate.
@@ -81,6 +215,8 @@ def make_result_action_row(
         folder_btn.visible = True
         resolve_btn.visible = True
     controls: list[ft.Control] = list(extra_leading or [])
+    if before_after_btn is not None:
+        controls.append(before_after_btn)
     controls.extend([folder_btn, resolve_btn])
     row = ft.Row(
         controls,
