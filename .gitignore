@@ -42,7 +42,7 @@ data/resolve_handoff/*
 
 # Personal audit / local notes with machine paths
 AUDIT_REPORT*.txt
-LAYOUT_AUDIT_*.txt
+LAYOUT_AUDIT*.txt
 *_AUDIT_*.txt
 *.local.md
 
