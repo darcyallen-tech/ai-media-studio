@@ -86,8 +86,10 @@ def control_options(model_choice: str | None) -> dict[str, Any]:
             if spec.default_resolution in res_choices
             else res_choices[0]
         )
-        max_n = max(1, spec.max_num_images)
-        num_choices = [str(i) for i in range(1, max_n + 1)]
+        # Phase 2: UI always offers 1–4 variants. Models with max_num_images=1
+        # still list 2–4; generate() runs sequential singles for the excess.
+        _UI_BATCH_MAX = 4
+        num_choices = [str(i) for i in range(1, _UI_BATCH_MAX + 1)]
         if spec.allowed_aspect_ratios:
             # Avoid doubling "auto" when the API enum already includes it (e.g. Grok Imagine)
             ar_choices = list(spec.allowed_aspect_ratios)
@@ -288,15 +290,16 @@ def clamp_parameters_to_model(
     vid = resolve_video_model(choice)
 
     if img:
-        # num_images
+        # num_images: keep 1–4 for multi-variant UI; API max is applied at generate
+        # time (one fal call vs sequential singles). Do not force down to api max here.
         n_in = raw.get("num_images", 1)
         try:
             n = int(n_in)
         except (TypeError, ValueError):
             n = 1
-        n2 = img.clamp_num_images(n)
+        n2 = max(1, min(4, n))
         if n2 != n:
-            notes.append(f"num_images {n} → {n2} (max for {img.label})")
+            notes.append(f"num_images {n} → {n2} (batch 1–4)")
         raw["num_images"] = n2
 
         # resolution

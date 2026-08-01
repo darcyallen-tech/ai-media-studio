@@ -58,6 +58,9 @@ STUDIO — IMAGE
 - Region edit mode (colored boxes + per-box prompts; Seedream annotation only)
 - Source still upload + Previously used
 - Model list (Flux 2 Pro/Max Edit, MAI-Image, Seedream, etc.)
+- # Images 1–4 multi-variant (when model multi-outputs in one call, or sequential
+  singles if the API is one-at-a-time). Cost estimate = per-image × count.
+  Each still is a separate Library item (Send to ▾ per variant). Per-tab busy only.
 - Strength / relevant controls
 - Grok Enhance (vision-aware, model-specific, scenario-aware)
 - Comparison viewer with Overlay / A/B + opacity
@@ -111,14 +114,22 @@ Cinematic playground (separate from listing camera-lock staging).
 Modes (left → right):
 
   Text → Image (T2I)
-    Invent a still first, then Send to Start / End frame for a Bridge,
-    or Send to Studio Image. No motion language injected.
-    Models (fal): Flux 2 Pro / Flux 2 / Flex / 1.1 Pro Ultra,
-                  Nano Banana / Nano Banana 2 / Pro,
-                  Seedream 4.5 / 5.0 Lite / 5.0 Pro, Recraft V3
-    Still photography helpers only:
+    Invent a still with no source required. Still-only helpers — no camera
+    motion language (no push-in / pan / orbit on rebuild or Enhance).
+    Models (fal, as registered): Flux 2 Pro / Flux 2 / Flex / 1.1 Pro Ultra,
+      Nano Banana / Nano Banana 2 / Pro, Seedream 4.5 / 5.0 Lite / 5.0 Pro,
+      Recraft V3
+    Still photography helpers:
       Framing / composition · Lens look · Lighting · Still style presets
-    Aspect / size presets (model-specific; some support 0.5K–4K)
+      Each helper includes (None) = omit from Rebuild + Enhance
+    Multi-variant: # Images 1–4 (or model API max per call)
+      Cost estimate = per-image × count
+      Multi-output in one fal call when the model allows; else sequential
+      singles (vision tab busy only — not a global queue)
+      Each still lands as a separate Library item with its own Send to ▾
+      Variant strip in Result to select which still to send
+    Result Send to ▾ includes → Start frame / → End frame (this tab) for
+    bridge handoff, plus Studio / Frame Editor / Tools / Resolve as elsewhere
 
   Image → Image (I2I) — creative still edit (Aleph plate round-trip)
     Source still required (upload, Previously used, or Send from Frame Editor /
@@ -126,7 +137,7 @@ Modes (left → right):
     Models (fal edit): Flux 2 Pro / Max / Flex, Flux Kontext Pro,
                        Nano Banana / 2 / Pro edit, Seedream 5 Pro edit
     Strength slider when the API exposes it (Flux family)
-    Still-only helpers + (None); Creative direction for Enhance;
+    Same still-only helpers + (None); Creative direction for Enhance;
     Grok Enhance with vision on the source still
     Result → Frame Editor · keyframe, Start / End / I2V, Library
 
@@ -141,13 +152,16 @@ Modes (left → right):
     Start frame + end frame → in-between (Veo first→last, Hailuo start+end)
 
 Shared Vision UI:
-  - Camera / shot helpers on video modes (shot type, lens feel, motion, style)
-  - Every helper dropdown includes (None) to skip that dimension
+  - Video modes: Camera / shot helpers (shot type, lens feel, motion, style)
+  - Still modes (T2I / I2I): still photography helpers only (no motion)
+  - Every helper dropdown includes (None) — omit that dimension from Rebuild
+    prompt and from Enhance guidance (active helpers only)
   - Rebuild prompt: Replace / Append from active helpers only
-  - Creative direction field — Enhance only (intent for Grok; never sent
-    as-is on Generate; empty = helpers + prompt only)
+  - Creative direction for Enhance (optional field):
+      Enhance-only intent for Grok — never sent raw on Generate
+      Empty = current behavior (helpers + prompt only)
   - Subject Library + Vision presets (collapsible expanders)
-  - Grok Enhance (model-aware; T2I never adds push-in / pan language)
+  - Grok Enhance (model-aware; still modes never add push-in / pan language)
   - Negative prompt (optional)
   - Cost labels are job totals, e.g.
       Est. cost: $3.20 · 8s (Veo 3.1)
@@ -155,6 +169,10 @@ Shared Vision UI:
     never a bare unit rate alone
   - Optional cost guard (Settings: warn at $2+ / $5+; default off)
   - Result: play (video) / preview (still), Library, Resolve, Send to ▾
+
+Helper (None) also applies to Studio scene-builder helpers (style / density /
+camera) and Audio prompt builders (Music / SFX / Ambience / Video→SFX chips)
+where a dimension injects text into Rebuild — Off/None skips that text.
 
 ==============================================================================
 FRAME EDITOR (Aleph 2.0)
@@ -243,8 +261,10 @@ Available across Studio, Tools, Creative Vision, Frame Editor, Audio:
   - Uses vision when a still/reference is present
   - Scenario-aware constraints
   - Does not auto-switch models
-  - Creative Vision: optional creative_direction is Enhance-only intent
-  - T2I Enhance never injects camera motion language
+  - Creative Vision: optional “Creative direction for Enhance” field is
+    Enhance-only intent (empty = helpers + main prompt only; never raw on Generate)
+  - Helper (None) values are omitted from Enhance guidance
+  - T2I / I2I Enhance never injects camera motion language
   - Skipped where tools are pure control (e.g. Topaz denoise)
 
 ==============================================================================

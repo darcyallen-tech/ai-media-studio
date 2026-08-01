@@ -51,6 +51,7 @@ from media_studio.vision_prompt import (
     default_still_prompt,
 )
 from media_studio.vision_registry import (
+    VISION_BATCH_MAX,
     VisionMode,
     default_vision_model,
     find_vision_model,
@@ -154,10 +155,35 @@ class CreativeVisionView:
             on_select=self._refresh_cost,
             expand=True,
         )
+        # T2I multi-variant batch (1–4); sequential when API is one-at-a-time
+        self.num_dd = styled_dropdown(
+            label_text="# Images",
+            options=[str(i) for i in range(1, VISION_BATCH_MAX + 1)],
+            value="1",
+            on_select=self._refresh_cost,
+            expand=True,
+        )
+        self.num_dd.visible = False
         self.gen_audio = ft.Checkbox(
             label="Generate audio (when supported)",
             value=True,
             on_change=self._refresh_cost,
+        )
+        self._result_paths: list[str] = []
+        self.variant_host = ft.Container(visible=False)
+        self.variant_row = ft.Row(
+            controls=[],
+            spacing=6,
+            scroll=ft.ScrollMode.AUTO,
+            wrap=True,
+        )
+        self.variant_host.content = ft.Column(
+            [
+                ft.Text("Variants (click to select)", size=FONT_SM, color=TEXT_MUTED),
+                self.variant_row,
+            ],
+            spacing=4,
+            tight=True,
         )
 
         # Helpers: video uses shot/motion; T2I swaps to still framing/lighting (no motion)
@@ -465,7 +491,10 @@ class CreativeVisionView:
                     ft.Divider(height=1, color=BORDER),
                     self.model_dd,
                     self.model_notes,
-                    ft.Row([self.dur_dd, self.aspect_dd, self.res_dd], spacing=8),
+                    ft.Row(
+                        [self.dur_dd, self.aspect_dd, self.res_dd, self.num_dd],
+                        spacing=8,
+                    ),
                     self.strength_label,
                     self.strength,
                     self.gen_audio,
@@ -577,6 +606,7 @@ class CreativeVisionView:
                     ),
                     self.result_image,
                     self.player.control,
+                    self.variant_host,
                     self.send_host,
                 ],
                 spacing=8,
@@ -627,6 +657,14 @@ class CreativeVisionView:
             return raw
         return spec.default_duration or "8s"
 
+    def _num_images_for_cost(self) -> int:
+        if self._mode != "text_to_image":
+            return 1
+        try:
+            return max(1, min(VISION_BATCH_MAX, int(_dd(self.num_dd) or 1)))
+        except (TypeError, ValueError):
+            return 1
+
     def _cost_label(self) -> str:
         try:
             spec = self._current_spec()
@@ -641,6 +679,7 @@ class CreativeVisionView:
                 ),
                 aspect_ratio=_dd(self.aspect_dd),
                 generate_audio=audio,
+                num_images=self._num_images_for_cost(),
             )
         except Exception:
             return "Est. cost: —"
@@ -676,6 +715,12 @@ class CreativeVisionView:
         self.model_notes.value = spec.notes or ""
         still = is_still_mode(self._mode)
         is_i2i = self._mode == "image_to_image"
+        is_t2i = self._mode == "text_to_image"
+        # Multi-variant only for Text → Image
+        try:
+            self.num_dd.visible = is_t2i
+        except Exception:
+            pass
         # Duration (video only) — always offer choices for T2V/I2V/Bridge
         if still:
             self.dur_dd.visible = False
@@ -1644,6 +1689,7 @@ class CreativeVisionView:
                 ),
                 aspect_ratio=_dd(self.aspect_dd),
                 generate_audio=audio,
+                num_images=self._num_images_for_cost(),
             )
             ok = await confirm_cost_if_needed(
                 self.page,
@@ -1726,21 +1772,32 @@ class CreativeVisionView:
                 negative_prompt=self.negative.value,
                 generate_audio=False if still_job else bool(self.gen_audio.value),
                 strength=strength_val,
+                num_images=self._num_images_for_cost(),
                 output_dir=self.state.output_dir,
                 on_progress=on_progress,
             )
             self.cost_text.value = result.cost_label or self._cost_label()
-            if result.ok and result.path:
-                self._result_path = result.path
+            paths = list(getattr(result, "paths", None) or [])
+            if result.ok and result.path and not paths:
+                paths = [result.path]
+            if result.ok and paths:
+                self._result_path = paths[-1]
+                self._result_paths = paths
                 done = result.status or "OK"
                 self.job_progress.finish_ok(done, self.page)
                 self.status.value = done
-                self._show_result(result.path)
-                self._refresh_send_menu(result.path)
+                self._show_result(paths[-1])
+                self._show_variants(paths)
+                self._refresh_send_menu(paths[-1])
             else:
                 err = result.status or "Failed."
                 self.job_progress.finish_error(err, self.page)
                 self.status.value = err
+                self._result_paths = []
+                try:
+                    self.variant_host.visible = False
+                except Exception:
+                    pass
         except Exception as exc:
             self.job_progress.finish_error(f"Error: {exc}", self.page)
             self.status.value = f"Error: {exc}"
@@ -1773,6 +1830,62 @@ class CreativeVisionView:
             except Exception:
                 pass
             self.player.set_result(path)
+            try:
+                self.variant_host.visible = False
+            except Exception:
+                pass
+
+    def _show_variants(self, paths: list[str]) -> None:
+        """Thumb strip for multi-variant T2I; click selects Send-to target."""
+        if len(paths) <= 1:
+            try:
+                self.variant_host.visible = False
+                self.variant_row.controls = []
+            except Exception:
+                pass
+            return
+        cells: list[ft.Control] = []
+        for i, p in enumerate(paths):
+            if not p or not Path(p).is_file():
+                continue
+            idx = i
+
+            def make_click(path: str = p, ii: int = idx):
+                async def _click(_e: ft.ControlEvent) -> None:
+                    self._result_path = path
+                    self._show_result(path)
+                    self._refresh_send_menu(path)
+                    self.status.value = (
+                        f"Selected variant {ii + 1}/{len(paths)}: {Path(path).name}"
+                    )
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+
+                return _click
+
+            cells.append(
+                ft.Container(
+                    content=ft.Image(
+                        src=p,
+                        width=72,
+                        height=54,
+                        fit=ft.BoxFit.COVER,
+                        gapless_playback=True,
+                    ),
+                    width=76,
+                    height=58,
+                    border=ft.Border.all(1, BORDER),
+                    border_radius=4,
+                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                    on_click=make_click(),
+                    ink=True,
+                    tooltip=f"Variant {i + 1} — click to select for Send to ▾",
+                )
+            )
+        self.variant_row.controls = cells
+        self.variant_host.visible = bool(cells)
 
     def _refresh_send_menu(self, path: str) -> None:
         """Send-to matrix: stills get FE keyframe + Start/End/I2V + shared matrix."""

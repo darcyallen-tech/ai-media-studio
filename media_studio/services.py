@@ -707,63 +707,165 @@ def generate(
         progress("No still image — using first frame from video as edit input.")
 
     progress("Job type: IMAGE EDIT (fal)")
-    result = run_image_edit(
-        prompt=prompt,
-        image_paths=[edit_image],
-        model_choice=model_choice or model,
-        parameters=params,
-        output_dir=out,
-        on_progress=progress,
-        scenario=scenario_key,
-    )
+    from media_studio.fal.models import resolve_image_edit_model, default_image_edit_model
 
-    stamp = result.timestamp or stamp
+    edit_spec = resolve_image_edit_model(model_choice or model) or default_image_edit_model()
+    try:
+        want_n = int(params.get("num_images") or 1)
+    except (TypeError, ValueError):
+        want_n = 1
+    want_n = max(1, min(4, want_n))
+    api_max = max(1, int(getattr(edit_spec, "max_num_images", 1) or 1))
+
+    all_paths: list[str] = []
+    all_notes: list[str] = list(clamp_notes)
+    total_render = 0.0
+    last_status = ""
+    last_endpoint = ""
+    last_model_key = model
+    last_metrics = ""
+    last_cost = ""
+    ok_any = False
+
+    def _run_one(n_images: int, label: str):
+        nonlocal last_status, last_endpoint, last_model_key, last_metrics, last_cost, ok_any
+        p = dict(params)
+        p["num_images"] = n_images
+        progress(label)
+        r = run_image_edit(
+            prompt=prompt,
+            image_paths=[edit_image],
+            model_choice=model_choice or model,
+            parameters=p,
+            output_dir=out,
+            on_progress=progress,
+            scenario=scenario_key,
+        )
+        last_status = r.status or last_status
+        last_endpoint = r.endpoint or last_endpoint
+        last_model_key = r.model_key or last_model_key
+        last_metrics = r.metrics_line or last_metrics
+        last_cost = r.cost_estimate or last_cost
+        if r.render_seconds:
+            nonlocal_total[0] += float(r.render_seconds)
+        if r.ok and r.paths:
+            ok_any = True
+            all_paths.extend(r.paths)
+            all_notes.extend(list(r.notes or []))
+        elif r.notes:
+            all_notes.extend(list(r.notes))
+        return r
+
+    nonlocal_total = [0.0]
+
+    # One API call when model multi-outputs; else sequential singles (UI stays on image tab busy)
+    if want_n <= api_max:
+        result = _run_one(want_n, f"Running edit · {want_n} image(s)…")
+    else:
+        # Prefer multi batches of api_max, then remainder; if api_max==1 → pure sequential
+        remaining = want_n
+        batch_i = 0
+        while remaining > 0:
+            batch = min(remaining, api_max)
+            batch_i += 1
+            done = want_n - remaining
+            result = _run_one(
+                batch,
+                f"Variant batch {batch_i}: images {done + 1}–{done + batch} of {want_n}…",
+            )
+            if not result.ok:
+                break
+            got = len(result.paths or [])
+            remaining -= got
+            if got == 0:
+                break
+            # If multi-request under-delivered, finish rest as singles
+            if batch > 1 and got < batch and remaining > 0:
+                progress(
+                    f"Under-delivered ({got}/{batch}) — sequential singles for rest…"
+                )
+                while remaining > 0:
+                    r2 = _run_one(
+                        1,
+                        f"Variant {want_n - remaining + 1}/{want_n}…",
+                    )
+                    if not r2.ok:
+                        remaining = 0
+                        break
+                    remaining -= 1
+
+    total_render = nonlocal_total[0]
+    from media_studio.naming import timestamp_now as _job_stamp
+
+    stamp = _job_stamp()
+
+    # Rebuild a lightweight aggregate status
+    if ok_any and all_paths:
+        status = (
+            f"Generate OK — {last_model_key or model} (image). "
+            f"Saved {len(all_paths)} file(s). "
+            f"{last_metrics or last_cost or ''}".strip()
+        )
+    else:
+        status = last_status or "Generate failed."
+
     _write_job_receipt(
         out,
         {
             "timestamp": stamp,
             "job_kind": "image",
             "prompt": prompt,
-            "model": result.model_key or model or "auto",
-            "endpoint": result.endpoint,
+            "model": last_model_key or model or "auto",
+            "endpoint": last_endpoint,
             "image_input": edit_image,
             "video_input": video_file,
             "parameters": params,
-            "outputs": result.paths,
-            "ok": result.ok,
-            "status": result.status,
-            "notes": result.notes,
-            "cost_estimate": result.cost_estimate,
-            "render_seconds": result.render_seconds,
-            "metrics_line": result.metrics_line,
+            "outputs": all_paths,
+            "ok": ok_any,
+            "status": status,
+            "notes": all_notes,
+            "cost_estimate": last_cost,
+            "render_seconds": total_render or None,
+            "metrics_line": last_metrics,
             "scenario": scenario_key,
+            "num_images_requested": want_n,
         },
     )
 
-    if result.ok and result.paths:
-        append_history(
-            job_kind="image",
-            model=result.model_key or model or "auto",
-            prompt=prompt,
-            files=result.paths,
-            cost_estimate=result.metrics_line or result.cost_estimate,
-            notes=result.notes,
-            output_dir=out,
-            timestamp=stamp,
-            scenario=scenario_key,
-        )
+    # Library: one history row per still (easy Send-to each)
+    if ok_any and all_paths:
+        n = len(all_paths)
+        for i, path in enumerate(all_paths):
+            try:
+                ts_id = stamp if n == 1 else f"{stamp}_v{i + 1:02d}"
+                notes_i = list(all_notes[:4])
+                if n > 1:
+                    notes_i = [f"variant {i + 1}/{n}"] + notes_i
+                append_history(
+                    job_kind="image",
+                    model=last_model_key or model or "auto",
+                    prompt=prompt,
+                    files=[path],
+                    cost_estimate=last_metrics or last_cost,
+                    notes=notes_i,
+                    output_dir=out,
+                    timestamp=ts_id,
+                    scenario=scenario_key,
+                )
+            except Exception:
+                pass
 
     return GenerateResult(
-        ok=result.ok,
-        image_paths=result.paths,
+        ok=ok_any,
+        image_paths=all_paths,
         video_path=None,
-        status=result.status,
-        model=result.model_key or model,
+        status=status,
+        model=last_model_key or model,
         job_kind="image",
-        cost_estimate=result.cost_estimate,
-        notes=list(result.notes),
-        render_seconds=result.render_seconds,
-        metrics_line=result.metrics_line,
+        cost_estimate=last_cost,
+        notes=list(all_notes),
+        render_seconds=total_render or None,
+        metrics_line=last_metrics,
     )
 
 

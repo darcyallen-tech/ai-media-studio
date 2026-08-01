@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from media_studio.helper_none import HELPER_NONE, with_none
+
 # ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
 
-GENRES: list[str] = [
-    "(None)",
+GENRES: list[str] = with_none([
     "Ambient",
     "Cinematic",
     "Classical",
@@ -30,7 +31,7 @@ GENRES: list[str] = [
     "R&B / Soul",
     "Rock",
     "World",
-]
+])
 
 SUBGENRES: dict[str, list[str]] = {
     "Ambient": [
@@ -159,8 +160,7 @@ SUBGENRES: dict[str, list[str]] = {
     ],
 }
 
-ERAS: list[str] = [
-    "(None)",
+ERAS: list[str] = with_none([
     "60s",
     "70s",
     "80s",
@@ -169,15 +169,14 @@ ERAS: list[str] = [
     "2010s",
     "Modern",
     "Timeless / classic",
-]
+])
 
-TEMPO_PRESETS: list[str] = [
-    "(None)",
+TEMPO_PRESETS: list[str] = with_none([
     "Slow",
     "Medium",
     "Fast",
     "Custom BPM",
-]
+])
 
 # Approximate BPM anchors when only a preset is chosen
 TEMPO_BPM_HINTS: dict[str, tuple[int, int, str]] = {
@@ -186,8 +185,7 @@ TEMPO_BPM_HINTS: dict[str, tuple[int, int, str]] = {
     "Fast": (120, 145, "fast, energetic tempo"),
 }
 
-MOODS: list[str] = [
-    "(none)",
+MOODS: list[str] = with_none([
     "Calm / peaceful",
     "Uplifting / hopeful",
     "Warm / intimate",
@@ -203,28 +201,26 @@ MOODS: list[str] = [
     "Nostalgic",
     "Corporate clean",
     "Listing / real-estate friendly",
-]
+])
 
-ENERGY: list[str] = [
-    "(none)",
+ENERGY: list[str] = with_none([
     "Very low",
     "Low",
     "Medium",
     "High",
     "Very high",
-]
+])
 
-VOCALS: list[str] = [
+VOCALS: list[str] = with_none([
     "Instrumental only",
     "Female lead",
     "Male lead",
     "Harmonics only",
     "Choir",
     "Mixed",
-]
+])
 
-INSTRUMENTS: list[str] = [
-    "(none / auto)",
+INSTRUMENTS: list[str] = with_none([
     "Guitar-driven",
     "Synth / electronic",
     "Piano / keys",
@@ -232,7 +228,7 @@ INSTRUMENTS: list[str] = [
     "Full band",
     "Orchestral / strings",
     "Acoustic / organic",
-]
+])
 
 DEFAULTS: dict[str, Any] = {
     "genre": "Ambient",
@@ -243,7 +239,7 @@ DEFAULTS: dict[str, Any] = {
     "mood": "Calm / peaceful",
     "energy": "Low",
     "vocals": "Instrumental only",
-    "instruments": "(none / auto)",
+    "instruments": HELPER_NONE,
     "lyrics": "",
     "custom_notes": "",
     "exclude": "",
@@ -270,8 +266,11 @@ def _norm_genre(genre: str | None) -> str:
 
 
 def subgenres_for(genre: str | None) -> list[str]:
+    """Sub-genre choices with (None) so the dimension can be silenced."""
+    if _noneish(genre):
+        return with_none(["General"])
     g = _norm_genre(genre)
-    return list(SUBGENRES.get(g, ["General"]))
+    return with_none(list(SUBGENRES.get(g, ["General"])))
 
 
 def default_subgenre(genre: str | None) -> str:
@@ -372,12 +371,16 @@ def _energy_phrase(energy: str | None) -> str:
 
 
 def vocals_is_instrumental(vocals: str | None) -> bool:
+    if _noneish(vocals):
+        return True  # no vocal line → treat as instrumental for lyrics attach
     v = (vocals or DEFAULTS["vocals"]).strip()
     return v.lower() in {"instrumental only", "instrumental", ""}
 
 
 def _vocals_phrase(vocals: str | None) -> str:
-    v = (vocals or DEFAULTS["vocals"]).strip()
+    if _noneish(vocals):
+        return ""
+    v = vocals.strip()
     mapping = {
         "Instrumental only": (
             "Fully instrumental only — no vocals, no lyrics, no choir, no spoken word."
@@ -390,7 +393,7 @@ def _vocals_phrase(vocals: str | None) -> str:
         "Choir": "Include a rich choir or group vocal texture (no spoken word).",
         "Mixed": "Include mixed male and female vocals with clear lead and light harmonies.",
     }
-    return mapping.get(v, mapping["Instrumental only"])
+    return mapping.get(v, "")
 
 
 def _instruments_phrase(instruments: str | None) -> str:
@@ -440,16 +443,16 @@ def build_structured_music_block(
 
     era_s = era if not _noneish(era) else ""
     tempo_s = tempo if not _noneish(tempo) else ""
-    vocals_s = (vocals or DEFAULTS["vocals"]).strip()
+    vocals_s = "" if _noneish(vocals) else (vocals or "").strip()
     if instrumental is None:
-        inst = vocals_is_instrumental(vocals_s)
+        inst = vocals_is_instrumental(vocals_s or None)
     else:
         # Prefer explicit vocals when set; fall back to instrumental flag
-        if vocals and str(vocals).strip() and str(vocals).strip() != DEFAULTS["vocals"]:
+        if vocals_s and vocals_s != DEFAULTS["vocals"]:
             inst = vocals_is_instrumental(vocals_s)
         else:
             inst = bool(instrumental)
-            if inst:
+            if inst and not vocals_s:
                 vocals_s = "Instrumental only"
 
     def _a(word: str) -> str:
@@ -458,7 +461,7 @@ def build_structured_music_block(
             return "A"
         return "An" if w[0].lower() in "aeiou" else "A"
 
-    if g and sg and sg.lower() != "general":
+    if g and sg and sg.lower() != "general" and not _noneish(sg):
         head = f"{_a(sg)} {sg.lower()} track in the {g.lower()} genre"
     elif g:
         head = f"{_a(g)} {g.lower()} track"
@@ -470,6 +473,7 @@ def build_structured_music_block(
     mood_p = _mood_phrase(mood)
     energy_p = _energy_phrase(energy)
     inst_p = _instruments_phrase(instruments)
+    vocals_p = _vocals_phrase(vocals_s or None)
 
     body_parts: list[str] = []
     if era_p:
@@ -484,7 +488,8 @@ def build_structured_music_block(
         body_parts.append(f"Energy: {energy_p}.")
     if inst_p:
         body_parts.append(inst_p if inst_p.endswith(".") else f"{inst_p}.")
-    body_parts.append(_vocals_phrase(vocals_s))
+    if vocals_p:
+        body_parts.append(vocals_p)
     body_parts.append(
         "Clean professional mix, cohesive arrangement, suitable for background use "
         "in video and media."

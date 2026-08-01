@@ -121,11 +121,13 @@ Dashboards:
 
 ### Creative Vision highlights
 
-- **Text → Image** for inventing stills; **Image → Image** for creative plate edits (Aleph round-trip).
-- Still helpers (framing / lens / lighting) never inject camera motion; video modes use shot/motion helpers.
-- Every helper has **(None)** to skip that dimension.
-- **Creative direction** is Enhance-only intent — not sent raw on Generate.
-- Frame Editor ↔ Vision: Send stills as **I2I source**, Start / End / I2V; I2I results pin back as **Frame Editor · keyframe**.
+- **Text → Image** — invent stills (no source). Still-only helpers (framing / lens / lighting / style); **no camera motion** on rebuild or Enhance. T2I models include Flux family, **Nano Banana** / 2 / Pro, **Seedream** 4.5 / 5 Lite / 5 Pro, Recraft (see FEATURES.txt). **# Images 1–4** multi-variant; cost × count; separate Library rows; sequential if the API is one-at-a-time (per-tab busy only).
+- **Studio Image** — same 1–4 multi-variant pattern when generating edits.
+- **Image → Image** — creative plate edits (Aleph round-trip); same still helpers.
+- T2I / still results: **Send to ▾ → Start frame / End frame** (bridge handoff) without re-exporting from disk.
+- Every helper that feeds Rebuild/Enhance has **(None)** — omit that dimension. Same pattern in Studio scene builders and Audio builders where helpers inject text.
+- **Creative direction for Enhance** (optional) — steers Grok Enhance only; **not** sent raw on Generate. Empty = helpers + prompt only.
+- Frame Editor ↔ Vision: **I2I source**, Start / End / I2V; I2I results pin back as **Frame Editor · keyframe**.
 - Cost labels are **job totals** (e.g. Veo standard ~$0.40/s × duration, Fast ~$0.15/s × duration on fal).
 
 ### Tools video extras

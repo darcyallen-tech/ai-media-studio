@@ -428,7 +428,7 @@ class AudioView:
         self.mu_instruments = styled_dropdown(
             label_text="Instruments focus",
             options=MUSIC_INSTRUMENTS,
-            value=d.get("instruments") or "(none / auto)",
+            value=d.get("instruments") or MUSIC_INSTRUMENTS[0],
             on_select=self._music_rebuild,
             expand=True,
         )

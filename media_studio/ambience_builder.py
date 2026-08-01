@@ -9,12 +9,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from media_studio.helper_none import HELPER_NONE, with_none
+
 # ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
 
-LOCATIONS: list[str] = [
-    "(None)",
+LOCATIONS: list[str] = with_none([
     "Quiet residential street",
     "Suburban backyard",
     "City park",
@@ -23,24 +24,22 @@ LOCATIONS: list[str] = [
     "Forest / nature",
     "Quiet interior / room tone",
     "Custom (use free text)",
-]
+])
 
-TIMES: list[str] = [
-    "(none)",
+TIMES: list[str] = with_none([
     "Day",
     "Morning",
     "Evening",
     "Night",
-]
+])
 
-WEATHER: list[str] = [
-    "(none)",
+WEATHER: list[str] = with_none([
     "Calm",
     "Light breeze",
     "Windy",
-]
+])
 
-# Layer controls: Off / Light / Medium
+# Layer controls: Off / Light / Medium (Off = skip that layer)
 LAYER_LEVELS: list[str] = ["Off", "Light", "Medium"]
 
 LAYERS: list[str] = [
@@ -54,12 +53,11 @@ LAYERS: list[str] = [
     "People / footsteps nearby",
 ]
 
-DENSITY: list[str] = [
-    "(None)",
+DENSITY: list[str] = with_none([
     "Sparse",
     "Balanced",
     "Lively",
-]
+])
 
 DURATIONS_S: list[int] = [15, 30, 60]
 
@@ -85,10 +83,17 @@ DEFAULTS: dict[str, Any] = {
 
 
 def _noneish(value: str | None) -> bool:
+    try:
+        from media_studio.helper_none import is_helper_none
+
+        if is_helper_none(value):
+            return True
+    except Exception:
+        pass
     if value is None:
         return True
     s = str(value).strip()
-    return not s or s.lower() in {"(none)", "none", "—", "-", "off"}
+    return not s or s.lower() in {"(none)", "none", "—", "-", "off", HELPER_NONE.lower()}
 
 
 def _location_phrase(location: str | None, custom: str | None) -> str:

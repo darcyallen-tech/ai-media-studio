@@ -53,7 +53,14 @@ class VisionModelSpec:
     edit_model_key: str = ""
     # Show strength slider when True (passed if API accepts)
     supports_strength: bool = False
+    # Max images per single fal call (T2I multi-variant). UI may request more
+    # and vision_service will run sequential calls when needed.
+    max_num_images: int = 1
     extra_defaults: dict[str, Any] = field(default_factory=dict)
+
+
+# UI batch cap for still multi-variant generate (Phase 2)
+VISION_BATCH_MAX = 4
 
 
 # Friendly aspect labels for Flux / Seedream image_size enums
@@ -176,6 +183,7 @@ T2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_num_images=4,
         extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "4"},
     ),
     "flux 2 t2i": VisionModelSpec(
@@ -193,6 +201,7 @@ T2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_num_images=4,
         extra_defaults={"num_images": 1, "output_format": "jpeg"},
     ),
     "flux 2 flex t2i": VisionModelSpec(
@@ -210,6 +219,7 @@ T2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_num_images=4,
         extra_defaults={"num_images": 1, "output_format": "jpeg"},
     ),
     "flux 1.1 pro ultra t2i": VisionModelSpec(
@@ -227,6 +237,7 @@ T2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_num_images=4,
         extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "2"},
     ),
     "recraft v3 t2i": VisionModelSpec(
@@ -244,6 +255,7 @@ T2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_num_images=1,
         extra_defaults={},
     ),
     # --- Nano Banana family ---
@@ -262,6 +274,7 @@ T2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_num_images=4,
         extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "4"},
     ),
     "nano banana 2 t2i": VisionModelSpec(
@@ -282,6 +295,7 @@ T2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="1K",
         supports_audio=False,
         supports_negative=False,
+        max_num_images=4,
         extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "4"},
     ),
     "nano banana pro t2i": VisionModelSpec(
@@ -302,6 +316,7 @@ T2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="1K",
         supports_audio=False,
         supports_negative=False,
+        max_num_images=4,
         extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "4"},
     ),
     # --- Seedream family ---
@@ -320,6 +335,7 @@ T2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_num_images=4,
         extra_defaults={"num_images": 1, "enable_safety_checker": True},
     ),
     "seedream 5 lite t2i": VisionModelSpec(
@@ -337,6 +353,7 @@ T2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_num_images=4,
         extra_defaults={"num_images": 1, "enable_safety_checker": True},
     ),
     "seedream 5 pro t2i": VisionModelSpec(
@@ -366,6 +383,7 @@ T2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_num_images=4,
         extra_defaults={
             "num_images": 1,
             "enable_safety_checker": True,
@@ -836,6 +854,18 @@ def duration_seconds(token: str | None) -> float:
     return max(0.5, secs)
 
 
+def clamp_vision_num_images(spec: VisionModelSpec, n: int | None) -> int:
+    """UI batch count for stills: 1..VISION_BATCH_MAX (sequential if API is 1-at-a-time)."""
+    try:
+        want = int(n) if n is not None else 1
+    except (TypeError, ValueError):
+        want = 1
+    want = max(1, want)
+    if is_still_mode(spec.mode):
+        return min(want, VISION_BATCH_MAX)
+    return 1
+
+
 def estimate_vision_cost(
     spec: VisionModelSpec,
     *,
@@ -843,12 +873,14 @@ def estimate_vision_cost(
     resolution: str | None = None,
     aspect_ratio: str | None = None,
     generate_audio: bool | None = None,
+    num_images: int | None = None,
 ) -> float:
     """
     Conservative USD ballpark for UI (not billing).
 
     Video modes: **total job cost** = rate × selected duration (seconds), then
     resolution / audio multipliers. Never show a bare per-second rate as the total.
+    Still modes: per-image × count (multi-variant batch).
     """
     if is_still_mode(spec.mode):
         # Flat per-image estimates; bump for large aspect / higher resolution
@@ -870,7 +902,8 @@ def estimate_vision_cost(
         # Nano Banana Pro is steeper at high res
         if "nano-banana-pro" in spec.endpoint and res in ("2k", "4k"):
             base *= 1.15
-        return round(max(0.01, base), 3)
+        n = clamp_vision_num_images(spec, num_images)
+        return round(max(0.01, base * n), 3)
 
     # --- Video: total = per-second rate × duration ---
     dur_token = duration_token if duration_token not in (None, "") else spec.default_duration
@@ -909,12 +942,13 @@ def format_vision_cost(
     resolution: str | None = None,
     aspect_ratio: str | None = None,
     generate_audio: bool | None = None,
+    num_images: int | None = None,
 ) -> str:
     """
     Human label for the **total** estimated job cost.
 
     Video: ``Est. cost: $X.XX · {duration}s ({model})``
-    Still: ``Est. cost: $X.XX · 1 image ({model})``
+    Still: ``Est. cost: $X.XX · N image(s) ({model})`` — per-image × count
     """
     from media_studio.pricing import format_job_cost
 
@@ -924,9 +958,12 @@ def format_vision_cost(
         resolution=resolution,
         aspect_ratio=aspect_ratio,
         generate_audio=generate_audio,
+        num_images=num_images,
     )
     if is_still_mode(spec.mode):
-        return format_job_cost(amt, unit="1 image", model=spec.label)
+        n = clamp_vision_num_images(spec, num_images)
+        unit = "1 image" if n == 1 else f"{n} images"
+        return format_job_cost(amt, unit=unit, model=spec.label)
     dur_token = duration_token if duration_token not in (None, "") else spec.default_duration
     secs = duration_seconds(dur_token)
     dur_txt = f"{secs:.0f}" if abs(secs - round(secs)) < 1e-6 else f"{secs:.1f}"
@@ -946,6 +983,7 @@ def build_vision_arguments(
     resolution: str | None = None,
     negative_prompt: str | None = None,
     generate_audio: bool | None = None,
+    num_images: int | None = None,
 ) -> dict[str, Any]:
     """Map UI fields → fal payload for the selected Vision model."""
     args: dict[str, Any] = dict(spec.extra_defaults)
@@ -964,6 +1002,10 @@ def build_vision_arguments(
         size = map_t2i_image_size(aspect_ratio or spec.default_aspect)
         colon_ar = map_t2i_aspect_colon(aspect_ratio or spec.default_aspect)
         res = (resolution or spec.default_resolution or "").strip()
+        # Batch size for this API call (caller may loop for sequential variants)
+        n = clamp_vision_num_images(spec, num_images)
+        api_max = max(1, int(spec.max_num_images or 1))
+        args["num_images"] = min(n, api_max)
 
         if "nano-banana" in ep:
             # Nano Banana / 2 / Pro: aspect_ratio "16:9"; 2+Pro also resolution

@@ -26,6 +26,7 @@ from media_studio.pricing import (
 from media_studio.vision_registry import (
     VisionMode,
     build_vision_arguments,
+    clamp_vision_num_images,
     default_vision_model,
     estimate_vision_cost,
     find_vision_model,
@@ -41,6 +42,7 @@ ProgressCallback = Callable[[str], None]
 class VisionResult:
     ok: bool
     path: str | None = None
+    paths: list[str] = field(default_factory=list)
     model_key: str = ""
     endpoint: str = ""
     status: str = ""
@@ -65,6 +67,7 @@ def run_vision(
     negative_prompt: str | None = None,
     generate_audio: bool | None = None,
     strength: float | None = None,
+    num_images: int | None = None,
     output_dir: str | Path,
     on_progress: ProgressCallback | None = None,
 ) -> VisionResult:
@@ -72,8 +75,11 @@ def run_vision(
     Generate a Creative Vision still (T2I / I2I) or clip (T2V / I2V / bridge).
 
     Still modes index as Image; video modes as creative_vision (Video filter).
+    T2I supports multi-variant (1–4): multi-output in one call when the model
+    allows, otherwise sequential singles (per-tab busy stays on vision).
     """
     spec = find_vision_model(model_label, mode) or default_vision_model(mode)
+    want_n = clamp_vision_num_images(spec, num_images if mode == "text_to_image" else 1)
 
     def progress(msg: str) -> None:
         if on_progress:
@@ -85,6 +91,7 @@ def run_vision(
         resolution=resolution,
         aspect_ratio=aspect_ratio,
         generate_audio=generate_audio,
+        num_images=want_n if mode == "text_to_image" else 1,
     )
     est_lbl = format_cost_label(est, estimate=True)
     progress(f"{spec.label} · {est_lbl}")
@@ -237,6 +244,7 @@ def run_vision(
                 resolution=resolution,
                 negative_prompt=negative_prompt,
                 generate_audio=generate_audio,
+                num_images=want_n if mode == "text_to_image" else 1,
             )
             endpoint_for_run = spec.endpoint
             model_key_for_result = spec.key
@@ -249,10 +257,107 @@ def run_vision(
             cost_label=est_lbl,
         )
 
+    def _collect_image_urls(payload: Any) -> list[str]:
+        urls = list(extract_image_urls(payload) or [])
+        if urls:
+            return urls
+        if isinstance(payload, dict):
+            img = payload.get("image")
+            if isinstance(img, dict) and img.get("url"):
+                return [str(img["url"])]
+            if isinstance(img, str) and img.strip():
+                return [img.strip()]
+        return []
+
+    # --- Run fal: T2I may sequential-batch when API is one-at-a-time ---
     progress("Running Creative Vision on fal…")
     t0 = time.perf_counter()
+    all_image_urls: list[str] = []
+    video_url: str | None = None
+    cost_sum = 0.0
+    cost_any_exact = False
+    last_result: Any = None
+
     try:
-        result = subscribe(endpoint_for_run, arguments, on_progress=progress)
+        if mode == "text_to_image" and want_n > 1:
+            api_max = max(1, int(getattr(spec, "max_num_images", 1) or 1))
+            remaining = want_n
+            batch_i = 0
+            while remaining > 0:
+                batch = min(remaining, api_max)
+                batch_i += 1
+                progress(
+                    f"Variant batch {batch_i}: {batch} image(s) "
+                    f"({want_n - remaining + 1}–{want_n - remaining + batch} of {want_n})…"
+                )
+                batch_args = build_vision_arguments(
+                    spec,
+                    prompt=prompt,
+                    aspect_ratio=aspect_ratio,
+                    resolution=resolution,
+                    negative_prompt=negative_prompt,
+                    num_images=batch,
+                )
+                last_result = subscribe(
+                    endpoint_for_run, batch_args, on_progress=progress
+                )
+                got = _collect_image_urls(last_result)
+                if not got:
+                    # Sequential fallback: one-at-a-time for this batch
+                    if batch > 1:
+                        progress(
+                            f"Batch returned no multi-output — sequential singles "
+                            f"for remaining {remaining}…"
+                        )
+                        for _ in range(remaining):
+                            one_args = build_vision_arguments(
+                                spec,
+                                prompt=prompt,
+                                aspect_ratio=aspect_ratio,
+                                resolution=resolution,
+                                negative_prompt=negative_prompt,
+                                num_images=1,
+                            )
+                            last_result = subscribe(
+                                endpoint_for_run, one_args, on_progress=progress
+                            )
+                            one = _collect_image_urls(last_result)
+                            if one:
+                                all_image_urls.append(one[0])
+                                exact = extract_cost_usd_from_response(last_result)
+                                if exact is not None:
+                                    cost_sum += exact
+                                    cost_any_exact = True
+                        remaining = 0
+                        break
+                    return VisionResult(
+                        ok=False,
+                        model_key=model_key_for_result,
+                        endpoint=endpoint_for_run,
+                        status=f"{spec.label}: fal returned no image.",
+                        cost_label=est_lbl,
+                    )
+                all_image_urls.extend(got[:batch])
+                exact = extract_cost_usd_from_response(last_result)
+                if exact is not None:
+                    cost_sum += exact
+                    cost_any_exact = True
+                remaining -= len(got[:batch])
+                if len(got) < batch and remaining > 0:
+                    # Model under-delivered; finish with singles
+                    continue
+        else:
+            last_result = subscribe(
+                endpoint_for_run, arguments, on_progress=progress
+            )
+            if is_still_mode(mode):
+                all_image_urls = _collect_image_urls(last_result)
+            else:
+                video_url = extract_video_url(last_result)
+            exact = extract_cost_usd_from_response(last_result)
+            if exact is not None:
+                cost_sum = exact
+                cost_any_exact = True
     except FalClientError as exc:
         render_s = time.perf_counter() - t0
         return VisionResult(
@@ -275,24 +380,14 @@ def run_vision(
         )
     render_s = time.perf_counter() - t0
 
-    exact = extract_cost_usd_from_response(result)
-    cost_usd = exact if exact is not None else est
-    is_est = exact is None
+    cost_usd = cost_sum if cost_any_exact else est
+    is_est = not cost_any_exact
     metrics = format_render_metrics(render_s, cost_usd, cost_is_estimate=is_est)
     cost_lbl = format_cost_label(cost_usd, estimate=is_est)
 
     still_job = is_still_mode(mode) or is_still_mode(spec.mode)
     if still_job:
-        urls = extract_image_urls(result)
-        out_url = urls[0] if urls else None
-        if not out_url:
-            # Nested {image: {url}} already handled in extract_image_urls
-            img = result.get("image") if isinstance(result, dict) else None
-            if isinstance(img, dict) and img.get("url"):
-                out_url = str(img["url"])
-            elif isinstance(img, str):
-                out_url = img
-        if not out_url:
+        if not all_image_urls:
             return VisionResult(
                 ok=False,
                 model_key=model_key_for_result,
@@ -301,12 +396,6 @@ def run_vision(
                 cost_label=cost_lbl,
                 metrics_line=metrics,
             )
-        ext = ".jpg"
-        low = out_url.lower().split("?")[0]
-        if low.endswith(".png"):
-            ext = ".png"
-        elif low.endswith(".webp"):
-            ext = ".webp"
         if mode == "image_to_image":
             kind_tag = "creative-vision-i2i"
             scenario = "creative_vision_i2i"
@@ -315,8 +404,7 @@ def run_vision(
             scenario = "creative_vision_t2i"
         job_kind = "image"
     else:
-        out_url = extract_video_url(result)
-        if not out_url:
+        if not video_url:
             return VisionResult(
                 ok=False,
                 model_key=model_key_for_result,
@@ -325,7 +413,6 @@ def run_vision(
                 cost_label=cost_lbl,
                 metrics_line=metrics,
             )
-        ext = ".mp4"
         kind_tag = "creative-vision"
         job_kind = "creative_vision"
         scenario = "creative_vision"
@@ -338,56 +425,111 @@ def run_vision(
         stamp=stamp,
         kind=kind_tag,
     )
-    dest = unique_path(media_dir, stem, ext)
 
-    try:
-        download_url(out_url, dest, on_progress=progress, timeout=900.0)
-    except FalClientError as exc:
-        return VisionResult(
-            ok=False,
-            model_key=model_key_for_result,
-            endpoint=endpoint_for_run,
-            status=str(exc),
-            cost_label=cost_lbl,
-            metrics_line=metrics,
-            timestamp=stamp,
-        )
+    saved: list[str] = []
+    if still_job:
+        for i, out_url in enumerate(all_image_urls, start=1):
+            ext = ".jpg"
+            low = out_url.lower().split("?")[0]
+            if low.endswith(".png"):
+                ext = ".png"
+            elif low.endswith(".webp"):
+                ext = ".webp"
+            dest = unique_path(
+                media_dir,
+                stem,
+                ext,
+                index=i if len(all_image_urls) > 1 else None,
+            )
+            try:
+                progress(f"Downloading {i}/{len(all_image_urls)}…")
+                download_url(out_url, dest, on_progress=progress, timeout=900.0)
+                saved.append(str(dest.resolve()))
+            except FalClientError as exc:
+                build_notes.append(f"Failed download {i}: {exc}")
+        if not saved:
+            return VisionResult(
+                ok=False,
+                model_key=model_key_for_result,
+                endpoint=endpoint_for_run,
+                status="Could not download any result images.",
+                cost_label=cost_lbl,
+                metrics_line=metrics,
+                timestamp=stamp,
+            )
+    else:
+        dest = unique_path(media_dir, stem, ".mp4")
+        try:
+            download_url(video_url, dest, on_progress=progress, timeout=900.0)
+        except FalClientError as exc:
+            return VisionResult(
+                ok=False,
+                model_key=model_key_for_result,
+                endpoint=endpoint_for_run,
+                status=str(exc),
+                cost_label=cost_lbl,
+                metrics_line=metrics,
+                timestamp=stamp,
+            )
+        saved = [str(dest.resolve())]
 
-    resolved = str(dest.resolve())
+    resolved = saved[0]
+    n = len(saved)
     if mode == "image_to_image":
         send_hint = (
             "Send to Frame Editor · keyframe, or Start / End / I2V for motion."
         )
     elif still_job:
-        send_hint = "Send to Start / End frame for a bridge, or Studio Image."
+        send_hint = (
+            f"Saved {n} still(s). Send each to Start / End frame or Studio Image."
+            if n > 1
+            else "Send to Start / End frame for a bridge, or Studio Image."
+        )
     else:
         send_hint = "Use Show in folder or Send to Resolve."
     note_bits = [spec.notes] if spec.notes else [f"mode={mode}"]
     if build_notes:
         note_bits.extend(build_notes[:3])
+    if n > 1:
+        note_bits.append(f"batch={n}")
     status = (
-        f"{spec.label} OK. Saved {Path(resolved).name} → {media_dir.name}/. "
+        f"{spec.label} OK. Saved {n} file(s) → {media_dir.name}/. "
         f"{metrics}. {send_hint}"
     )
 
-    try:
-        append_history(
-            job_kind=job_kind,
-            model=spec.label,
-            prompt=prompt or "",
-            files=[resolved],
-            cost_estimate=cost_lbl,
-            notes=note_bits,
-            output_dir=output_dir,
-            timestamp=stamp,
-            scenario=scenario,
-        )
-    except Exception:
-        pass
+    # Library: one entry per still so each has its own Send-to
+    per_cost = None
+    if n > 1 and cost_usd is not None:
+        per_cost = cost_usd / n
+    for i, path in enumerate(saved):
+        try:
+            entry_cost = (
+                format_cost_label(per_cost, estimate=is_est)
+                if per_cost is not None and n > 1
+                else cost_lbl
+            )
+            ts_id = stamp if n == 1 else f"{stamp}_v{i + 1:02d}"
+            notes_i = list(note_bits)
+            if n > 1:
+                notes_i = [f"variant {i + 1}/{n}"] + notes_i
+            append_history(
+                job_kind=job_kind,
+                model=spec.label,
+                prompt=prompt or "",
+                files=[path],
+                cost_estimate=entry_cost,
+                notes=notes_i,
+                output_dir=output_dir,
+                timestamp=ts_id,
+                scenario=scenario,
+            )
+        except Exception:
+            pass
 
     return VisionResult(
         ok=True,
         path=resolved,
+        paths=list(saved),
         model_key=model_key_for_result,
         endpoint=endpoint_for_run,
         status=status,
