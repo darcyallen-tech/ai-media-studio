@@ -1185,10 +1185,13 @@ def format_video_upscale_cost(
     target_label: str | None = None,
     duration_s: float = 8.0,
 ) -> str:
+    from media_studio.pricing import format_job_cost
+
     usd = estimate_video_upscale_cost(spec, target_label=target_label, duration_s=duration_s)
-    if usd < 1:
-        return f"Est. cost: ${usd:.3f}  (~{int(duration_s)}s clip)"
-    return f"Est. cost: ${usd:.2f}  (~{int(duration_s)}s clip)"
+    dur = max(1, int(round(float(duration_s or 8.0))))
+    tgt = (target_label or "").strip()
+    unit = f"{dur}s" + (f" · {tgt}" if tgt else "")
+    return format_job_cost(usd, unit=unit, model=spec.label)
 
 
 def parse_interpolate_factor(label: str | None) -> int:
@@ -1261,12 +1264,15 @@ def format_video_denoise_cost(
     duration_s: float = 8.0,
     upscale_factor: float = 1.0,
 ) -> str:
+    from media_studio.pricing import format_job_cost
+
     usd = estimate_video_denoise_cost(
         spec, duration_s=duration_s, upscale_factor=upscale_factor
     )
-    if usd < 1:
-        return f"Est. cost: ${usd:.3f}  (~{int(duration_s)}s · Topaz)"
-    return f"Est. cost: ${usd:.2f}  (~{int(duration_s)}s · Topaz)"
+    dur = max(1, int(round(float(duration_s or 8.0))))
+    sc = float(upscale_factor or 1.0)
+    unit = f"{dur}s · {sc:g}× Topaz"
+    return format_job_cost(usd, unit=unit, model=spec.label)
 
 
 def build_video_interpolate_args(
@@ -1317,12 +1323,17 @@ def format_video_interpolate_cost(
     duration_s: float = 8.0,
     factor_label: str | None = None,
 ) -> str:
+    from media_studio.pricing import format_job_cost
+
     usd = estimate_video_interpolate_cost(
         spec, duration_s=duration_s, factor_label=factor_label
     )
-    if usd < 1:
-        return f"Est. cost: ${usd:.3f}  (~{int(duration_s)}s source)"
-    return f"Est. cost: ${usd:.2f}  (~{int(duration_s)}s source)"
+    dur = max(1, int(round(float(duration_s or 8.0))))
+    fac = (factor_label or "").strip() or "2×"
+    # Short unit from factor label
+    short = fac.split("(")[0].strip() or fac
+    unit = f"{dur}s source · {short}"
+    return format_job_cost(usd, unit=unit, model=spec.label)
 
 
 def build_edit_args(
@@ -1658,7 +1669,14 @@ def video_sky_prompt(preset: str | None = None, user_prompt: str | None = None) 
 
 
 def format_tool_cost(spec: ToolSpec) -> str:
-    return f"Est. cost: ${spec.cost_estimate_usd:.3f}"
+    """Flat still-tool estimate (1 image / one job) — total, not a bare rate."""
+    from media_studio.pricing import format_job_cost
+
+    cat = (spec.category or "").lower()
+    unit = "1 job"
+    if cat in ("upscale", "cleanup", "sky", "dehaze", "relight", "restore", "blownout", "reaspect", "mirror", "amenity", "season", "match_look"):
+        unit = "1 image"
+    return format_job_cost(float(spec.cost_estimate_usd), unit=unit, model=spec.label)
 
 
 BLOWN_OUT_INTENSITY_LABELS: list[str] = [

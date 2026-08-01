@@ -2,7 +2,7 @@
 
 Local **Flet** desktop app for real-estate–focused AI **image**, **video**, and **audio** work.
 
-Stage empties, lock camera moves, clean noisy clips, generate Foley, run cinematic Vision shots, and send results to **DaVinci Resolve** — pay only for what you generate.
+Stage empties, invent stills then bridge them, lock camera moves, clean noisy clips, generate Foley, run cinematic Vision shots, and send results to **DaVinci Resolve** — pay only for what you generate.
 
 **Built with Grok 4.5.**
 
@@ -77,7 +77,7 @@ python app.py
 
 1. Launch the app → **Quick Start** wizard (first launch).
 2. **Settings** (gear) → paste API keys for this machine only.
-3. Upload a still or clip and Generate.
+3. Upload a still or clip and Generate — or start in **Creative Vision → Text → Image** and Send to Start/End for a bridge.
 
 Reopen the wizard anytime: top bar **?** → **Quick Start**.  
 Also: **?** → Open FEATURES.txt / README.md.
@@ -114,10 +114,26 @@ Dashboards:
 |-----|----------------|
 | **Studio** | Image (scenarios, Region edit, compare) · Video (Received / Blank / Camera Lock) |
 | **Tools** | Image \| Video tools + large result viewer (upscale, **Denoise**, **Slow Mo**, cleanup, sky, …) |
-| **Creative Vision** | Cinematic T2V / I2V / bridge (expensive playground) |
+| **Creative Vision** | **Text → Image**, Text → Video, Image → Video, Bridge / Connect (expensive playground) |
 | **Frame Editor** | Aleph 2.0 keyframe edit via **Runware** + optional fal 1080p proxy |
 | **Audio** | Music, SFX, Ambience, VO, Voice clone, **Video → SFX** |
 | **Library** | History; Send to Studio / Tools / Frame Editor / Resolve |
+
+### Creative Vision highlights
+
+- **Text → Image** first for still-then-bridge workflows (Flux, Nano Banana, Seedream families, …).
+- Still helpers (framing / lens / lighting) never inject camera motion; video modes use shot/motion helpers.
+- Every helper has **(None)** to skip that dimension.
+- **Creative direction** is Enhance-only intent — not sent raw on Generate.
+- T2I results: **Send to Start / End frame** or Studio Image.
+- Cost labels are **job totals** (e.g. Veo standard ~$0.40/s × duration, Fast ~$0.15/s × duration on fal).
+
+### Tools video extras
+
+- **Denoise / Clean** — Topaz Nyx / Artemis (control-driven).
+- **Slow Mo / Interpolate** — RIFE (default) or FILM; 2×–5×.
+
+Full tool and model lists: **FEATURES.txt**.
 
 ---
 
@@ -141,6 +157,20 @@ Requires Resolve Studio with **External scripting = Local**.
 
 Details: [resolve_scripts/README.md](resolve_scripts/README.md).  
 Handoff: `data/resolve_handoff/` (auto-purge ~7 days; Settings → Clear handoff cache).
+
+---
+
+## Settings (storage & safety)
+
+| Preference | Notes |
+|------------|--------|
+| **Output folder** | Persisted across sessions |
+| **Retention** | Never / 7 / 14 / 30 / 90 days for Library media under the app output tree |
+| **Clear caches** | App-owned dirs only (previews, proxies, upload temp, handoff) — not arbitrary paths |
+| **Hide missing** | Library can hide rows whose files are gone |
+| **Cost guard** | Optional confirm when a generate estimate is ≥ $2 or ≥ $5 (default off) |
+
+Long jobs use **per-tab busy** scopes so one generate does not lock the whole app.
 
 ---
 
@@ -173,4 +203,4 @@ Storage prefs (output path, retention, clear caches, cost guard) live in **Setti
 - **Video preview** — `flet-video` when available  
 - **Linux:** install libmpv if inline video fails  
 
-For scenario names, tool lists, and feature detail, see **FEATURES.txt**.
+For scenario names, tool lists, T2I models, Veo rates, and feature detail, see **FEATURES.txt**.

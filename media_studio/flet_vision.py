@@ -33,6 +33,7 @@ from media_studio.flet_theme import (
     styled_dropdown,
 )
 from media_studio.flet_video_player import VideoResultPlayer
+from media_studio.helper_none import HELPER_NONE, active_helper, is_helper_none, with_none
 from media_studio.vision_prompt import (
     LENS_FEELS,
     MOTIONS,
@@ -164,28 +165,28 @@ class CreativeVisionView:
         )
         self.shot_dd = styled_dropdown(
             label_text="Shot type",
-            options=SHOT_TYPES,
+            options=with_none(SHOT_TYPES),
             value=SHOT_TYPES[1],
             on_select=self._rebuild_prompt,
             expand=True,
         )
         self.lens_dd = styled_dropdown(
             label_text="Lens feel",
-            options=LENS_FEELS,
+            options=with_none(LENS_FEELS),
             value=LENS_FEELS[1],
             on_select=self._rebuild_prompt,
             expand=True,
         )
         self.motion_dd = styled_dropdown(
             label_text="Motion",
-            options=MOTIONS,
+            options=with_none(MOTIONS),
             value=MOTIONS[3],
             on_select=self._rebuild_prompt,
             expand=True,
         )
         self.lighting_dd = styled_dropdown(
             label_text="Lighting",
-            options=STILL_LIGHTING,
+            options=with_none(STILL_LIGHTING),
             value=STILL_LIGHTING[0],
             on_select=self._rebuild_prompt,
             expand=True,
@@ -193,7 +194,7 @@ class CreativeVisionView:
         self.lighting_dd.visible = False
         self.style_dd = styled_dropdown(
             label_text="Style preset",
-            options=list(STYLE_PRESETS.keys()),
+            options=with_none(list(STYLE_PRESETS.keys())),
             value="Clean modern day",
             on_select=self._on_style_preset,
             expand=True,
@@ -216,6 +217,30 @@ class CreativeVisionView:
             border_color=BORDER,
             color=TEXT,
             text_size=FONT_SM,
+        )
+        self.creative_direction = ft.TextField(
+            label="Creative direction for Enhance (optional)",
+            hint_text=(
+                "Intent only for Grok Enhance — not sent to the model. "
+                "e.g. “epic Earth from orbit, cold blue grade, minimal stars”"
+            ),
+            value="",
+            multiline=True,
+            min_lines=2,
+            max_lines=4,
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+        )
+        self.creative_direction_hint = ft.Text(
+            "Enhance-only: steers Grok when you hit Enhance. Empty = helpers + prompt only. "
+            "Never injected into Generate as-is.",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=2,
         )
         self.negative = ft.TextField(
             label="Negative prompt (optional)",
@@ -422,6 +447,8 @@ class CreativeVisionView:
                     ft.Row([self.motion_dd, self.lighting_dd, self.style_dd], spacing=8),
                     ft.Row([self.rebuild_mode, self.btn_rebuild], spacing=8),
                     self.prompt,
+                    self.creative_direction,
+                    self.creative_direction_hint,
                     self.negative,
                     ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
                     self.job_progress.control,
@@ -559,19 +586,37 @@ class CreativeVisionView:
             or default_vision_model(self._mode)
         )
 
+    def _duration_token_for_cost(self, spec=None) -> str | None:
+        """Selected duration for estimates — falls back to model default."""
+        spec = spec or self._current_spec()
+        if self._mode == "text_to_image":
+            return None
+        raw = _dd(self.dur_dd)
+        choices = list(spec.duration_choices or ())
+        if raw and (not choices or raw in choices):
+            return raw
+        return spec.default_duration or "8s"
+
     def _cost_label(self) -> str:
         try:
             spec = self._current_spec()
+            audio = None
+            if spec.supports_audio and self._mode != "text_to_image":
+                audio = bool(self.gen_audio.value)
             return format_vision_cost(
                 spec,
-                duration_token=_dd(self.dur_dd),
-                resolution=_dd(self.res_dd),
+                duration_token=self._duration_token_for_cost(spec),
+                resolution=_dd(self.res_dd) if self.res_dd.visible else (
+                    spec.default_resolution or None
+                ),
                 aspect_ratio=_dd(self.aspect_dd),
+                generate_audio=audio,
             )
         except Exception:
             return "Est. cost: —"
 
     async def _refresh_cost(self, e: ft.ControlEvent | None = None) -> None:
+        """Recompute total est. cost when duration / resolution / audio / model change."""
         self.cost_text.value = self._cost_label()
         try:
             self.page.update()
@@ -582,14 +627,20 @@ class CreativeVisionView:
         spec = self._current_spec()
         self.model_notes.value = spec.notes or ""
         is_t2i = self._mode == "text_to_image"
-        # Duration (video only)
-        if spec.duration_choices:
-            self.dur_dd.options = dropdown_options(list(spec.duration_choices))
-            self.dur_dd.visible = True
-            if _dd(self.dur_dd) not in spec.duration_choices:
-                self.dur_dd.value = spec.default_duration
-        else:
+        # Duration (video only) — always offer choices for T2V/I2V/Bridge
+        if is_t2i:
             self.dur_dd.visible = False
+        else:
+            choices = list(spec.duration_choices) if spec.duration_choices else [
+                "4s",
+                "6s",
+                "8s",
+            ]
+            self.dur_dd.options = dropdown_options(choices)
+            self.dur_dd.visible = True
+            if _dd(self.dur_dd) not in choices:
+                pref = spec.default_duration or choices[-1]
+                self.dur_dd.value = pref if pref in choices else choices[0]
         # Aspect (T2I size presets or video aspect)
         self.aspect_dd.options = dropdown_options(list(spec.aspect_choices))
         if _dd(self.aspect_dd) not in spec.aspect_choices:
@@ -614,6 +665,7 @@ class CreativeVisionView:
                 self.btn_generate.content = "Generate vision"
         except Exception:
             pass
+        # Total job cost for current duration / res / audio
         self.cost_text.value = self._cost_label()
 
     # ----- mode / model -----
@@ -700,38 +752,53 @@ class CreativeVisionView:
         """
         T2I: framing / lens look / lighting / still styles — no motion.
         Video modes: shot type / lens / motion / video styles.
+        Every helper list starts with (None) so dimensions can be silenced.
         """
         try:
             if is_t2i:
-                self.helpers_title.value = "Still photography helpers"
+                self.helpers_title.value = "Still photography helpers (None = skip)"
                 # Framing replaces video shot types (no push-in / orbit / pan)
                 self.shot_dd.label = "Framing / composition"
-                self.shot_dd.options = dropdown_options(list(STILL_FRAMINGS))
-                if _dd(self.shot_dd) not in STILL_FRAMINGS:
+                opts = with_none(STILL_FRAMINGS)
+                self.shot_dd.options = dropdown_options(opts)
+                if _dd(self.shot_dd) not in opts:
                     self.shot_dd.value = STILL_FRAMINGS[0]
                 self.lens_dd.label = "Lens look"
-                self.lens_dd.options = dropdown_options(list(STILL_LENS_LOOKS))
-                if _dd(self.lens_dd) not in STILL_LENS_LOOKS:
+                lopts = with_none(STILL_LENS_LOOKS)
+                self.lens_dd.options = dropdown_options(lopts)
+                if _dd(self.lens_dd) not in lopts:
                     self.lens_dd.value = STILL_LENS_LOOKS[1]
                 self.motion_dd.visible = False
                 self.lighting_dd.visible = True
-                self.style_dd.options = dropdown_options(list(STILL_STYLE_PRESETS.keys()))
-                if _dd(self.style_dd) not in STILL_STYLE_PRESETS:
+                light_opts = with_none(STILL_LIGHTING)
+                self.lighting_dd.options = dropdown_options(light_opts)
+                if _dd(self.lighting_dd) not in light_opts:
+                    self.lighting_dd.value = STILL_LIGHTING[0]
+                sopts = with_none(list(STILL_STYLE_PRESETS.keys()))
+                self.style_dd.options = dropdown_options(sopts)
+                if _dd(self.style_dd) not in sopts:
                     self.style_dd.value = "Clean modern day"
             else:
-                self.helpers_title.value = "Camera / shot helpers"
+                self.helpers_title.value = "Camera / shot helpers (None = skip)"
                 self.shot_dd.label = "Shot type"
-                self.shot_dd.options = dropdown_options(list(SHOT_TYPES))
-                if _dd(self.shot_dd) not in SHOT_TYPES:
+                opts = with_none(SHOT_TYPES)
+                self.shot_dd.options = dropdown_options(opts)
+                if _dd(self.shot_dd) not in opts:
                     self.shot_dd.value = SHOT_TYPES[1]
                 self.lens_dd.label = "Lens feel"
-                self.lens_dd.options = dropdown_options(list(LENS_FEELS))
-                if _dd(self.lens_dd) not in LENS_FEELS:
+                lopts = with_none(LENS_FEELS)
+                self.lens_dd.options = dropdown_options(lopts)
+                if _dd(self.lens_dd) not in lopts:
                     self.lens_dd.value = LENS_FEELS[1]
                 self.motion_dd.visible = True
+                mopts = with_none(MOTIONS)
+                self.motion_dd.options = dropdown_options(mopts)
+                if _dd(self.motion_dd) not in mopts:
+                    self.motion_dd.value = MOTIONS[3]
                 self.lighting_dd.visible = False
-                self.style_dd.options = dropdown_options(list(STYLE_PRESETS.keys()))
-                if _dd(self.style_dd) not in STYLE_PRESETS:
+                sopts = with_none(list(STYLE_PRESETS.keys()))
+                self.style_dd.options = dropdown_options(sopts)
+                if _dd(self.style_dd) not in sopts:
                     self.style_dd.value = "Clean modern day"
         except Exception:
             pass
@@ -749,30 +816,87 @@ class CreativeVisionView:
     async def _on_style_preset(self, e: ft.ControlEvent) -> None:
         await self._rebuild_prompt(e)
 
+    def _active_subject_notes(self) -> str | None:
+        name = _dd(self.subject_dd)
+        if not name or is_helper_none(name) or name == "(none)":
+            return None
+        s = find_subject(name, self.state.output_dir)
+        if s:
+            return s.notes or s.name
+        return None
+
+    def _helper_snapshot_for_enhance(self) -> dict[str, Any]:
+        """Only non-None helpers (+ optional creative direction) for Enhance."""
+        snap: dict[str, Any] = {
+            "workspace": "creative_vision",
+            "mode": self._mode,
+        }
+        if self._mode == "text_to_image":
+            for key, val in (
+                ("framing", _dd(self.shot_dd)),
+                ("lens_look", _dd(self.lens_dd)),
+                ("lighting", _dd(self.lighting_dd)),
+                ("style", _dd(self.style_dd)),
+            ):
+                a = active_helper(val)
+                if a:
+                    snap[key] = a
+            snap["guidance"] = (
+                "Rewrite for a single still photograph (text-to-image). "
+                "Use still photography language only from the helpers that are set "
+                "(skip any missing dimensions). Do NOT invent camera motion "
+                "(no push-in, pan, tilt, orbit, tracking) unless the user prompt "
+                "or creative_direction already asks for it. Locked frame."
+            )
+        else:
+            for key, val in (
+                ("shot_type", _dd(self.shot_dd)),
+                ("lens", _dd(self.lens_dd)),
+                ("motion", _dd(self.motion_dd)),
+                ("style", _dd(self.style_dd)),
+            ):
+                a = active_helper(val)
+                if a:
+                    snap[key] = a
+            snap["guidance"] = (
+                "Rewrite for cinematic video generation. "
+                "Use only the helper dimensions that are set (ignore None). "
+                "For bridges: keep architecture consistent between start and end frames. "
+                "Subject refs are consistency help, not perfect identity lock."
+            )
+        direction = (self.creative_direction.value or "").strip()
+        if direction:
+            snap["creative_direction"] = direction
+            snap["creative_direction_note"] = (
+                "creative_direction is the user's intent for Enhance only — "
+                "combine it with non-None helpers and the current prompt, then write "
+                "one model-ready prompt. Do not leave creative_direction as a separate "
+                "section in the output; fold intent into the final prompt language."
+            )
+        sub = self._active_subject_notes()
+        if sub:
+            snap["subject_notes"] = sub
+        return snap
+
     def _compiled_helpers(self) -> str:
         style_key = _dd(self.style_dd)
-        sub = None
-        name = _dd(self.subject_dd)
-        if name and name != "(none)":
-            s = find_subject(name, self.state.output_dir)
-            if s:
-                sub = s.notes or s.name
+        sub = self._active_subject_notes()
         if self._mode == "text_to_image":
-            # Still-only: never inject camera motion language
+            # Still-only: never inject camera motion language; skip (None) helpers
             return compile_still_prompt(
                 base_prompt="",
-                framing=_dd(self.shot_dd),
-                lens_look=_dd(self.lens_dd),
-                lighting=_dd(self.lighting_dd),
-                style_preset=style_key,
+                framing=active_helper(_dd(self.shot_dd)),
+                lens_look=active_helper(_dd(self.lens_dd)),
+                lighting=active_helper(_dd(self.lighting_dd)),
+                style_preset=active_helper(style_key),
                 subject_notes=sub,
             )
         return compile_vision_prompt(
             base_prompt="",
-            shot_type=_dd(self.shot_dd),
-            lens=_dd(self.lens_dd),
-            motion=_dd(self.motion_dd),
-            style_preset=style_key,
+            shot_type=active_helper(_dd(self.shot_dd)),
+            lens=active_helper(_dd(self.lens_dd)),
+            motion=active_helper(_dd(self.motion_dd)),
+            style_preset=active_helper(style_key),
             bridge=(self._mode == "bridge"),
             subject_notes=sub,
         )
@@ -837,44 +961,17 @@ class CreativeVisionView:
 
     async def _on_enhance(self, e: ft.ControlEvent) -> None:
         def _extra() -> dict[str, Any]:
-            if self._mode == "text_to_image":
-                return {
-                    "workspace": "creative_vision",
-                    "mode": self._mode,
-                    "framing": _dd(self.shot_dd),
-                    "lens_look": _dd(self.lens_dd),
-                    "lighting": _dd(self.lighting_dd),
-                    "style": _dd(self.style_dd),
-                    "guidance": (
-                        "Rewrite for a single still photograph (text-to-image). "
-                        "Use still photography language only: style, lighting, lens look, "
-                        "framing/composition. Do NOT add camera motion (no push-in, pan, "
-                        "tilt, orbit, tracking, drone move, whip zoom, or motion blur "
-                        "from camera movement) unless the user already wrote it. "
-                        "Locked frame, photoreal when appropriate."
-                    ),
-                }
-            return {
-                "workspace": "creative_vision",
-                "mode": self._mode,
-                "shot_type": _dd(self.shot_dd),
-                "lens": _dd(self.lens_dd),
-                "motion": _dd(self.motion_dd),
-                "style": _dd(self.style_dd),
-                "guidance": (
-                    "Rewrite for cinematic video generation. "
-                    "Use clear camera language. For bridges: keep architecture "
-                    "consistent between start and end frames. "
-                    "Subject refs are consistency help, not perfect identity lock."
-                ),
-            }
+            return self._helper_snapshot_for_enhance()
 
         # Multi-image: enhance uses primary image; pass start or first ref
-        img = self.start_path
-        if not img and self.ref_paths:
-            img = self.ref_paths[0]
-        if not img and self.end_path:
-            img = self.end_path
+        # T2I: no source required
+        img = None
+        if self._mode != "text_to_image":
+            img = self.start_path
+            if not img and self.ref_paths:
+                img = self.ref_paths[0]
+            if not img and self.end_path:
+                img = self.end_path
 
         await run_prompt_enhance(
             page=self.page,
@@ -889,6 +986,7 @@ class CreativeVisionView:
             enhance_btn=self.btn_enhance,
             busy_controls=[self.btn_generate],
             context_label="vision prompt",
+            # Allow Enhance from creative direction alone (optional field + helpers)
             allow_empty_with_context=True,
             busy_scope="vision",
         )
@@ -1288,11 +1386,17 @@ class CreativeVisionView:
             from media_studio.flet_dialogs import confirm_cost_if_needed
             from media_studio.vision_registry import estimate_vision_cost
 
+            audio = None
+            if spec.supports_audio and self._mode != "text_to_image":
+                audio = bool(self.gen_audio.value)
             est = estimate_vision_cost(
                 spec,
-                duration_token=_dd(self.dur_dd),
-                resolution=_dd(self.res_dd),
+                duration_token=self._duration_token_for_cost(spec),
+                resolution=_dd(self.res_dd) if getattr(self.res_dd, "visible", True) else (
+                    spec.default_resolution or None
+                ),
                 aspect_ratio=_dd(self.aspect_dd),
+                generate_audio=audio,
             )
             ok = await confirm_cost_if_needed(
                 self.page,

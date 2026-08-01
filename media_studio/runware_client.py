@@ -208,11 +208,16 @@ def estimate_aleph_cost_usd(duration_s: float | None) -> float:
 
 
 def format_aleph_cost(duration_s: float | None) -> str:
+    """Job total for clip length (not bare $/s)."""
+    from media_studio.pricing import format_job_cost
+
     usd = estimate_aleph_cost_usd(duration_s)
     secs = float(duration_s) if duration_s and duration_s > 0 else 8.0
-    return (
-        f"Est. cost: ${usd:.2f} · ~{secs:.0f}s @ ${ALEPH_COST_PER_SECOND:.2f}/s "
-        f"(Aleph 2.0 / Runware)"
+    secs = max(ALEPH_MIN_DURATION_S, min(ALEPH_MAX_DURATION_S, secs))
+    return format_job_cost(
+        usd,
+        unit=f"{secs:.0f}s",
+        model="Aleph 2.0 / Runware",
     )
 
 

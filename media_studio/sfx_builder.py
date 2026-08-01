@@ -8,35 +8,43 @@ from __future__ import annotations
 
 from typing import Any
 
+from media_studio.helper_none import active_helper, is_helper_none, with_none
+
 # ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
 
-CATEGORIES: list[str] = [
-    "Whoosh / Swoosh",
-    "Riser",
-    "Impact / Hit",
-    "Transition",
-    "Ambience / Room Tone",
-    "Footsteps",
-    "Door / Object Interaction",
-    "Nature",
-    "UI / Digital",
-    "Custom / Other",
-]
+CATEGORIES: list[str] = with_none(
+    [
+        "Whoosh / Swoosh",
+        "Riser",
+        "Impact / Hit",
+        "Transition",
+        "Ambience / Room Tone",
+        "Footsteps",
+        "Door / Object Interaction",
+        "Nature",
+        "UI / Digital",
+        "Custom / Other",
+    ]
+)
 
-INTENSITIES: list[str] = [
-    "Soft",
-    "Medium",
-    "Hard / Aggressive",
-]
+INTENSITIES: list[str] = with_none(
+    [
+        "Soft",
+        "Medium",
+        "Hard / Aggressive",
+    ]
+)
 
-LENGTHS: list[str] = [
-    "Very short (0.5–1s)",
-    "Short (1–2s)",
-    "Medium (2–4s)",
-    "Long / Sustained",
-]
+LENGTHS: list[str] = with_none(
+    [
+        "Very short (0.5–1s)",
+        "Short (1–2s)",
+        "Medium (2–4s)",
+        "Long / Sustained",
+    ]
+)
 
 # Suggested API duration (seconds) per length preset
 LENGTH_DURATION_S: dict[str, float] = {
@@ -46,14 +54,16 @@ LENGTH_DURATION_S: dict[str, float] = {
     "Long / Sustained": 6.0,
 }
 
-TEXTURES: list[str] = [
-    "Clean",
-    "Gritty",
-    "Airy",
-    "Metallic",
-    "Organic",
-    "Sci-fi / Designed",
-]
+TEXTURES: list[str] = with_none(
+    [
+        "Clean",
+        "Gritty",
+        "Airy",
+        "Metallic",
+        "Organic",
+        "Sci-fi / Designed",
+    ]
+)
 
 DEFAULTS: dict[str, Any] = {
     "category": "Whoosh / Swoosh",
@@ -161,20 +171,28 @@ def build_sfx_prompt(
 
     Optional free-text detail is appended only when non-empty.
     """
-    cat = (category or DEFAULTS["category"]).strip()
-    inten = (intensity or DEFAULTS["intensity"]).strip()
-    leng = (length or DEFAULTS["length"]).strip()
-    tex = (texture or DEFAULTS["texture"]).strip()
+    cat = active_helper(category) or DEFAULTS["category"]
+    inten = active_helper(intensity)
+    leng = active_helper(length)
+    tex = active_helper(texture)
     note = (detail or "").strip()
 
-    core = _category_core(cat)
-    parts = [
-        f"Sound effect: {core}.",
-        f"Intensity: {_intensity_phrase(inten)}.",
-        f"Length: {_length_phrase(leng)}.",
-        f"Character: {_texture_phrase(tex)}.",
-        "High-quality mono-or-stereo ready SFX, no music, no dialogue, no reverb wash that muddies the attack.",
-    ]
+    # Category None → generic SFX core
+    if is_helper_none(category):
+        core = "a clear, usable sound effect"
+    else:
+        core = _category_core(cat)
+    parts = [f"Sound effect: {core}."]
+    if inten:
+        parts.append(f"Intensity: {_intensity_phrase(inten)}.")
+    if leng:
+        parts.append(f"Length: {_length_phrase(leng)}.")
+    if tex:
+        parts.append(f"Character: {_texture_phrase(tex)}.")
+    parts.append(
+        "High-quality mono-or-stereo ready SFX, no music, no dialogue, "
+        "no reverb wash that muddies the attack."
+    )
     if note:
         parts.append(f"Additional detail: {note}.")
 
@@ -191,27 +209,33 @@ def clear_sfx_builder_values() -> dict[str, Any]:
 # Video → SFX structured builder (real-estate–sensible defaults)
 # ---------------------------------------------------------------------------
 
-VS_STYLES: list[str] = [
-    "Premium real-estate",
-    "Cinematic",
-    "Minimal/sparse",
-    "Energy social",
-    "Soft lifestyle",
-]
+VS_STYLES: list[str] = with_none(
+    [
+        "Premium real-estate",
+        "Cinematic",
+        "Minimal/sparse",
+        "Energy social",
+        "Soft lifestyle",
+    ]
+)
 
-VS_PACES: list[str] = [
-    "Sparse",
-    "Balanced",
-    "Busy",
-]
+VS_PACES: list[str] = with_none(
+    [
+        "Sparse",
+        "Balanced",
+        "Busy",
+    ]
+)
 
-VS_EMPHASIS: list[str] = [
-    "Cut transitions",
-    "Movement/whooshes",
-    "Footsteps & practicals",
-    "Room tone/air",
-    "Mixed",
-]
+VS_EMPHASIS: list[str] = with_none(
+    [
+        "Cut transitions",
+        "Movement/whooshes",
+        "Footsteps & practicals",
+        "Room tone/air",
+        "Mixed",
+    ]
+)
 
 VS_EXCLUDES: list[str] = [
     "No music",
@@ -231,6 +255,8 @@ VS_DEFAULTS: dict[str, Any] = {
 
 
 def _vs_style_phrase(style: str | None) -> str:
+    if is_helper_none(style):
+        return ""
     s = (style or VS_DEFAULTS["style"]).strip()
     mapping = {
         "Premium real-estate": (
@@ -245,6 +271,8 @@ def _vs_style_phrase(style: str | None) -> str:
 
 
 def _vs_pace_phrase(pace: str | None) -> str:
+    if is_helper_none(pace):
+        return ""
     p = (pace or VS_DEFAULTS["pace"]).strip().lower()
     if p.startswith("sparse"):
         return "sparse density — leave space between events; avoid constant layering"
@@ -254,6 +282,8 @@ def _vs_pace_phrase(pace: str | None) -> str:
 
 
 def _vs_emphasis_phrase(emphasis: str | None) -> str:
+    if is_helper_none(emphasis):
+        return ""
     e = (emphasis or VS_DEFAULTS["emphasis"]).strip().lower()
     if e.startswith("cut"):
         return "emphasize cut transitions and edit points"
@@ -278,17 +308,24 @@ def build_video_sfx_prompt(
     Compile structured Video→SFX controls into a model prompt.
 
     Free-text note is always appendable; excludes become hard constraints.
+    Helper dimensions set to (None) are omitted.
     """
     ex = list(excludes) if excludes is not None else list(VS_DEFAULTS["excludes"])
     note_txt = (note or "").strip()
 
     parts = [
         "Generate synchronized sound effects for this real-estate / property video.",
-        f"Style: {_vs_style_phrase(style)}.",
-        f"Pace: {_vs_pace_phrase(pace)}.",
-        f"Emphasis: {_vs_emphasis_phrase(emphasis)}.",
-        "Match on-screen actions, cuts, and motion timing. Photoreal foley only.",
     ]
+    sp = _vs_style_phrase(style)
+    if sp:
+        parts.append(f"Style: {sp}.")
+    pp = _vs_pace_phrase(pace)
+    if pp:
+        parts.append(f"Pace: {pp}.")
+    ep = _vs_emphasis_phrase(emphasis)
+    if ep:
+        parts.append(f"Emphasis: {ep}.")
+    parts.append("Match on-screen actions, cuts, and motion timing. Photoreal foley only.")
     if ex:
         # Normalize chip labels into constraint sentences
         rules: list[str] = []

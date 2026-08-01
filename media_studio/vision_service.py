@@ -81,6 +81,7 @@ def run_vision(
         duration_token=duration or spec.default_duration,
         resolution=resolution,
         aspect_ratio=aspect_ratio,
+        generate_audio=generate_audio,
     )
     est_lbl = format_cost_label(est, estimate=True)
     progress(f"{spec.label} · {est_lbl}")

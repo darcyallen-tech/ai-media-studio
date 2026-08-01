@@ -68,17 +68,55 @@ def _as_usd(value: Any) -> float | None:
     return None
 
 
+def format_usd_amount(amount: float | None) -> str:
+    """Format a dollar amount for labels."""
+    if amount is None:
+        return "—"
+    if amount < 0.01:
+        return f"${amount:.4f}"
+    if amount < 1:
+        return f"${amount:.3f}"
+    return f"${amount:.2f}"
+
+
 def format_cost_label(amount: float | None, *, estimate: bool = True) -> str:
-    """Always: Est. cost: $X.XX (or Cost: for exact API)."""
+    """Always: Est. cost: $X.XX (or Cost: for exact API). Prefer format_job_cost for UI."""
     if amount is None:
         return "Est. cost: —"
-    if amount < 0.01:
-        s = f"${amount:.4f}"
-    elif amount < 1:
-        s = f"${amount:.3f}"
-    else:
-        s = f"${amount:.2f}"
+    s = format_usd_amount(amount)
     return f"Est. cost: {s}" if estimate else f"Cost: {s}"
+
+
+def format_job_cost(
+    amount: float | None,
+    *,
+    unit: str | None = None,
+    model: str | None = None,
+    estimate: bool = True,
+) -> str:
+    """
+    Job-total cost label for UI.
+
+    Examples:
+      Est. cost: $3.20 · 8s (Veo 3.1 · Image→Video)
+      Est. cost: $0.030 · 1 image (Image · Flux 2 Pro (edit))
+      Est. cost: $0.15 · 15s (ElevenLabs Music)
+
+    Always implies **total job cost**, never a bare unit rate alone.
+    """
+    if amount is None:
+        return "Est. cost: —" if estimate else "Cost: —"
+    head = "Est. cost" if estimate else "Cost"
+    s = format_usd_amount(amount)
+    parts = [f"{head}: {s}"]
+    u = (unit or "").strip()
+    if u:
+        parts.append(u)
+    m = (model or "").strip()
+    if m:
+        # Avoid double-wrapping if model already has parens-heavy labels
+        return " · ".join(parts) + f" ({m})"
+    return " · ".join(parts)
 
 
 def format_render_metrics(
@@ -183,29 +221,42 @@ def live_estimate_cost(
     if kind == "image":
         spec = resolve_image_edit_model(model_choice) or default_image_edit_model()
         amount = spec.estimate_cost(num_images, resolution=str(resolution) if resolution else None)
-        return format_cost_label(amount, estimate=True)
+        n = max(1, int(num_images))
+        unit = f"{n} image" if n == 1 else f"{n} images"
+        res = str(resolution or "").strip()
+        if res and res.lower() not in ("auto", "default", ""):
+            unit = f"{unit} · {res}"
+        return format_job_cost(amount, unit=unit, model=spec.label)
 
     if kind == "image_to_video":
         spec = resolve_video_model(model_choice) or default_i2v_model()
         if spec.task != "image_to_video":
             spec = default_i2v_model()
+        secs = float(dur_f) if dur_f is not None and dur_f > 0 else float(
+            spec.default_duration or 5
+        )
         amount = spec.estimate_cost(
-            dur_f,
+            secs,
             generate_audio=gen_audio,
             resolution=str(resolution) if resolution else None,
         )
-        return format_cost_label(amount, estimate=True)
+        return format_job_cost(
+            amount, unit=f"{secs:.0f}s", model=spec.label
+        )
 
     # video edit — cost often scales with source length
     spec = resolve_video_model(model_choice) or default_video_edit_model()
     if spec.task != "video_edit":
         spec = default_video_edit_model()
+    secs = float(dur_f) if dur_f is not None and dur_f > 0 else float(
+        spec.default_duration or 5
+    )
     amount = spec.estimate_cost(
-        dur_f,
+        secs,
         generate_audio=gen_audio,
         resolution=str(resolution) if resolution else None,
     )
-    return format_cost_label(amount, estimate=True)
+    return format_job_cost(amount, unit=f"{secs:.0f}s", model=spec.label)
 
 
 def image_cost_usd(model_key: str, num_images: int, resolution: str | None = None) -> float | None:

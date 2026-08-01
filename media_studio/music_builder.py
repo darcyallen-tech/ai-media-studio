@@ -15,6 +15,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 GENRES: list[str] = [
+    "(None)",
     "Ambient",
     "Cinematic",
     "Classical",
@@ -159,6 +160,7 @@ SUBGENRES: dict[str, list[str]] = {
 }
 
 ERAS: list[str] = [
+    "(None)",
     "60s",
     "70s",
     "80s",
@@ -170,6 +172,7 @@ ERAS: list[str] = [
 ]
 
 TEMPO_PRESETS: list[str] = [
+    "(None)",
     "Slow",
     "Medium",
     "Fast",
@@ -297,13 +300,23 @@ def default_subgenre(genre: str | None) -> str:
 
 
 def _noneish(value: str | None) -> bool:
+    """Treat UI None/Off/(none / auto) as silent for prompt injection."""
+    try:
+        from media_studio.helper_none import is_helper_none
+
+        if is_helper_none(value):
+            return True
+    except Exception:
+        pass
     if value is None:
         return True
     s = str(value).strip()
-    return not s or s.lower() in {"(none)", "none", "—", "-", "(none / auto)", "auto"}
+    return not s or s.lower() in {"(none)", "none", "—", "-", "(none / auto)", "auto", "off", "(off)"}
 
 
 def _era_phrase(era: str) -> str:
+    if _noneish(era):
+        return ""
     e = (era or "").strip()
     if not e:
         return ""
@@ -326,6 +339,8 @@ def _tempo_phrase(tempo: str | None, bpm: int | float | None) -> str:
         bpm_val = max(40, min(220, bpm_val))
         return f"tempo around {bpm_val} BPM"
 
+    if _noneish(tempo):
+        return ""
     t = (tempo or "Medium").strip()
     if t == "Custom BPM":
         return "a clear, intentional tempo"
@@ -413,14 +428,18 @@ def build_structured_music_block(
 
     ``instrumental`` is accepted for back-compat; if omitted, derived from ``vocals``.
     """
-    g = (genre or DEFAULTS["genre"]).strip()
-    subs = subgenres_for(g)
-    sg = (subgenre or "").strip()
-    if not sg or sg not in subs:
-        sg = default_subgenre(g)
+    g_raw = genre if not _noneish(genre) else None
+    g = (g_raw or DEFAULTS["genre"]).strip() if g_raw else ""
+    if g:
+        subs = subgenres_for(g)
+        sg = (subgenre or "").strip()
+        if _noneish(subgenre) or not sg or sg not in subs:
+            sg = "" if _noneish(subgenre) else default_subgenre(g)
+    else:
+        sg = ""
 
-    era_s = (era or DEFAULTS["era"]).strip()
-    tempo_s = (tempo or DEFAULTS["tempo"]).strip()
+    era_s = era if not _noneish(era) else ""
+    tempo_s = tempo if not _noneish(tempo) else ""
     vocals_s = (vocals or DEFAULTS["vocals"]).strip()
     if instrumental is None:
         inst = vocals_is_instrumental(vocals_s)
@@ -439,10 +458,12 @@ def build_structured_music_block(
             return "A"
         return "An" if w[0].lower() in "aeiou" else "A"
 
-    if sg and sg.lower() != "general":
+    if g and sg and sg.lower() != "general":
         head = f"{_a(sg)} {sg.lower()} track in the {g.lower()} genre"
-    else:
+    elif g:
         head = f"{_a(g)} {g.lower()} track"
+    else:
+        head = "A music track"
 
     era_p = _era_phrase(era_s)
     tempo_p = _tempo_phrase(tempo_s, bpm)
@@ -455,7 +476,8 @@ def build_structured_music_block(
         body_parts.append(f"{head}, with {era_p}.")
     else:
         body_parts.append(f"{head}.")
-    body_parts.append(f"Tempo: {tempo_p}.")
+    if tempo_p:
+        body_parts.append(f"Tempo: {tempo_p}.")
     if mood_p:
         body_parts.append(f"Mood: {mood_p}.")
     if energy_p:

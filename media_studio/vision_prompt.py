@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from media_studio.helper_none import active_helper, is_helper_none
+
 # ---------------------------------------------------------------------------
 # Video helpers (T2V / I2V / Bridge)
 # ---------------------------------------------------------------------------
@@ -141,19 +143,23 @@ def compile_vision_prompt(
     parts: list[str] = []
 
     style = (style_text or "").strip()
-    if not style and style_preset and style_preset in STYLE_PRESETS:
-        style = STYLE_PRESETS[style_preset]
+    preset = active_helper(style_preset)
+    if not style and preset and preset in STYLE_PRESETS:
+        style = STYLE_PRESETS[preset]
     if style:
         parts.append(style.rstrip(".,; ") + ".")
 
     cam: list[str] = []
-    if shot_type:
-        cam.append(f"shot: {shot_type}")
-    if lens:
-        cam.append(f"lens feel: {lens}")
-    if motion and motion.lower() != "static":
-        cam.append(f"camera motion: {motion}")
-    elif motion:
+    st = active_helper(shot_type)
+    ln = active_helper(lens)
+    mo = active_helper(motion)
+    if st:
+        cam.append(f"shot: {st}")
+    if ln:
+        cam.append(f"lens feel: {ln}")
+    if mo and mo.lower() != "static":
+        cam.append(f"camera motion: {mo}")
+    elif mo:
         cam.append("camera locked / static")
     if cam:
         parts.append("Camera — " + "; ".join(cam) + ".")
@@ -165,7 +171,7 @@ def compile_vision_prompt(
             "and natural motion change. No morphing walls, no teleport cuts."
         )
 
-    sub = (subject_notes or "").strip()
+    sub = active_helper(subject_notes)
     if sub:
         parts.append(
             f"Subject consistency help (not a perfect lock): {sub}."
@@ -202,30 +208,36 @@ def compile_still_prompt(
     parts: list[str] = []
 
     style = (style_text or "").strip()
-    if not style and style_preset and style_preset in STILL_STYLE_PRESETS:
-        style = STILL_STYLE_PRESETS[style_preset]
+    preset = active_helper(style_preset)
+    if not style and preset and preset in STILL_STYLE_PRESETS:
+        style = STILL_STYLE_PRESETS[preset]
     # Fall back to video style table if a shared name is selected
-    if not style and style_preset and style_preset in STYLE_PRESETS:
-        style = STYLE_PRESETS[style_preset]
+    if not style and preset and preset in STYLE_PRESETS:
+        style = STYLE_PRESETS[preset]
     if style:
         parts.append(style.rstrip(".,; ") + ".")
 
     still: list[str] = []
-    if framing:
-        still.append(f"framing: {framing}")
-    if lens_look:
-        still.append(f"lens look: {lens_look}")
-    if lighting:
-        still.append(f"lighting: {lighting}")
+    fr = active_helper(framing)
+    ll = active_helper(lens_look)
+    li = active_helper(lighting)
+    if fr:
+        still.append(f"framing: {fr}")
+    if ll:
+        still.append(f"lens look: {ll}")
+    if li:
+        still.append(f"lighting: {li}")
     if still:
         parts.append("Still photography — " + "; ".join(still) + ".")
 
-    parts.append(
-        "Single still image, locked frame, no camera move, no pan, no push-in, "
-        "no motion blur from camera movement."
-    )
+    # Always clarify still intent when any helper or body is present
+    if still or style or (base_prompt or "").strip() or active_helper(subject_notes):
+        parts.append(
+            "Single still image, locked frame, no camera move, no pan, no push-in, "
+            "no motion blur from camera movement."
+        )
 
-    sub = (subject_notes or "").strip()
+    sub = active_helper(subject_notes)
     if sub:
         parts.append(
             f"Subject consistency help (not a perfect lock): {sub}."

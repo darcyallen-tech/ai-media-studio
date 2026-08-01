@@ -9,8 +9,9 @@ This file lists product capabilities.
 OVERVIEW
 ==============================================================================
 Pay-per-use desktop app for listing videographers. Stage empties, lock camera
-moves, repair stills/video, denoise clips, interpolate / slow-mo, generate
-audio, and run creative shots — then send results to DaVinci Resolve.
+moves, invent stills then bridge them, repair stills/video, denoise clips,
+interpolate / slow-mo, generate audio, and run creative shots — then send
+results to DaVinci Resolve.
 
 Providers:
   fal.ai   — main generation (Studio, Tools, Vision, Audio; FE 1080p proxy).
@@ -61,11 +62,12 @@ STUDIO — IMAGE
 - Grok Enhance (vision-aware, model-specific, scenario-aware)
 - Comparison viewer with Overlay / A/B + opacity
 - Versions history
-- Cost estimate, generate, Show in folder, Send to Resolve, Send to ▾
+- Cost estimate (job total), generate, Show in folder, Send to Resolve, Send to ▾
 
 Region edit:
   - Draw/place colored boxes on the still
   - Per-box prompts; composite hard-fails if annotation still cannot be built
+    (never ships a raw still + box text as the model input)
   - Model list filtered to Seedream / annotation-capable models
 
 ==============================================================================
@@ -76,7 +78,7 @@ Workspaces include Received, Blank Canvas, Camera Lock (and related).
 - Camera-lock style prompts for furniture / day-night / etc.
 - Models: Kling family, Seedance 2.0 I2V/V2V, others on fal
 - Grok Enhance on video prompts
-- Duration / resolution guidance, cost estimate
+- Duration / resolution guidance, cost estimate (job total)
 - Export: Show in folder, Send to Resolve, Library
 
 ==============================================================================
@@ -99,21 +101,50 @@ Video tools:
   Object remove, Sky / Weather, Mirror / Glass, Amenity On, Restore, Re-Aspect
 
 Each tool: model select, prompt + Enhance where prompts exist (not pure Topaz
-control jobs), cost estimate, result → play / Show in folder / Resolve / Library.
+control jobs), cost estimate as job total, result → play / Show in folder /
+Resolve / Library.
 
 ==============================================================================
 CREATIVE VISION
 ==============================================================================
-Cinematic playground (separate from listing camera-lock staging):
-  - Text → Video (e.g. Veo 3.1 / Fast and peers)
-  - Image → Video
-  - Bridge / connect shots (start frame + end frame → in-between)
-  - Reference pack
-  - Camera / shot helpers; Rebuild prompt Replace / Append
-  - Subject Library + Vision presets (collapsible)
-  - Grok Enhance
-  - Optional cost guard (Settings: warn at $2+ / $5+)
-  - Library + Resolve export
+Cinematic playground (separate from listing camera-lock staging).
+Modes (left → right):
+
+  Text → Image (T2I)
+    Invent a still first, then Send to Start / End frame for a Bridge,
+    or Send to Studio Image. No motion language injected.
+    Models (fal): Flux 2 Pro / Flux 2 / Flex / 1.1 Pro Ultra,
+                  Nano Banana / Nano Banana 2 / Pro,
+                  Seedream 4.5 / 5.0 Lite / 5.0 Pro, Recraft V3
+    Still photography helpers only:
+      Framing / composition · Lens look · Lighting · Still style presets
+    Aspect / size presets (model-specific; some support 0.5K–4K)
+
+  Text → Video (T2V)
+    e.g. Veo 3.1 / Veo 3.1 Fast / Reference pack, Luma Ray 2
+    Veo on fal: ~$0.40/s standard, ~$0.15/s Fast (totals = rate × duration)
+
+  Image → Video (I2V)
+    Start still → motion (Veo, Kling O3 Pro, Seedance 2.0, Hailuo, …)
+
+  Bridge / Connect
+    Start frame + end frame → in-between (Veo first→last, Hailuo start+end)
+
+Shared Vision UI:
+  - Camera / shot helpers on video modes (shot type, lens feel, motion, style)
+  - Every helper dropdown includes (None) to skip that dimension
+  - Rebuild prompt: Replace / Append from active helpers only
+  - Creative direction field — Enhance only (intent for Grok; never sent
+    as-is on Generate; empty = helpers + prompt only)
+  - Subject Library + Vision presets (collapsible expanders)
+  - Grok Enhance (model-aware; T2I never adds push-in / pan language)
+  - Negative prompt (optional)
+  - Cost labels are job totals, e.g.
+      Est. cost: $3.20 · 8s (Veo 3.1)
+      Est. cost: $0.03 · 1 image (Flux 2 Pro (T2I))
+    never a bare unit rate alone
+  - Optional cost guard (Settings: warn at $2+ / $5+; default off)
+  - Result: play (video) / preview (still), Library, Resolve, Send to ▾
 
 ==============================================================================
 FRAME EDITOR (Aleph 2.0)
@@ -144,6 +175,7 @@ AUDIO
 - In-app playback where supported
 - Show in folder, Send to Resolve
 - Library Audio filter
+- Cost estimates as job totals (same format_job_cost pattern as Vision)
 
 ==============================================================================
 LIBRARY
@@ -170,9 +202,28 @@ SETTINGS / DISK SAFETY
 - fal / xAI / Runware keys (local app data only)
 - Output folder (persisted across sessions)
 - Library / outputs retention: Never / 7 / 14 / 30 / 90 days
-- Clear caches (app-owned dirs only under output root + handoff)
-- Cost guard for expensive generates (default off)
+- Apply retention now
+- Clear caches (app-owned dirs only under output root + handoff —
+  never deletes arbitrary user folders outside the app tree)
+- Cost guard for expensive generates (default off; warn at $2+ or $5+)
 - Hide missing Library rows
+
+==============================================================================
+COST LABELS
+==============================================================================
+UI cost lines are estimated job totals, not bare rates:
+  Est. cost: $X.XX · {unit} ({model})
+  e.g. $3.20 · 8s for Veo 3.1 standard ($0.40/s × 8s on fal)
+  e.g. $0.90 · 6s for Veo 3.1 Fast ($0.15/s × 6s)
+  e.g. $0.03 · 1 image for Flux T2I
+Estimates are conservative UI ballparks, not billing. No invented audio
+surcharge unless the provider quotes one.
+
+==============================================================================
+PER-TAB BUSY
+==============================================================================
+Long-running jobs lock only their scope (image, video, tools, vision,
+audio, frame_editor, enhance, …). Other tabs stay usable.
 
 ==============================================================================
 GROK ENHANCE
@@ -182,6 +233,8 @@ Available across Studio, Tools, Creative Vision, Frame Editor, Audio:
   - Uses vision when a still/reference is present
   - Scenario-aware constraints
   - Does not auto-switch models
+  - Creative Vision: optional creative_direction is Enhance-only intent
+  - T2I Enhance never injects camera motion language
   - Skipped where tools are pure control (e.g. Topaz denoise)
 
 ==============================================================================
@@ -199,5 +252,6 @@ DESIGN PRINCIPLES
 ==============================================================================
 - Real-estate defaults: preserve architecture, camera, identity unless asked
 - Pay only for what you generate
-- Studio = listing workflow; Creative Vision = invention; Frame Editor = fix-a-frame-through-motion
+- Studio = listing workflow; Creative Vision = invention (still → bridge →
+  shot); Frame Editor = fix-a-frame-through-motion
 - Resolve is the timeline; this app is the AI workbench

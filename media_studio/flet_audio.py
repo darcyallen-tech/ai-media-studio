@@ -995,18 +995,22 @@ class AudioView:
 
     def _sfx_cost(self) -> str:
         from media_studio.audio_registry import estimate_audio_cost
+        from media_studio.pricing import format_job_cost
 
         spec = find_audio(_dd_value(self.sfx_model), SFX_MODELS)
         if not spec:
             return "Est. cost: —"
-        unit = estimate_audio_cost(spec, duration_s=float(self.sfx_dur.value or 5))
+        dur = float(self.sfx_dur.value or 5)
+        unit = estimate_audio_cost(spec, duration_s=dur)
         n = self._sfx_variation_count()
         total = unit * n
         if n <= 1:
-            return format_audio_cost(spec, duration_s=float(self.sfx_dur.value or 5))
-        if total < 1:
-            return f"Est. cost: ${total:.3f}  ({n} × ${unit:.3f})"
-        return f"Est. cost: ${total:.2f}  ({n} × ${unit:.3f})"
+            return format_audio_cost(spec, duration_s=dur)
+        return format_job_cost(
+            total,
+            unit=f"{n} × {dur:.0f}s",
+            model=spec.label,
+        )
 
     def _sfx_clear_results(self) -> None:
         for bar in self.sfx_result_bars:

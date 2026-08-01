@@ -497,12 +497,20 @@ def format_audio_cost(
     duration_s: float | None = None,
     text: str | None = None,
 ) -> str:
+    """Job-total label (duration / characters when billed that way)."""
+    from media_studio.pricing import format_job_cost
+
     amount = estimate_audio_cost(spec, duration_s=duration_s, text=text)
-    if amount < 0.01:
-        return f"Est. cost: ${amount:.4f}"
-    if amount < 1:
-        return f"Est. cost: ${amount:.3f}"
-    return f"Est. cost: ${amount:.2f}"
+    unit = None
+    if spec.category == "voice_clone":
+        unit = "clone job"
+    elif spec.cost_per_second is not None and duration_s is not None and duration_s > 0:
+        unit = f"{float(duration_s):.0f}s"
+    elif spec.category == "voiceover" and text:
+        unit = f"{max(1, len(text.strip()))} chars"
+    elif duration_s is not None and duration_s > 0:
+        unit = f"{float(duration_s):.0f}s"
+    return format_job_cost(amount, unit=unit, model=spec.label)
 
 
 def build_music_args(

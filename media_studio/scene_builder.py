@@ -4,6 +4,8 @@ Scene Builder — structured dropdowns → high-quality real-estate staging prom
 
 from __future__ import annotations
 
+from media_studio.helper_none import HELPER_NONE, active_helper, is_helper_none, with_none
+
 ROOM_TYPES: list[str] = [
     "Living Room",
     "Primary Bedroom",
@@ -113,19 +115,26 @@ _ROOM_STYLES: dict[str, list[str]] = {
     ],
 }
 
-FURNITURE_DENSITY: list[str] = [
-    "Minimal (only key pieces)",
-    "Balanced",
-    "Fully staged",
-]
+FURNITURE_DENSITY: list[str] = with_none(
+    [
+        "Minimal (only key pieces)",
+        "Balanced",
+        "Fully staged",
+    ]
+)
 
+# Level "None" = zero decor/plants (semantic), not the helper skip sentinel
 DECOR_AMOUNT: list[str] = ["None", "Light", "Medium", "Heavy"]
 PLANTS: list[str] = ["None", "Light", "Medium", "Heavy"]
-CAMERA_FEEL: list[str] = [
-    "Wide (more spacious, wider angle look)",
-    "Natural",
-    "Tight (more compressed, longer lens feel)",
-]
+CAMERA_FEEL: list[str] = with_none(
+    [
+        "Wide (more spacious, wider angle look)",
+        "Natural",
+        "Tight (more compressed, longer lens feel)",
+    ]
+)
+# Styles offered with skip option (room lists stay pure; UI prepends HELPER_NONE)
+STYLES_ALL_WITH_NONE: list[str] = with_none(STYLES_ALL)
 
 # Defaults for Clear
 DEFAULTS = {
@@ -140,7 +149,7 @@ DEFAULTS = {
 
 def styles_for_room(room_type: str | None) -> list[str]:
     room = (room_type or DEFAULTS["room_type"]).strip()
-    return list(_ROOM_STYLES.get(room, STYLES_ALL))
+    return with_none(list(_ROOM_STYLES.get(room, STYLES_ALL)))
 
 
 def _style_language(style: str) -> str:
@@ -357,35 +366,47 @@ def build_scene_prompt(
     """
     Compose a high-quality staging prompt from Scene Builder controls.
 
+    Helper dimensions set to ``(None)`` are omitted (except room type, which is
+    required for staging intent). Decor/plants level ``None`` still means zero amount.
+
     mode:
       - "popin": empty / sparse room furniture placement
       - "swap": replace existing furniture with a new set/style
     """
     room = (room_type or DEFAULTS["room_type"]).strip()
-    style = (style or DEFAULTS["style"]).strip()
-    # If style invalid for room, fall back to first allowed
+    style_raw = active_helper(style)
     allowed = styles_for_room(room)
-    if style not in allowed:
-        style = allowed[0]
-    density = (furniture_density or DEFAULTS["furniture_density"]).strip()
+    if style_raw and style_raw not in allowed:
+        # Invalid for room → drop style rather than force a wrong one when user chose something
+        if style_raw not in STYLES_ALL:
+            style_raw = None
+        elif allowed:
+            style_raw = allowed[0]
+    density = active_helper(furniture_density)
+    # Decor/plants: "None" is a valid level (zero), not HELPER_NONE skip
     decor = (decor_amount or DEFAULTS["decor_amount"]).strip()
     plant = (plants or DEFAULTS["plants"]).strip()
-    camera = (camera_feel or DEFAULTS["camera_feel"]).strip()
+    if is_helper_none(decor_amount) and decor_amount not in ("None",):
+        decor = ""
+    if is_helper_none(plants) and plants not in ("None",):
+        plant = ""
+    camera = active_helper(camera_feel)
     mode_key = (mode or "popin").strip().lower()
     is_swap = mode_key in ("swap", "furniture_swap", "furniture-swap")
 
-    furniture = _room_furniture_brief(room, density)
-    style_lang = _style_language(style)
-    decor_lang = _level_phrase(decor, "decor")
-    plant_lang = _level_phrase(plant, "plants")
-    camera_lang = _camera_phrase(camera)
+    density_for_brief = density or "Balanced"
+    furniture = _room_furniture_brief(room, density_for_brief)
+    style_lang = _style_language(style_raw) if style_raw else "appropriate residential"
+    decor_lang = _level_phrase(decor, "decor") if decor else ""
+    plant_lang = _level_phrase(plant, "plants") if plant else ""
+    camera_lang = _camera_phrase(camera) if camera else ""
     audience = _audience_note(room)
 
     density_line = {
         "Minimal (only key pieces)": "Furniture density: minimal—only the key pieces listed.",
         "Balanced": "Furniture density: balanced—complete but not crowded.",
         "Fully staged": "Furniture density: fully staged for a premium listing, still orderly.",
-    }.get(density, "Furniture density: balanced.")
+    }.get(density or "", "")
 
     if is_swap:
         parts = [
@@ -396,12 +417,18 @@ def build_scene_prompt(
                 f"(walls, floors, and architecture stay as photographed)."
             ),
             f"New furniture set should include {furniture}.",
-            density_line,
-            f"Decor: {decor_lang}.",
-            f"Plants: {plant_lang}.",
-            f"{camera_lang}.",
-            "Keep original camera angle, lighting direction, and room geometry locked.",
         ]
+        if density_line:
+            parts.append(density_line)
+        if decor_lang:
+            parts.append(f"Decor: {decor_lang}.")
+        if plant_lang:
+            parts.append(f"Plants: {plant_lang}.")
+        if camera_lang:
+            parts.append(f"{camera_lang}.")
+        parts.append(
+            "Keep original camera angle, lighting direction, and room geometry locked."
+        )
     else:
         parts = [
             POPIN_INTENT,
@@ -411,11 +438,15 @@ def build_scene_prompt(
                 f"(walls, floors, and architecture stay as photographed)."
             ),
             f"Include {furniture}.",
-            density_line,
-            f"Decor: {decor_lang}.",
-            f"Plants: {plant_lang}.",
-            f"{camera_lang}.",
         ]
+        if density_line:
+            parts.append(density_line)
+        if decor_lang:
+            parts.append(f"Decor: {decor_lang}.")
+        if plant_lang:
+            parts.append(f"Plants: {plant_lang}.")
+        if camera_lang:
+            parts.append(f"{camera_lang}.")
     if audience:
         parts.append(audience)
     parts.append(PRESERVATION_BLOCK)

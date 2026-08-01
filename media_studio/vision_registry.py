@@ -374,9 +374,10 @@ T2V_MODELS: dict[str, VisionModelSpec] = {
         label="Veo 3.1",
         mode="text_to_video",
         endpoint="fal-ai/veo3.1",
-        cost_estimate_usd=0.80,
-        cost_per_second=0.10,
-        notes="Highest quality T2V. Expensive. 4/6/8s · 16:9 or 9:16 · optional audio.",
+        # fal billing: $0.40/s (user invoice)
+        cost_estimate_usd=3.20,  # 8s × $0.40
+        cost_per_second=0.40,
+        notes="Highest quality T2V. ~$0.40/s on fal. 4/6/8s · 16:9 or 9:16 · optional audio.",
         default_duration="8s",
         extra_defaults={"generate_audio": True, "auto_fix": True, "safety_tolerance": "4"},
     ),
@@ -385,9 +386,10 @@ T2V_MODELS: dict[str, VisionModelSpec] = {
         label="Veo 3.1 Fast",
         mode="text_to_video",
         endpoint="fal-ai/veo3.1/fast",
-        cost_estimate_usd=0.40,
-        cost_per_second=0.05,
-        notes="Faster/cheaper Veo 3.1. Good default for exploration.",
+        # fal billing: $0.15/s (fast family)
+        cost_estimate_usd=0.90,  # 6s × $0.15
+        cost_per_second=0.15,
+        notes="Faster/cheaper Veo 3.1. ~$0.15/s on fal. Good default for exploration.",
         default_duration="6s",
         extra_defaults={"generate_audio": True, "auto_fix": True, "safety_tolerance": "4"},
     ),
@@ -396,9 +398,10 @@ T2V_MODELS: dict[str, VisionModelSpec] = {
         label="Veo 3.1 Reference pack",
         mode="text_to_video",
         endpoint="fal-ai/veo3.1/reference-to-video",
-        cost_estimate_usd=0.85,
-        cost_per_second=0.11,
-        notes="T2V guided by 1–N reference stills (house / style / subject).",
+        # Same standard Veo rate until fal quotes otherwise
+        cost_estimate_usd=3.20,  # 8s × $0.40
+        cost_per_second=0.40,
+        notes="T2V guided by 1–N reference stills. ~$0.40/s on fal (standard Veo family).",
         max_refs=8,
         duration_choices=("8s",),
         default_duration="8s",
@@ -433,9 +436,10 @@ I2V_MODELS: dict[str, VisionModelSpec] = {
         label="Veo 3.1 Fast · Image→Video",
         mode="image_to_video",
         endpoint="fal-ai/veo3.1/fast/image-to-video",
-        cost_estimate_usd=0.40,
-        cost_per_second=0.05,
-        notes="Faster still → move. Recommended default for I2V experiments.",
+        # fal billing: $0.15/s
+        cost_estimate_usd=0.90,  # 6s × $0.15
+        cost_per_second=0.15,
+        notes="Faster still → move. ~$0.15/s on fal. Recommended default for I2V experiments.",
         default_duration="6s",
         aspect_choices=("auto", "16:9", "9:16"),
         default_aspect="auto",
@@ -446,9 +450,10 @@ I2V_MODELS: dict[str, VisionModelSpec] = {
         label="Veo 3.1 · Image→Video",
         mode="image_to_video",
         endpoint="fal-ai/veo3.1/image-to-video",
-        cost_estimate_usd=0.80,
-        cost_per_second=0.10,
-        notes="Still → cinematic move. Expensive. Keep architecture in the prompt.",
+        # fal billing: $0.40/s (user invoice)
+        cost_estimate_usd=3.20,  # 8s × $0.40
+        cost_per_second=0.40,
+        notes="Still → cinematic move. ~$0.40/s on fal. Keep architecture in the prompt.",
         aspect_choices=("auto", "16:9", "9:16"),
         default_aspect="auto",
         extra_defaults={"generate_audio": True, "auto_fix": False, "safety_tolerance": "4"},
@@ -511,9 +516,10 @@ BRIDGE_MODELS: dict[str, VisionModelSpec] = {
         label="Veo 3.1 Fast · First→Last frame",
         mode="bridge",
         endpoint="fal-ai/veo3.1/fast/first-last-frame-to-video",
-        cost_estimate_usd=0.45,
-        cost_per_second=0.055,
-        notes="Faster bridge. Recommended default for connect shots.",
+        # fal billing: $0.15/s
+        cost_estimate_usd=0.90,  # 6s × $0.15
+        cost_per_second=0.15,
+        notes="Faster bridge. ~$0.15/s on fal. Recommended default for connect shots.",
         default_duration="6s",
         aspect_choices=("auto", "16:9", "9:16"),
         default_aspect="auto",
@@ -524,11 +530,12 @@ BRIDGE_MODELS: dict[str, VisionModelSpec] = {
         label="Veo 3.1 · First→Last frame",
         mode="bridge",
         endpoint="fal-ai/veo3.1/first-last-frame-to-video",
-        cost_estimate_usd=0.85,
-        cost_per_second=0.11,
+        # fal billing: $0.40/s (user invoice)
+        cost_estimate_usd=3.20,  # 8s × $0.40
+        cost_per_second=0.40,
         notes=(
             "Bridge two stills into a continuous move (e.g. upstairs → living room). "
-            "Prompt: path, speed, keep architecture consistent."
+            "~$0.40/s on fal. Prompt: path, speed, keep architecture consistent."
         ),
         aspect_choices=("auto", "16:9", "9:16"),
         default_aspect="auto",
@@ -605,13 +612,26 @@ def default_vision_model(mode: VisionMode) -> VisionModelSpec:
 
 
 def duration_seconds(token: str | None) -> float:
+    """
+    Parse UI duration tokens to seconds.
+
+    Accepts ``\"8s\"``, ``\"8\"``, ``\"10\"``, etc. Defaults to 8s when missing/invalid.
+    """
     if not token:
         return 8.0
-    t = str(token).strip().lower().replace("s", "")
+    t = str(token).strip().lower()
+    # Keep only leading number (handles "8s", "8 sec", "10")
+    num = ""
+    for ch in t:
+        if ch.isdigit() or ch == ".":
+            num += ch
+        elif num:
+            break
     try:
-        return float(t)
+        secs = float(num) if num else 8.0
     except (TypeError, ValueError):
-        return 8.0
+        secs = 8.0
+    return max(0.5, secs)
 
 
 def estimate_vision_cost(
@@ -620,8 +640,14 @@ def estimate_vision_cost(
     duration_token: str | None = None,
     resolution: str | None = None,
     aspect_ratio: str | None = None,
+    generate_audio: bool | None = None,
 ) -> float:
-    """Conservative USD ballpark for UI (not billing)."""
+    """
+    Conservative USD ballpark for UI (not billing).
+
+    Video modes: **total job cost** = rate × selected duration (seconds), then
+    resolution / audio multipliers. Never show a bare per-second rate as the total.
+    """
     if spec.mode == "text_to_image":
         # Flat per-image estimates; bump for large aspect / higher resolution
         base = float(spec.cost_estimate_usd)
@@ -642,18 +668,34 @@ def estimate_vision_cost(
             base *= 1.15
         return round(max(0.01, base), 3)
 
-    secs = duration_seconds(duration_token or spec.default_duration)
-    base = spec.cost_estimate_usd
-    if spec.cost_per_second is not None and secs > 0:
-        base = max(0.05, round(secs * spec.cost_per_second, 3))
-    res = (resolution or spec.default_resolution or "720p").lower()
-    if "1080" in res or res == "1080p":
-        base *= 1.35
-    elif "4k" in res or "2160" in res:
-        base *= 2.2
-    elif "512" in res:
-        base *= 0.75
-    return round(base, 3)
+    # --- Video: total = per-second rate × duration ---
+    dur_token = duration_token if duration_token not in (None, "") else spec.default_duration
+    secs = duration_seconds(dur_token)
+    default_secs = duration_seconds(spec.default_duration) or 8.0
+
+    if spec.cost_per_second is not None and float(spec.cost_per_second) > 0:
+        # Full job total — never return the bare $/s figure
+        base = float(spec.cost_per_second) * secs
+    else:
+        # Flat estimate assumed for default_duration; scale linearly with selected length
+        flat = float(spec.cost_estimate_usd or 0.0)
+        base = flat * (secs / default_secs) if default_secs > 0 else flat
+
+    # Resolution multipliers only when the model bills by res (not flat $/s Veo)
+    ep = (spec.endpoint or "").lower()
+    if "veo3.1" not in ep and "veo3" not in ep:
+        res = (resolution or spec.default_resolution or "720p").lower()
+        if "1080" in res or res == "1080p":
+            base *= 1.35
+        elif "4k" in res or "2160" in res:
+            base *= 2.2
+        elif "512" in res:
+            base *= 0.75
+
+    # No invented audio multiplier unless fal quotes a separate audio rate.
+    _ = generate_audio
+
+    return round(max(0.05, base), 3)
 
 
 def format_vision_cost(
@@ -662,17 +704,29 @@ def format_vision_cost(
     duration_token: str | None = None,
     resolution: str | None = None,
     aspect_ratio: str | None = None,
+    generate_audio: bool | None = None,
 ) -> str:
+    """
+    Human label for the **total** estimated job cost.
+
+    Video: ``Est. cost: $X.XX · {duration}s ({model})``
+    Still: ``Est. cost: $X.XX · 1 image ({model})``
+    """
+    from media_studio.pricing import format_job_cost
+
     amt = estimate_vision_cost(
         spec,
         duration_token=duration_token,
         resolution=resolution,
         aspect_ratio=aspect_ratio,
+        generate_audio=generate_audio,
     )
     if spec.mode == "text_to_image":
-        return f"Est. cost: ${amt:.2f} · still ({spec.label})"
-    secs = duration_seconds(duration_token or spec.default_duration)
-    return f"Est. cost: ${amt:.2f} · ~{secs:.0f}s ({spec.label})"
+        return format_job_cost(amt, unit="1 image", model=spec.label)
+    dur_token = duration_token if duration_token not in (None, "") else spec.default_duration
+    secs = duration_seconds(dur_token)
+    dur_txt = f"{secs:.0f}" if abs(secs - round(secs)) < 1e-6 else f"{secs:.1f}"
+    return format_job_cost(amt, unit=f"{dur_txt}s", model=spec.label)
 
 
 def build_vision_arguments(

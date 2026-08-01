@@ -14,6 +14,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 LOCATIONS: list[str] = [
+    "(None)",
     "Quiet residential street",
     "Suburban backyard",
     "City park",
@@ -54,6 +55,7 @@ LAYERS: list[str] = [
 ]
 
 DENSITY: list[str] = [
+    "(None)",
     "Sparse",
     "Balanced",
     "Lively",
@@ -90,6 +92,9 @@ def _noneish(value: str | None) -> bool:
 
 
 def _location_phrase(location: str | None, custom: str | None) -> str:
+    if _noneish(location):
+        c = (custom or "").strip()
+        return c if c else "a quiet outdoor setting"
     loc = (location or DEFAULTS["location"]).strip()
     if loc.startswith("Custom"):
         c = (custom or "").strip()
@@ -153,6 +158,8 @@ ELEVENLABS_SFX_PROMPT_LIMIT = 450
 
 
 def _density_phrase(density: str | None) -> str:
+    if _noneish(density):
+        return ""
     d = (density or "Balanced").strip().lower()
     mapping = {
         "sparse": (
@@ -228,7 +235,9 @@ def build_structured_ambience_block(
     else:
         parts.append("Keep layers minimal — soft natural presence only (air, space, room).")
 
-    parts.append(_density_phrase(density))
+    dens = _density_phrase(density)
+    if dens:
+        parts.append(dens)
     parts.append(
         f"About {dur} seconds long, seamless and looping-friendly, even level, "
         "no sudden impacts, no voiceover, no speech, no jingles, no risers. "
