@@ -40,10 +40,12 @@ data/resolve_handoff/*
 *.tmp
 *.log
 
-# Personal audit / local notes with machine paths
-AUDIT_REPORT*.txt
-LAYOUT_AUDIT*.txt
-*_AUDIT_*.txt
+# Personal audit / local layout notes (machine paths, not product docs)
+AUDIT*.txt
+*AUDIT*.txt
+*AUDIT*.md
+LAYOUT_AUDIT*
+*LAYOUT*AUDIT*
 *.local.md
 
 # OS / editor noise
