@@ -201,6 +201,22 @@ class _ToolCard:
             text_size=FONT_SM,
             visible=show_prompt,
         )
+        self.prompt_favs = None
+        if show_prompt:
+            from media_studio.flet_prompt_favorites import make_prompt_favorites_bar
+
+            self.prompt_favs = make_prompt_favorites_bar(
+                page,
+                get_text=lambda: self.prompt.value,
+                set_text=lambda t: setattr(self.prompt, "value", t),
+                surface="tools",
+                get_meta=lambda: {
+                    "model": _dd_value(self.model_dd) if hasattr(self, "model_dd") else "",
+                    "source": "user",
+                },
+                on_status=lambda m: setattr(self.status, "value", m),
+                show_pack_buttons=False,
+            )
         self.strength = ft.Slider(
             min=0.2,
             max=1.0,
@@ -279,6 +295,11 @@ class _ToolCard:
                                 [
                                     self.model_dd,
                                     self.prompt,
+                                    *(
+                                        [self.prompt_favs.root]
+                                        if self.prompt_favs is not None
+                                        else []
+                                    ),
                                     *self.extra,
                                     self.strength if show_strength else ft.Container(),
                                     self.cost_text,
@@ -586,6 +607,20 @@ class _RestoreCard:
             color=TEXT,
             text_size=FONT_SM,
         )
+        from media_studio.flet_prompt_favorites import make_prompt_favorites_bar
+
+        self.prompt_favs = make_prompt_favorites_bar(
+            page,
+            get_text=lambda: self.prompt.value,
+            set_text=lambda t: setattr(self.prompt, "value", t),
+            surface="tools",
+            get_meta=lambda: {
+                "model": _dd_value(self.model_dd) if hasattr(self, "model_dd") else "",
+                "source": "user",
+            },
+            on_status=lambda m: setattr(self.status, "value", m),
+            show_pack_buttons=False,
+        )
         self.strength = ft.Slider(
             min=0.2,
             max=1.0,
@@ -699,6 +734,7 @@ class _RestoreCard:
                                 [
                                     self.model_dd,
                                     self.prompt,
+                                    self.prompt_favs.root,
                                     self.strength,
                                     self.strength_hint,
                                     self.cost_text,
@@ -1150,6 +1186,20 @@ class _ReAspectCard:
             color=TEXT,
             text_size=FONT_SM,
         )
+        from media_studio.flet_prompt_favorites import make_prompt_favorites_bar
+
+        self.prompt_favs = make_prompt_favorites_bar(
+            page,
+            get_text=lambda: self.prompt.value,
+            set_text=lambda t: setattr(self.prompt, "value", t),
+            surface="tools",
+            get_meta=lambda: {
+                "model": _dd_value(self.model_dd) if hasattr(self, "model_dd") else "",
+                "source": "user",
+            },
+            on_status=lambda m: setattr(self.status, "value", m),
+            show_pack_buttons=False,
+        )
         self.cost_text = ft.Text(
             self._cost(), size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600
         )
@@ -1230,6 +1280,7 @@ class _ReAspectCard:
                                     self.aspect_dd,
                                     self.model_dd,
                                     self.prompt,
+                                    self.prompt_favs.root,
                                     self.cost_text,
                                     ft.Row([self.btn_enhance, self.btn], spacing=8),
                                     self.job_progress.control,

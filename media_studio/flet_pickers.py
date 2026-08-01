@@ -317,6 +317,69 @@ async def pick_image(
     )
 
 
+def _native_save_file(
+    *,
+    dialog_title: str | None,
+    defaultextension: str,
+    initialfile: str | None,
+    initial_directory: str | None,
+    filetypes: Sequence[tuple[str, str]] | None,
+) -> str | None:
+    title = dialog_title or "Save file"
+    initial = initial_directory or str(Path.home())
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            root.attributes("-topmost", True)
+        except Exception:
+            pass
+        root.update_idletasks()
+        try:
+            path = filedialog.asksaveasfilename(
+                title=title,
+                defaultextension=defaultextension,
+                initialfile=initialfile or "",
+                initialdir=initial if Path(initial).is_dir() else str(Path.home()),
+                filetypes=list(filetypes)
+                if filetypes
+                else [("JSON", "*.json"), ("All files", "*.*")],
+            )
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+        if path:
+            return str(Path(path).expanduser().resolve())
+    except Exception:
+        pass
+    return None
+
+
+async def pick_save_path(
+    page: Any = None,
+    *,
+    dialog_title: str = "Save as",
+    defaultextension: str = ".json",
+    initialfile: str | None = None,
+    initial_directory: str | None = None,
+    filetypes: Sequence[tuple[str, str]] | None = None,
+) -> str | None:
+    """Native save-as dialog. Returns absolute path or None if cancelled."""
+    return await asyncio.to_thread(
+        _native_save_file,
+        dialog_title=dialog_title,
+        defaultextension=defaultextension,
+        initialfile=initialfile,
+        initial_directory=initial_directory,
+        filetypes=filetypes,
+    )
+
+
 async def pick_video(
     page: Any = None,
     *,

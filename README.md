@@ -206,6 +206,12 @@ Optional field (address, client, shoot date) shared by all generate surfaces. La
 
 Library can filter or group by job; cards show the job label. History JSON stays at the output root. No cloud sync.
 
+### Prompt favorites + packs
+
+- **★ Star** saves the current prompt (user or post-Enhance) under app data  
+- **Favorites** dropdown + **Apply** reloads into the prompt box (Studio, Vision, Tools, Frame Editor, Audio)  
+- **Export / Import pack** (JSON) on Studio Image and Music — small name + prompts + optional scenario tags; not a marketplace  
+
 Storage prefs (output path, retention, clear caches, cost guard) live in **Settings**.
 
 ---

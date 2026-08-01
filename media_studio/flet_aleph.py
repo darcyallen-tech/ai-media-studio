@@ -509,6 +509,17 @@ class FrameEditorView:
             color=TEXT,
             text_size=FONT_SM,
         )
+        from media_studio.flet_prompt_favorites import make_prompt_favorites_bar
+
+        self.prompt_favs = make_prompt_favorites_bar(
+            page,
+            get_text=lambda: self.prompt.value,
+            set_text=lambda t: setattr(self.prompt, "value", t),
+            surface="frame_editor",
+            get_meta=lambda: {"source": "user", "model": "aleph"},
+            on_status=lambda m: setattr(self.status, "value", m),
+            show_pack_buttons=False,
+        )
         self.cost_text = ft.Text(
             format_aleph_cost(None),
             size=FONT_SM,
@@ -716,6 +727,7 @@ class FrameEditorView:
             # 7–8 · Prompt + Enhance
             label("Prompt", muted=True),
             self.prompt,
+            self.prompt_favs.root,
             self.btn_enhance,
             ft.Divider(height=1, color=BORDER),
             # 9–10 · Cost + Generate

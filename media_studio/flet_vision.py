@@ -248,6 +248,21 @@ class CreativeVisionView:
             color=TEXT,
             text_size=FONT_SM,
         )
+        from media_studio.flet_prompt_favorites import make_prompt_favorites_bar
+
+        self.prompt_favs = make_prompt_favorites_bar(
+            page,
+            get_text=lambda: self.prompt.value,
+            set_text=lambda t: setattr(self.prompt, "value", t),
+            surface="vision",
+            get_meta=lambda: {
+                "scenario": "creative_vision",
+                "model": _dd(self.model_dd) or "",
+                "source": "user",
+            },
+            on_status=lambda m: setattr(self.status, "value", m),
+            show_pack_buttons=False,
+        )
         self.creative_direction = ft.TextField(
             label="Creative direction for Enhance (optional)",
             hint_text=(
@@ -505,6 +520,7 @@ class CreativeVisionView:
                     ft.Row([self.motion_dd, self.lighting_dd, self.style_dd], spacing=8),
                     ft.Row([self.rebuild_mode, self.btn_rebuild], spacing=8),
                     self.prompt,
+                    self.prompt_favs.root,
                     self.creative_direction,
                     self.creative_direction_hint,
                     self.negative,

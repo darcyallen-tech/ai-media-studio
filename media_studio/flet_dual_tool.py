@@ -177,6 +177,20 @@ class DualMediaToolCard:
             color=TEXT,
             text_size=FONT_SM,
         )
+        from media_studio.flet_prompt_favorites import make_prompt_favorites_bar
+
+        self.prompt_favs = make_prompt_favorites_bar(
+            page,
+            get_text=lambda: self.prompt.value,
+            set_text=lambda t: setattr(self.prompt, "value", t),
+            surface="tools",
+            get_meta=lambda: {
+                "model": _dd_value(self.model_dd) if hasattr(self, "model_dd") else "",
+                "source": "user",
+            },
+            on_status=lambda m: setattr(self.status, "value", m),
+            show_pack_buttons=False,
+        )
         self.extra = extra_controls or []
         self.cost_text = ft.Text(
             self._cost(), size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600
@@ -247,6 +261,7 @@ class DualMediaToolCard:
                                     self.model_dd,
                                     *self.extra,
                                     self.prompt,
+                                    self.prompt_favs.root,
                                     self.cost_text,
                                     ft.Row([self.btn_enhance, self.btn], spacing=8),
                                     self.job_progress.control,

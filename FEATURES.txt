@@ -271,6 +271,18 @@ Long-running jobs lock only their scope (image, video, tools, vision,
 audio, frame_editor, enhance, …). Other tabs stay usable.
 
 ==============================================================================
+PROMPT FAVORITES + PACKS
+==============================================================================
+Light favorites (no marketplace):
+  - ★ Star current prompt (user or post-Enhance text) from Studio Image,
+    Creative Vision, Tools (prompt tools), Frame Editor, Audio panels
+  - Favorites dropdown + Apply reloads into the active prompt box
+  - Stored under app data (prompt_favorites.json) — not secrets, not outputs/
+  - Export / Import a small JSON “prompt pack” (name + prompts + optional
+    scenario tags). Studio Image and Music include Export/Import; other
+    surfaces share the same favorites store via Star/Apply
+
+==============================================================================
 GROK ENHANCE
 ==============================================================================
 Available across Studio, Tools, Creative Vision, Frame Editor, Audio:
@@ -283,6 +295,7 @@ Available across Studio, Tools, Creative Vision, Frame Editor, Audio:
   - Helper (None) values are omitted from Enhance guidance
   - T2I / I2I Enhance never injects camera motion language
   - Skipped where tools are pure control (e.g. Topaz denoise)
+  - Star the enhanced text after Enhance to keep it in Favorites
 
 ==============================================================================
 PACKAGING

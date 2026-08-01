@@ -48,6 +48,7 @@ from media_studio.audio_service import (
     run_voiceover,
 )
 from media_studio.flet_audio_player import AudioResultBar
+from media_studio.flet_prompt_favorites import make_prompt_favorites_bar
 from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_audio, pick_video
 from media_studio.flet_progress import JobProgress, classify_progress
@@ -514,6 +515,18 @@ class AudioView:
             text_size=FONT_SM,
             expand=True,
         )
+        self.mu_prompt_favs = make_prompt_favorites_bar(
+            self.page,
+            get_text=lambda: self.mu_prompt.value,
+            set_text=lambda t: setattr(self.mu_prompt, "value", t),
+            surface="audio",
+            get_meta=lambda: {
+                "model": _dd_value(self.mu_model) if hasattr(self, "mu_model") else "",
+                "source": "user",
+            },
+            on_status=lambda m: setattr(self.mu_status, "value", m),
+            show_pack_buttons=True,
+        )
         self.mu_model = styled_dropdown(
             label_text="Model",
             options=music_labels(),
@@ -563,6 +576,7 @@ class AudioView:
                     self.mu_lyrics,
                     self.mu_prompt_label,
                     self.mu_prompt,
+                    self.mu_prompt_favs.root,
                     ft.Row([self.mu_model], spacing=8),
                     label("Duration (seconds) — used when model supports it", muted=True),
                     self.mu_dur,
@@ -759,6 +773,15 @@ class AudioView:
             color=TEXT,
             text_size=FONT_SM,
         )
+        self.sfx_prompt_favs = make_prompt_favorites_bar(
+            self.page,
+            get_text=lambda: self.sfx_prompt.value,
+            set_text=lambda t: setattr(self.sfx_prompt, "value", t),
+            surface="audio",
+            get_meta=lambda: {"source": "user"},
+            on_status=lambda m: setattr(self.sfx_status, "value", m),
+            show_pack_buttons=False,
+        )
         self.sfx_model = styled_dropdown(
             label_text="Model",
             options=sfx_labels(),
@@ -886,6 +909,15 @@ class AudioView:
             text_size=FONT_SM,
             on_change=self._vs_prompt_changed,
         )
+        self.vs_prompt_favs = make_prompt_favorites_bar(
+            self.page,
+            get_text=lambda: self.vs_prompt.value,
+            set_text=lambda t: setattr(self.vs_prompt, "value", t),
+            surface="audio",
+            get_meta=lambda: {"source": "user"},
+            on_status=lambda m: setattr(self.vs_status, "value", m),
+            show_pack_buttons=False,
+        )
         self.vs_char_hint = ft.Text(
             "",
             size=FONT_SM,
@@ -932,6 +964,7 @@ class AudioView:
                     ft.Row([self.sfx_cat, self.sfx_inten, self.sfx_len, self.sfx_tex], spacing=8),
                     self.sfx_detail,
                     self.sfx_prompt,
+                    self.sfx_prompt_favs.root,
                     ft.Row([self.sfx_model, self.sfx_count, self.sfx_loop], spacing=8),
                     self.sfx_dur,
                     _cost_box(self.sfx_cost),
@@ -969,6 +1002,7 @@ class AudioView:
                     ft.Row(list(self.vs_exclude_checks.values()), spacing=8, wrap=True),
                     self.vs_note,
                     self.vs_prompt,
+                    self.vs_prompt_favs.root,
                     self.vs_char_hint,
                     _cost_box(self.vs_cost),
                     ft.Row([self.vs_enhance, self.vs_btn], spacing=8),
@@ -1527,6 +1561,15 @@ class AudioView:
             expand=True,
             on_change=self._ambience_cost_refresh,
         )
+        self.amb_prompt_favs = make_prompt_favorites_bar(
+            self.page,
+            get_text=lambda: self.amb_prompt.value,
+            set_text=lambda t: setattr(self.amb_prompt, "value", t),
+            surface="audio",
+            get_meta=lambda: {"source": "user"},
+            on_status=lambda m: setattr(self.amb_status, "value", m),
+            show_pack_buttons=False,
+        )
         labels = ambience_labels()
         self.amb_model = styled_dropdown(
             label_text="Model",
@@ -1569,6 +1612,7 @@ class AudioView:
                     self.amb_notes,
                     self.amb_prompt_label,
                     self.amb_prompt,
+                    self.amb_prompt_favs.root,
                     ft.Row([self.amb_model], spacing=8),
                     _cost_box(self.amb_cost),
                     ft.Row([self.amb_enhance, self.amb_btn], spacing=8),
@@ -1733,6 +1777,15 @@ class AudioView:
             text_size=FONT_SM,
             on_change=self._vo_cost_refresh,
         )
+        self.vo_script_favs = make_prompt_favorites_bar(
+            self.page,
+            get_text=lambda: self.vo_script.value,
+            set_text=lambda t: setattr(self.vo_script, "value", t),
+            surface="audio",
+            get_meta=lambda: {"source": "user"},
+            on_status=lambda m: setattr(self.vo_status, "value", m),
+            show_pack_buttons=False,
+        )
         self.vo_delivery = ft.TextField(
             label="Delivery / Style notes (optional, not spoken)",
             hint_text=(
@@ -1797,6 +1850,7 @@ class AudioView:
                         color=TEXT_MUTED,
                     ),
                     self.vo_script,
+                    self.vo_script_favs.root,
                     self.vo_delivery,
                     ft.Row([self.vo_model, self.vo_voice], spacing=8),
                     ft.Row(

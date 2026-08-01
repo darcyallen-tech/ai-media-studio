@@ -462,6 +462,8 @@ class StudioImageView:
                 **SCENE_DEFAULTS,
             )
         )
+        from media_studio.flet_prompt_favorites import make_prompt_favorites_bar
+
         self.prompt_field = ft.TextField(
             label="Image prompt",
             value=_init_prompt,
@@ -475,6 +477,19 @@ class StudioImageView:
             color=TEXT,
             text_size=FONT_SM,
             hint_text="Describe the edit you want…",
+        )
+        self.prompt_favs = make_prompt_favorites_bar(
+            page,
+            get_text=lambda: self.prompt_field.value,
+            set_text=lambda t: setattr(self.prompt_field, "value", t),
+            surface="studio_image",
+            get_meta=lambda: {
+                "scenario": getattr(self.state, "scenario_key", "") or "",
+                "model": _dd_value(self.model_dd) if hasattr(self, "model_dd") else "",
+                "source": "user",
+            },
+            on_status=lambda m: self._set_status(m) if hasattr(self, "status_text") else None,
+            show_pack_buttons=True,
         )
 
         image_models = [m for m in MODEL_LABELS if m.startswith("Image ·") or m.startswith("Auto")]
@@ -913,6 +928,7 @@ class StudioImageView:
                         spacing=4,
                     ),
                     self.prompt_field,
+                    self.prompt_favs.root,
                     ft.Row(
                         [self.local_edit_field, self.btn_local_edit],
                         spacing=8,
