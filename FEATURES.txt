@@ -168,15 +168,22 @@ Modes (left → right):
     Result Send to ▾ includes → Start frame / → End frame (this tab) for
     bridge handoff, plus Studio / Frame Editor / Tools / Resolve as elsewhere
 
-  Image → Image (I2I) — creative still edit (Aleph plate round-trip)
-    Source still required (upload, Previously used, From Resolve, or Send from
-    Frame Editor / Library / Studio). Single source for v1 (not multi-ref).
+  Image → Image (I2I) — creative still edit (Aleph plate / multi-ref)
+    Primary source still required (upload, Previously used, From Resolve, or
+    Send → Creative Vision · I2I source).
+    Multi-ref: up to 3 extra reference stills (identity, material, furniture,
+    sky…) when the edit model accepts multiple image inputs (Flux 2 family,
+    Nano Banana family, Seedream). Chips + Add ref / Clear; strip target
+    Source vs Add as ref. Single-image models (e.g. Flux Kontext Pro): extra
+    refs hidden/disabled with a short note; generate uses primary only.
     Models (fal edit): Flux 2 Pro / Max / Flex, Flux Kontext Pro,
                        Nano Banana / 2 / Pro edit, Seedream 5 Pro edit
     Strength slider when the API exposes it (Flux family)
-    Same still-only helpers + (None); Creative direction for Enhance;
-    Grok Enhance with vision on the source still
-    Result → Frame Editor · keyframe, Start / End / I2V, Library
+    Same still-only helpers + (None); Creative direction for Enhance only;
+    Grok Enhance with vision on primary (+ refs when multi-ref) and prompt
+    language naming ref roles (no invented API fields)
+    Result → Frame Editor · keyframe, Start / End / I2V, Library, Resolve
+    Send matrix: I2I source + Add as I2I ref
 
   Text → Video (T2V)
     e.g. Veo 3.1 / Veo 3.1 Fast / Reference pack, Luma Ray 2

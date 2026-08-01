@@ -51,6 +51,7 @@ from media_studio.vision_prompt import (
     default_still_prompt,
 )
 from media_studio.vision_registry import (
+    I2I_MAX_EXTRA_REFS,
     VISION_BATCH_MAX,
     VisionMode,
     default_vision_model,
@@ -376,6 +377,49 @@ class CreativeVisionView:
             style=ft.ButtonStyle(color=TEXT_MUTED),
         )
         self.refs_label = ft.Text("No reference pack", size=FONT_SM, color=TEXT_MUTED)
+        # I2I multi-ref chips (primary is start_path; extras in ref_paths, max 3)
+        self.refs_hint = ft.Text(
+            "",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=2,
+            visible=False,
+        )
+        self.refs_chips = ft.Column(spacing=4, tight=True)
+        self._strip_load_as_ref = False  # False = load strip → primary source
+        self.strip_target_label = ft.Text(
+            "Strip loads → Source still",
+            size=11,
+            color=TEXT_MUTED,
+            visible=False,
+        )
+        self.btn_strip_as_source = ft.TextButton(
+            content="Source",
+            on_click=self._set_strip_target_source,
+            style=ft.ButtonStyle(color=ACCENT_BRIGHT),
+            visible=False,
+        )
+        self.btn_strip_as_ref = ft.TextButton(
+            content="Add as ref",
+            on_click=self._set_strip_target_ref,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+            visible=False,
+        )
+        # Shared Add/Clear row (video ref pack or I2I multi-ref) — one place only
+        self.refs_actions_row = ft.Row(
+            [self.btn_refs, self.btn_clear_refs, self.refs_label],
+            spacing=8,
+            wrap=True,
+        )
+        self.i2i_refs_panel = ft.Column(
+            [
+                self.refs_hint,
+                self.refs_chips,
+            ],
+            spacing=4,
+            tight=True,
+            visible=False,
+        )
 
         # Subject library
         self.subject_dd = styled_dropdown(
@@ -569,7 +613,18 @@ class CreativeVisionView:
                 spacing=16,
                 tight=True,
             ),
-            ft.Row([self.btn_refs, self.btn_clear_refs, self.refs_label], spacing=8),
+            self.refs_hint,
+            self.refs_actions_row,
+            self.refs_chips,
+            ft.Row(
+                [
+                    self.strip_target_label,
+                    self.btn_strip_as_source,
+                    self.btn_strip_as_ref,
+                ],
+                spacing=4,
+                wrap=True,
+            ),
             self.prev_strip.root,
             self.resolve_strip.root,
             ft.Divider(height=1, color=BORDER),
@@ -747,22 +802,203 @@ class CreativeVisionView:
             pass
 
     def _on_prev_still(self, path: str) -> None:
-        """Previously used still → I2I source (or start when in video modes)."""
+        """Previously used still → I2I source/ref or video start."""
         if self._mode == "image_to_image":
-            self.receive_i2i_source(path, status=f"Previous: {Path(path).name}")
+            if self._strip_load_as_ref and self._i2i_extra_ref_cap() > 0:
+                self.receive_i2i_ref(path, status=f"Previous ref: {Path(path).name}")
+            else:
+                self.receive_i2i_source(path, status=f"Previous: {Path(path).name}")
         else:
             self.receive_start_frame(path, status=f"Previous: {Path(path).name}")
 
     def _on_resolve_still(self, path: str) -> None:
-        """From Resolve still → I2I / start frame (same destinations as Previously used)."""
+        """From Resolve still → I2I source/ref or start frame."""
         if self._mode == "image_to_image":
-            self.receive_i2i_source(path, status=f"From Resolve: {Path(path).name}")
+            if self._strip_load_as_ref and self._i2i_extra_ref_cap() > 0:
+                self.receive_i2i_ref(
+                    path, status=f"From Resolve ref: {Path(path).name}"
+                )
+            else:
+                self.receive_i2i_source(
+                    path, status=f"From Resolve: {Path(path).name}"
+                )
         else:
             self.receive_start_frame(path, status=f"From Resolve: {Path(path).name}")
         try:
             self.resolve_strip.refresh()
         except Exception:
             pass
+
+    def _set_strip_target_source(self, _e: ft.ControlEvent | None = None) -> None:
+        self._strip_load_as_ref = False
+        self.strip_target_label.value = "Strip loads → Source still"
+        try:
+            self.btn_strip_as_source.style = ft.ButtonStyle(color=ACCENT_BRIGHT)
+            self.btn_strip_as_ref.style = ft.ButtonStyle(color=TEXT_MUTED)
+        except Exception:
+            pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _set_strip_target_ref(self, _e: ft.ControlEvent | None = None) -> None:
+        self._strip_load_as_ref = True
+        self.strip_target_label.value = "Strip loads → Add as ref"
+        try:
+            self.btn_strip_as_source.style = ft.ButtonStyle(color=TEXT_MUTED)
+            self.btn_strip_as_ref.style = ft.ButtonStyle(color=ACCENT_BRIGHT)
+        except Exception:
+            pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _i2i_extra_ref_cap(self) -> int:
+        """Max extra refs for current I2I model (0 = single-image)."""
+        if self._mode != "image_to_image":
+            return 0
+        try:
+            spec = self._current_spec()
+            return min(I2I_MAX_EXTRA_REFS, max(0, int(spec.max_refs or 0)))
+        except Exception:
+            return 0
+
+    def _trim_i2i_refs(self) -> None:
+        cap = self._i2i_extra_ref_cap()
+        if len(self.ref_paths) > cap:
+            self.ref_paths = self.ref_paths[:cap]
+
+    def _sync_i2i_refs_panel(self) -> None:
+        """Show I2I multi-ref UI when model allows extras; chips for each ref."""
+        is_i2i = self._mode == "image_to_image"
+        is_t2i = self._mode == "text_to_image"
+        is_video = not is_still_mode(self._mode)
+        cap = self._i2i_extra_ref_cap() if is_i2i else 0
+        show_multi = is_i2i and cap > 0
+
+        if is_t2i:
+            try:
+                self.refs_hint.visible = False
+                self.refs_actions_row.visible = False
+                self.refs_chips.visible = False
+                self.strip_target_label.visible = False
+                self.btn_strip_as_source.visible = False
+                self.btn_strip_as_ref.visible = False
+            except Exception:
+                pass
+            return
+
+        if is_video:
+            try:
+                self.refs_hint.visible = False
+                self.refs_actions_row.visible = True
+                self.refs_chips.visible = False
+                self.refs_chips.controls = []
+                self.strip_target_label.visible = False
+                self.btn_strip_as_source.visible = False
+                self.btn_strip_as_ref.visible = False
+                self.btn_refs.content = "Add reference stills"
+                self.btn_refs.disabled = False
+                self.btn_clear_refs.visible = True
+                self.refs_label.value = (
+                    f"{len(self.ref_paths)} ref still(s)"
+                    if self.ref_paths
+                    else "No reference pack"
+                )
+            except Exception:
+                pass
+            return
+
+        # Image → Image
+        self._trim_i2i_refs()
+        n = len(self.ref_paths)
+        try:
+            self.refs_actions_row.visible = True
+            self.strip_target_label.visible = show_multi
+            self.btn_strip_as_source.visible = show_multi
+            self.btn_strip_as_ref.visible = show_multi
+            self.refs_hint.visible = True
+        except Exception:
+            pass
+
+        if cap <= 0:
+            self.refs_hint.value = (
+                "This model is single-image only — extra reference stills are disabled."
+            )
+            self.btn_refs.disabled = True
+            self.btn_clear_refs.visible = False
+            self.refs_label.value = "Single-image model"
+            self.refs_chips.controls = []
+            self.refs_chips.visible = False
+            return
+
+        self.refs_hint.value = (
+            f"Primary source + up to {cap} reference still(s) "
+            f"(identity, material, furniture, sky…). {n}/{cap} used."
+        )
+        self.btn_refs.content = "Add ref"
+        self.btn_refs.disabled = n >= cap
+        self.btn_clear_refs.visible = True
+        self.refs_label.value = (
+            f"{n} ref still(s)" if n else "No reference stills"
+        )
+        chips: list[ft.Control] = []
+        for i, path in enumerate(list(self.ref_paths)):
+            name = Path(path).name
+            chips.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Image(
+                                src=path if Path(path).is_file() else "",
+                                width=40,
+                                height=40,
+                                fit=ft.BoxFit.COVER,
+                                border_radius=4,
+                                visible=Path(path).is_file(),
+                            ),
+                            ft.Text(
+                                f"Ref {i + 1} · {name}",
+                                size=FONT_SM,
+                                color=TEXT,
+                                expand=True,
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                            ),
+                            ft.IconButton(
+                                icon=ft.Icons.CLOSE,
+                                icon_size=16,
+                                icon_color=TEXT_MUTED,
+                                tooltip="Remove reference",
+                                on_click=self._make_remove_i2i_ref(i),
+                            ),
+                        ],
+                        spacing=6,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    bgcolor=PANEL_ELEVATED,
+                    border=ft.Border.all(1, BORDER),
+                    border_radius=6,
+                    padding=ft.Padding.symmetric(horizontal=6, vertical=4),
+                )
+            )
+        self.refs_chips.controls = chips
+        self.refs_chips.visible = True
+
+    def _make_remove_i2i_ref(self, index: int):
+        async def _click(_e: ft.ControlEvent) -> None:
+            if 0 <= index < len(self.ref_paths):
+                removed = self.ref_paths.pop(index)
+                self.status.value = f"Removed ref: {Path(removed).name}"
+            self._sync_i2i_refs_panel()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click
 
     async def _refresh_cost(self, e: ft.ControlEvent | None = None) -> None:
         """Recompute total est. cost when duration / resolution / audio / model change."""
@@ -778,6 +1014,12 @@ class CreativeVisionView:
         still = is_still_mode(self._mode)
         is_i2i = self._mode == "image_to_image"
         is_t2i = self._mode == "text_to_image"
+        # Trim I2I refs when switching to a lower-cap model
+        try:
+            if is_i2i:
+                self._sync_i2i_refs_panel()
+        except Exception:
+            pass
         # Multi-variant only for Text → Image
         try:
             self.num_dd.visible = is_t2i
@@ -927,11 +1169,9 @@ class CreativeVisionView:
             pass
         self.start_ph.visible = show_start and not self.start_path
         self.end_ph.visible = show_end and not self.end_path
-        # Refs: hide for pure T2I / single-source I2I v1
+        # Refs / I2I multi-ref panel (tight; no voids)
         try:
-            self.btn_refs.visible = not still
-            self.btn_clear_refs.visible = not still
-            self.refs_label.visible = not still
+            self._sync_i2i_refs_panel()
         except Exception:
             pass
         # Previously used + From Resolve stills for I2I (and I2V/bridge start)
@@ -1047,15 +1287,37 @@ class CreativeVisionView:
                 if a:
                     snap[key] = a
             if self._mode == "image_to_image":
-                snap["guidance"] = (
-                    "Rewrite for a single-image edit (image-to-image). "
-                    "Preserve camera, framing, architecture, and identity unless the "
-                    "edit requires change. Use still photography language only from "
-                    "helpers that are set. Do NOT invent camera motion "
-                    "(no push-in, pan, tilt, orbit, tracking) unless the user prompt "
-                    "or creative_direction already asks for it. Locked frame. "
-                    "Vision is on the source still — describe the creative change clearly."
+                n_refs = len(
+                    [p for p in self.ref_paths if p and Path(p).is_file()]
                 )
+                cap = self._i2i_extra_ref_cap()
+                if n_refs > 0 and cap > 0:
+                    snap["guidance"] = (
+                        "Rewrite for a multi-reference image edit (image-to-image). "
+                        "Image 1 is the primary still to edit. Additional images are "
+                        "references (identity, material, furniture, sky, style). "
+                        "In the optimized_prompt, name how each reference should guide "
+                        "the edit (e.g. 'preserve identity from reference 1', "
+                        "'match material/finish from reference 2') without inventing "
+                        "API parameters — only natural language. "
+                        "Preserve camera, framing, and architecture unless the edit "
+                        "requires change. Still photography language only from helpers "
+                        "that are set. No invented camera motion. Locked frame."
+                    )
+                    snap["reference_still_count"] = n_refs
+                    snap["reference_roles_hint"] = (
+                        "refs after primary: identity / material / product / sky / look"
+                    )
+                else:
+                    snap["guidance"] = (
+                        "Rewrite for a single-image edit (image-to-image). "
+                        "Preserve camera, framing, architecture, and identity unless the "
+                        "edit requires change. Use still photography language only from "
+                        "helpers that are set. Do NOT invent camera motion "
+                        "(no push-in, pan, tilt, orbit, tracking) unless the user prompt "
+                        "or creative_direction already asks for it. Locked frame. "
+                        "Vision is on the source still — describe the creative change clearly."
+                    )
                 snap["has_source_still"] = bool(
                     self.start_path and Path(self.start_path).is_file()
                 )
@@ -1191,7 +1453,7 @@ class CreativeVisionView:
             return self._helper_snapshot_for_enhance()
 
         # Multi-image: enhance uses primary image; pass start/source or first ref
-        # T2I: no source required; I2I: vision on source still
+        # T2I: no source required; I2I: vision on source still + optional refs
         img = None
         if self._mode != "text_to_image":
             img = self.start_path
@@ -1200,6 +1462,18 @@ class CreativeVisionView:
             if not img and self.end_path:
                 img = self.end_path
 
+        def _extra_imgs() -> list[str] | None:
+            if self._mode != "image_to_image":
+                return None
+            if self._i2i_extra_ref_cap() <= 0:
+                return None
+            out = [
+                p
+                for p in self.ref_paths
+                if p and Path(p).is_file() and p != self.start_path
+            ]
+            return out[: self._i2i_extra_ref_cap()] or None
+
         await run_prompt_enhance(
             page=self.page,
             state=self.state,
@@ -1207,6 +1481,7 @@ class CreativeVisionView:
             get_model=lambda: _dd(self.model_dd),
             get_image=lambda: img,
             get_scenario=lambda: "creative_vision",
+            get_extra_images=_extra_imgs,
             get_extra_context=_extra,
             status_ctrl=self.status,
             job_progress=self.job_progress,
@@ -1383,6 +1658,83 @@ class CreativeVisionView:
             f"I2I source: {Path(resolved).name}", job_name=job_name
         )
         try:
+            self._sync_i2i_refs_panel()
+        except Exception:
+            pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        return True
+
+    def receive_i2i_ref(
+        self,
+        path: str,
+        *,
+        status: str | None = None,
+        job_name: str | None = None,
+    ) -> bool:
+        """
+        Add a reference still for Image → Image multi-ref.
+        Forces I2I mode. Caps at model max (≤3 extras).
+        """
+        try:
+            p = Path(path)
+            if not p.is_file():
+                self.status.value = f"I2I ref missing: {path}"
+                return False
+            resolved = str(p.resolve())
+        except OSError as exc:
+            self.status.value = f"I2I ref error: {exc}"
+            return False
+        try:
+            if self._mode != "image_to_image":
+                self._on_mode("image_to_image")
+        except Exception:
+            pass
+        cap = self._i2i_extra_ref_cap()
+        if cap <= 0:
+            self.status.value = (
+                "Current model is single-image only — pick a multi-ref edit model "
+                "to attach reference stills."
+            )
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return False
+        if self.start_path and resolved == str(Path(self.start_path).resolve()):
+            self.status.value = "That still is already the primary source."
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return False
+        if resolved in self.ref_paths:
+            self.status.value = f"Already a ref: {Path(resolved).name}"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return True
+        if len(self.ref_paths) >= cap:
+            self.status.value = f"Max {cap} reference still(s) for this model."
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return False
+        self.ref_paths.append(resolved)
+        try:
+            self.prev_strip.record_and_refresh(resolved)
+        except Exception:
+            pass
+        self._sync_i2i_refs_panel()
+        self.status.value = status or self._job_status(
+            f"I2I ref {len(self.ref_paths)}: {Path(resolved).name}",
+            job_name=job_name,
+        )
+        try:
             self.page.update()
         except Exception:
             pass
@@ -1456,10 +1808,23 @@ class CreativeVisionView:
         self.page.update()
 
     async def _pick_refs(self, e: ft.ControlEvent) -> None:
+        is_i2i = self._mode == "image_to_image"
+        cap = self._i2i_extra_ref_cap() if is_i2i else 8
+        if is_i2i and cap <= 0:
+            self.status.value = (
+                "This model is single-image only — switch to a multi-ref edit model "
+                "to attach reference stills."
+            )
+            self.page.update()
+            return
         try:
             files = await pick_image(
                 self.page,
-                dialog_title="Reference pack stills",
+                dialog_title=(
+                    "I2I reference stills (identity / material / furniture)"
+                    if is_i2i
+                    else "Reference pack stills"
+                ),
                 allow_multiple=True,
             )
         except Exception as exc:
@@ -1471,17 +1836,31 @@ class CreativeVisionView:
         for f in files:
             if not f.path:
                 continue
-            p = str(Path(f.path).resolve())
+            try:
+                p = str(Path(f.path).resolve())
+            except OSError:
+                continue
+            if is_i2i and self.start_path and p == str(Path(self.start_path).resolve()):
+                continue
             if p not in self.ref_paths:
                 self.ref_paths.append(p)
-        self.ref_paths = self.ref_paths[:8]
-        self.refs_label.value = f"{len(self.ref_paths)} ref still(s)"
-        self.status.value = f"Reference pack: {len(self.ref_paths)} still(s)"
+            if is_i2i and len(self.ref_paths) >= cap:
+                break
+        if is_i2i:
+            self._trim_i2i_refs()
+            self._sync_i2i_refs_panel()
+        else:
+            self.ref_paths = self.ref_paths[:8]
+            self.refs_label.value = f"{len(self.ref_paths)} ref still(s)"
+        self.status.value = f"Reference stills: {len(self.ref_paths)}"
         self.page.update()
 
     async def _clear_refs(self, e: ft.ControlEvent) -> None:
         self.ref_paths = []
-        self.refs_label.value = "No reference pack"
+        if self._mode == "image_to_image":
+            self._sync_i2i_refs_panel()
+        else:
+            self.refs_label.value = "No reference pack"
         self.page.update()
 
     # ----- subjects -----
@@ -1498,12 +1877,21 @@ class CreativeVisionView:
         sub = find_subject(name, self.state.output_dir)
         if not sub:
             return
-        # Attach subject stills into ref pack (merge)
+        # Attach subject stills into ref pack (merge); I2I respects multi-ref cap
+        cap = self._i2i_extra_ref_cap() if self._mode == "image_to_image" else 8
         for p in sub.existing_images():
+            if cap and len(self.ref_paths) >= cap:
+                break
             if p not in self.ref_paths:
                 self.ref_paths.append(p)
-        self.ref_paths = self.ref_paths[:8]
-        self.refs_label.value = f"{len(self.ref_paths)} ref still(s) (subject: {sub.name})"
+        if self._mode == "image_to_image":
+            self._trim_i2i_refs()
+            self._sync_i2i_refs_panel()
+        else:
+            self.ref_paths = self.ref_paths[:8]
+            self.refs_label.value = (
+                f"{len(self.ref_paths)} ref still(s) (subject: {sub.name})"
+            )
         if sub.notes:
             self.subject_notes.value = sub.notes
         self.status.value = (
@@ -1718,9 +2106,12 @@ class CreativeVisionView:
                 self.page.update()
                 return
 
-        # Merge subject refs (not required for pure still T2I / I2I v1)
+        # I2I: optional multi-ref extras; video: subject + ref pack
         refs = list(self.ref_paths)
-        if not is_still_mode(self._mode):
+        if self._mode == "image_to_image":
+            self._trim_i2i_refs()
+            refs = list(self.ref_paths)
+        elif not is_still_mode(self._mode):
             sn = _dd(self.subject_dd)
             if sn and sn != "(none)":
                 s = find_subject(sn, self.state.output_dir)
@@ -1729,9 +2120,13 @@ class CreativeVisionView:
                         if p not in refs:
                             refs.append(p)
 
-        # Reference model needs refs
+        # Reference-to-video models need refs (not I2I — primary is required separately)
         spec = self._current_spec()
-        if spec.max_refs > 0 and not refs:
+        if (
+            self._mode == "text_to_video"
+            and spec.max_refs > 0
+            and not refs
+        ):
             self.status.value = (
                 f"{spec.label} needs a reference pack — add stills or pick a subject."
             )
@@ -1831,7 +2226,14 @@ class CreativeVisionView:
                     if self._mode == "bridge"
                     else (self.end_path if self._mode == "image_to_video" else None)
                 ),
-                ref_paths=None if still_job else (refs or None),
+                ref_paths=(
+                    (refs or None)
+                    if (
+                        self._mode == "image_to_image"
+                        or not still_job
+                    )
+                    else None
+                ),
                 duration=None if still_job else _dd(self.dur_dd),
                 aspect_ratio=_dd(self.aspect_dd),
                 resolution=(

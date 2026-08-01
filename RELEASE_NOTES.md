@@ -39,6 +39,13 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - Per-model cost estimates; ref still only where the model uses guidance
 - Soft source + Reference still **stacked vertically** (no clipped “Reference still” / upload in the form rail)
 
+### Creative Vision — Image → Image multi-ref
+- Primary source + up to **3 reference stills** on multi-image edit models (Flux 2, Nano Banana, Seedream)
+- Single-image models (e.g. Kontext): extra refs disabled with note; primary only on generate
+- Previously used / From Resolve: load as source or add as ref
+- Enhance: vision on primary + refs; rewritten prompt describes ref roles
+- Send to: **I2I source** and **Add as I2I ref**
+
 ### Cost & previews
 - **Batch cost × N** — Est. cost always multiplies by selected **# Images** (including sequential singles when API max is 1, e.g. Flux 2 Pro)
 - Label notes sequential runs when batching 1-at-a-time calls

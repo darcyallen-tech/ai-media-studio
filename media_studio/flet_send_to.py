@@ -253,6 +253,8 @@ def send_to_vision(
                 vv.receive_i2v_source(path, job_name=job_name)
             elif use_role == "i2i" and hasattr(vv, "receive_i2i_source"):
                 vv.receive_i2i_source(path, job_name=job_name)
+            elif use_role == "i2i_ref" and hasattr(vv, "receive_i2i_ref"):
+                vv.receive_i2i_ref(path, job_name=job_name)
             elif hasattr(vv, "receive_start_frame"):
                 vv.receive_start_frame(path, job_name=job_name)
             elif hasattr(vv, "load_start_image"):
@@ -270,6 +272,7 @@ def send_to_vision(
             "end": "End frame",
             "i2v": "I2V source",
             "i2i": "Image → Image source",
+            "i2i_ref": "Image → Image ref",
             "video": "video",
         }
         label = role_labels.get(use_role, use_role)
@@ -346,6 +349,12 @@ def vision_still_menu_items(
             "Creative Vision · Image → Image (source)",
             send_to_vision(
                 state, path, role="i2i", job_name=job_name, status_cb=status_cb
+            ),
+        ),
+        _item(
+            "Creative Vision · Image → Image (add as ref)",
+            send_to_vision(
+                state, path, role="i2i_ref", job_name=job_name, status_cb=status_cb
             ),
         ),
         _item(

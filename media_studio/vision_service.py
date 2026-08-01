@@ -123,6 +123,23 @@ def run_vision(
             source_still_path = ip
             progress(f"Uploading source still: {ip.name}")
             image_url = upload_file(ip, on_progress=progress)
+            # Multi-ref extras (identity / material / furniture) when model allows
+            from media_studio.vision_registry import I2I_MAX_EXTRA_REFS
+
+            extra_cap = min(I2I_MAX_EXTRA_REFS, max(0, int(spec.max_refs or 0)))
+            for rp in (ref_paths or [])[:extra_cap]:
+                try:
+                    p = Path(rp)
+                    if not p.is_file():
+                        continue
+                    if str(p.resolve()) == str(ip.resolve()):
+                        continue
+                    progress(f"Uploading ref: {p.name}")
+                    ref_urls.append(upload_file(p, on_progress=progress))
+                except Exception as exc:
+                    progress(f"Skip ref {rp}: {exc}")
+                if len(ref_urls) >= extra_cap:
+                    break
         elif mode == "image_to_video":
             ip = Path(image_path) if image_path else None
             if not ip or not ip.is_file():
@@ -156,9 +173,8 @@ def run_vision(
             progress(f"Uploading end frame: {lp.name}")
             last_url = upload_file(lp, on_progress=progress)
 
-        # Reference pack (and subject stills) for reference-to-video / vision context
-        # I2I v1 is single-source only — skip multi-ref
-        if mode != "image_to_image":
+        # Reference pack for reference-to-video / video context (I2I refs uploaded above)
+        if mode not in ("image_to_image", "text_to_image"):
             for rp in ref_paths or []:
                 try:
                     p = Path(rp)
@@ -221,13 +237,26 @@ def run_vision(
                     params["strength"] = float(strength)
                 except (TypeError, ValueError):
                     pass
+            # Primary first, then refs (API multi-image order)
+            edit_urls: list[str] = []
+            if image_url:
+                edit_urls.append(image_url)
+            edit_urls.extend(u for u in ref_urls if u and u not in edit_urls)
             arguments, build_notes = build_edit_arguments(
                 edit_spec,
                 prompt=prompt,
-                image_urls=[image_url] if image_url else [],
+                image_urls=edit_urls,
                 parameters=params,
                 source_image_path=source_still_path,
             )
+            if len(ref_urls) > 0 and edit_spec.clamp_ref_images(len(edit_urls)) <= 1:
+                build_notes.append(
+                    "Model is single-image — extra reference stills ignored."
+                )
+            elif len(ref_urls) > 0:
+                build_notes.append(
+                    f"I2I multi-ref: primary + {min(len(ref_urls), max(0, edit_spec.max_ref_images - 1))} ref(s)."
+                )
             # Keep endpoint aligned with resolved edit model
             endpoint_for_run = spec_endpoint
             model_key_for_result = spec_key

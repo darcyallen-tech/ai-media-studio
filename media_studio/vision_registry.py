@@ -40,7 +40,7 @@ class VisionModelSpec:
     default_resolution: str = "720p"
     supports_audio: bool = True
     supports_negative: bool = True
-    # Reference stills (Veo reference-to-video)
+    # Reference stills: T2V reference pack size, or I2I max *extra* refs (0 = primary only)
     max_refs: int = 0
     # Bridge: first + last frame field names
     first_frame_field: str = "first_frame_url"
@@ -407,6 +407,10 @@ I2I_ASPECT_CHOICES: tuple[str, ...] = (
     "1:1 square HD",
 )
 
+# I2I multi-ref: max_refs = max *extra* reference stills (primary is separate).
+# Cap extras at 3 in UI even when the edit model allows more inputs.
+I2I_MAX_EXTRA_REFS = 3
+
 I2I_MODELS: dict[str, VisionModelSpec] = {
     "flux 2 pro i2i": VisionModelSpec(
         key="flux 2 pro i2i",
@@ -415,8 +419,8 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         endpoint="fal-ai/flux-2-pro/edit",
         cost_estimate_usd=0.03,
         notes=(
-            "Default. Creative single-image edit via Flux 2 Pro. "
-            "Ideal for Aleph plate edits (insert creature, giant prop, etc.). ~$0.03/image."
+            "Default. Creative edit via Flux 2 Pro. Multi-ref: primary + up to 3 refs "
+            "(identity / material / furniture). ~$0.03/image."
         ),
         duration_choices=(),
         default_duration="",
@@ -426,6 +430,7 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_refs=3,
         image_field="image_urls",
         edit_model_key="flux 2 pro",
         supports_strength=True,
@@ -437,7 +442,10 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         mode="image_to_image",
         endpoint="fal-ai/flux-2-max/edit",
         cost_estimate_usd=0.07,
-        notes="Highest quality Flux edit. ~$0.07 first MP. Strong for detailed creative inserts.",
+        notes=(
+            "Highest quality Flux edit. Multi-ref supported (primary + up to 3). "
+            "~$0.07 first MP."
+        ),
         duration_choices=(),
         default_duration="",
         aspect_choices=I2I_ASPECT_CHOICES,
@@ -446,6 +454,7 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_refs=3,
         image_field="image_urls",
         edit_model_key="flux 2 max",
         supports_strength=True,
@@ -457,7 +466,7 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         mode="image_to_image",
         endpoint="fal-ai/flux-2-flex/edit",
         cost_estimate_usd=0.04,
-        notes="Flux 2 Flex edit — flexible style control. ~$0.04/image.",
+        notes="Flux 2 Flex edit. Multi-ref (primary + up to 3). ~$0.04/image.",
         duration_choices=(),
         default_duration="",
         aspect_choices=I2I_ASPECT_CHOICES,
@@ -466,6 +475,7 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_refs=3,
         image_field="image_urls",
         edit_model_key="flux 2 flex",
         supports_strength=True,
@@ -477,7 +487,10 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         mode="image_to_image",
         endpoint="fal-ai/flux-pro/kontext",
         cost_estimate_usd=0.04,
-        notes="Flux Kontext Pro single-image edit — strong subject/context preservation.",
+        notes=(
+            "Flux Kontext Pro — single-image only (extra refs hidden). "
+            "Strong subject/context preservation."
+        ),
         duration_choices=(),
         default_duration="",
         aspect_choices=("Match source", "16:9", "9:16", "4:3", "3:4", "1:1", "3:2", "2:3"),
@@ -486,6 +499,7 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_refs=0,
         image_field="image_url",
         edit_model_key="flux kontext pro",
         supports_strength=True,
@@ -497,7 +511,10 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         mode="image_to_image",
         endpoint="fal-ai/nano-banana-pro/edit",
         cost_estimate_usd=0.15,
-        notes="Nano Banana Pro edit — excellent prompt adherence for creative inserts. 1K/2K/4K.",
+        notes=(
+            "Nano Banana Pro edit — multi-ref (primary + up to 3). "
+            "Excellent prompt adherence. 1K/2K/4K."
+        ),
         duration_choices=(),
         default_duration="",
         aspect_choices=("Match source",) + T2I_NANO_ASPECT_CHOICES,
@@ -506,6 +523,7 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="1K",
         supports_audio=False,
         supports_negative=False,
+        max_refs=3,
         image_field="image_urls",
         edit_model_key="nano banana pro",
         supports_strength=False,
@@ -517,7 +535,7 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         mode="image_to_image",
         endpoint="fal-ai/nano-banana-2/edit",
         cost_estimate_usd=0.08,
-        notes="Nano Banana 2 edit — faster/cheaper creative still edits. 0.5K–4K.",
+        notes="Nano Banana 2 edit — multi-ref (primary + up to 3). Faster/cheaper. 0.5K–4K.",
         duration_choices=(),
         default_duration="",
         aspect_choices=("Match source",) + T2I_NANO_ASPECT_CHOICES,
@@ -526,6 +544,7 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="1K",
         supports_audio=False,
         supports_negative=False,
+        max_refs=3,
         image_field="image_urls",
         edit_model_key="nano banana 2",
         supports_strength=False,
@@ -537,7 +556,7 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         mode="image_to_image",
         endpoint="fal-ai/nano-banana/edit",
         cost_estimate_usd=0.04,
-        notes="Original Nano Banana edit — solid general still edits.",
+        notes="Original Nano Banana edit — multi-ref (primary + up to 3).",
         duration_choices=(),
         default_duration="",
         aspect_choices=("Match source",) + T2I_NANO_ASPECT_CHOICES,
@@ -546,6 +565,7 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="1K",
         supports_audio=False,
         supports_negative=False,
+        max_refs=3,
         image_field="image_urls",
         edit_model_key="nano banana",
         supports_strength=False,
@@ -558,8 +578,8 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         endpoint="bytedance/seedream/v5/pro/edit",
         cost_estimate_usd=0.07,
         notes=(
-            "Seedream 5 Pro edit — grounded still edits; listing-friendly detail. "
-            "Same family as Studio Seedream (single source for Vision I2I v1)."
+            "Seedream 5 Pro edit — multi-ref (primary + up to 3). "
+            "Grounded still edits; listing-friendly detail."
         ),
         duration_choices=(),
         default_duration="",
@@ -569,6 +589,7 @@ I2I_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="",
         supports_audio=False,
         supports_negative=False,
+        max_refs=3,
         image_field="image_urls",
         edit_model_key="seedream 5 pro",
         supports_strength=False,

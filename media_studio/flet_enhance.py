@@ -40,6 +40,7 @@ async def run_prompt_enhance(
     get_video: GetStr | None = None,
     get_scenario: GetStr | None = None,
     get_extra_context: Callable[[], dict[str, Any] | None] | None = None,
+    get_extra_images: Callable[[], list[str] | None] | None = None,
     status_ctrl: ft.Text | None = None,
     job_progress: JobProgress | None = None,
     enhance_btn: ft.Control | None = None,
@@ -104,6 +105,7 @@ async def run_prompt_enhance(
 
     image_file = None
     video_file = None
+    extra_images: list[str] | None = None
     try:
         if get_image:
             image_file = get_image()
@@ -114,6 +116,12 @@ async def run_prompt_enhance(
             video_file = get_video()
     except Exception:
         video_file = None
+    try:
+        if get_extra_images:
+            raw = get_extra_images() or []
+            extra_images = [p for p in raw if p]
+    except Exception:
+        extra_images = None
 
     scenario = None
     try:
@@ -143,9 +151,11 @@ async def run_prompt_enhance(
     if job_progress is not None:
         job_progress.start("Enhancing prompt…", page)
     if status_ctrl is not None:
+        n_refs = len(extra_images or [])
         status_ctrl.value = (
             "Enhancing with Grok"
             + (" · vision" if image_file or video_file else "")
+            + (f" · {n_refs} ref(s)" if n_refs else "")
             + " (model locked)…"
         )
     try:
@@ -170,6 +180,7 @@ async def run_prompt_enhance(
             output_dir=getattr(state, "output_dir", None),
             scenario=scenario,
             extra_context=extra_ctx,
+            extra_image_files=extra_images or None,
         )
         if result.ok and (result.optimized_prompt or "").strip():
             prompt_field.value = result.optimized_prompt.strip()
