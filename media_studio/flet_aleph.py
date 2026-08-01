@@ -352,6 +352,8 @@ class FrameEditorView:
         # Last strip still path (for Pin without re-extract)
         self._pending_strip_still: str | None = None
         self._pending_strip_t: float = 0.0
+        # Still staged from Creative Vision / Library when no source video yet
+        self._handoff_still: str | None = None
         # Filmstrip: sampled thumbs across the clip (cached JPEGs)
         self._strip_frames: list[_StripFrame] = []
         self._selected_strip: int | None = None
@@ -484,18 +486,9 @@ class FrameEditorView:
             height=34,
             tooltip="Upload a Studio-edited frame as a keyframe",
         )
-        # Single Send-to-Studio control (not duplicated on the right)
-        self.btn_send_studio = ft.OutlinedButton(
-            content="Send frame to Studio",
-            icon=ft.Icons.BRUSH,
-            on_click=self._send_frame_to_studio,
-            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
-            height=34,
-            tooltip=(
-                "Open selected filmstrip / keyframe in Studio Image. "
-                "Source video stays here; send the best still back as keyframe."
-            ),
-        )
+        # Send to ▾ — Studio Image + Creative Vision Start/End/I2V
+        self.send_host = ft.Container(visible=True)
+        self._rebuild_send_menu()
 
         # ----- Prompt + generate (live in the left ListView stack) -----
         self.prompt = ft.TextField(
@@ -605,6 +598,8 @@ class FrameEditorView:
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )
 
+        # Result row: Send to ▾ (Vision / Studio) + Show in folder + Resolve
+        self.result_send_host = ft.Container(visible=False)
         (
             self.result_actions_row,
             self.btn_folder,
@@ -613,6 +608,7 @@ class FrameEditorView:
             page,
             get_path=lambda: self._result_path,
             on_status=lambda msg, err: self._set_status(msg, err),
+            extra_leading=[self.result_send_host],
         )
         show_result_actions(self.btn_folder, self.btn_resolve, visible=False)
 
@@ -715,7 +711,7 @@ class FrameEditorView:
                 spacing=6,
                 wrap=True,
             ),
-            self.btn_send_studio,
+            self.send_host,
             ft.Divider(height=1, color=BORDER),
             # 7–8 · Prompt + Enhance
             label("Prompt", muted=True),
@@ -1368,7 +1364,9 @@ class FrameEditorView:
         self._selected_kf = None
         self._pending_strip_still = None
         self._pending_strip_t = 0.0
-        # New source — never carry keyframes/pins/stills from the previous clip
+        # Preserve staged handoff still from Vision/Library across video load
+        handoff = self._handoff_still
+        # New source — never carry keyframes/pins from the previous clip
         self.keyframes = []
         self._rebuild_kf_list()
         try:
@@ -1378,6 +1376,10 @@ class FrameEditorView:
         self._clear_filmstrip(caption="Loading source… sampling when ready")
         self._hide_result_player()
         show_result_actions(self.btn_folder, self.btn_resolve, visible=False)
+        try:
+            self.result_send_host.visible = False
+        except Exception:
+            pass
 
         meta = _probe_video_meta(resolved)
         self.video_duration_s = meta.get("duration_s")
@@ -1495,6 +1497,16 @@ class FrameEditorView:
             self.status.color = TEXT_MUTED
 
         self.apply_key_gates()
+
+        # Pin staged Vision/Library still as keyframe #1 (only this slot)
+        if handoff and Path(handoff).is_file():
+            self._handoff_still = None
+            self.add_keyframe(
+                handoff,
+                pin="first",
+                timestamp_s=0.0,
+                status=f"Pinned handoff still as keyframe #1: {Path(handoff).name}",
+            )
 
         # Kick auto-downscale (async) when needed; else sample filmstrip now
         if (
@@ -1831,23 +1843,16 @@ class FrameEditorView:
         pin: str | None = None,
         timestamp_s: float | None = None,
         status: str | None = None,
+        job_name: str | None = None,
     ) -> bool:
         """
-        Accept a still from Studio / Library as a keyframe.
+        Accept a still from Studio / Creative Vision / Library as a keyframe.
 
-        If ``state.frame_editor_return`` is set (user left via Send frame to Studio),
-        replace that slot and keep pin / timestamp. Otherwise append as new.
-        Source video is never cleared.
+        - With source video: replace round-trip slot, else selected keyframe,
+          else pin at selected filmstrip time, else append. Other slots stay.
+        - Without source video: stage as handoff still (attach video next).
+        Never clears the source video.
         """
-        if not self.video_path and not self.original_video_path:
-            self._set_status(
-                "Frame Editor has no source video. Load a clip first, then send "
-                "the still as a keyframe (Studio round-trip needs a source).",
-                True,
-            )
-            return False
-
-        ctx = getattr(self.state, "frame_editor_return", None)
         try:
             p = Path(path)
             if not p.is_file():
@@ -1857,6 +1862,29 @@ class FrameEditorView:
         except OSError as exc:
             self._set_status(f"Keyframe error: {exc}", True)
             return False
+
+        name_note = f" · {job_name}" if (job_name or "").strip() else ""
+
+        # No source clip yet — stage still for pin after video load
+        if not self.video_path and not self.original_video_path:
+            self._handoff_still = resolved
+            self._set_preview_mode(
+                "keyframe",
+                image_src=resolved,
+                caption=f"Handoff still · load source video to pin as keyframe",
+            )
+            self.status.value = status or (
+                f"Staged still for Frame Editor{name_note}: {Path(resolved).name}. "
+                "Load a source video — it will pin as keyframe #1 (other slots empty)."
+            )
+            self.status.color = TEXT_MUTED
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return True
+
+        ctx = getattr(self.state, "frame_editor_return", None)
 
         if isinstance(ctx, dict) and ctx:
             slot_id = ctx.get("slot_id")
@@ -1878,7 +1906,7 @@ class FrameEditorView:
                             pin=use_pin if use_pin in ("first", "last", "timestamp") else kf.pin,
                             timestamp_s=use_ts if use_pin == "timestamp" else kf.timestamp_s,
                             status=status
-                            or f"Studio → keyframe #{i + 1} (same slot · {use_pin})",
+                            or f"→ keyframe #{i + 1} (same slot · {use_pin}){name_note}",
                             replace_index=i,
                             slot_id=slot_id,
                         )
@@ -1891,7 +1919,7 @@ class FrameEditorView:
                     pin=use_pin if use_pin in ("first", "last", "timestamp") else kf.pin,
                     timestamp_s=use_ts if use_pin == "timestamp" else kf.timestamp_s,
                     status=status
-                    or f"Studio → keyframe #{idx + 1} (same slot · {use_pin})",
+                    or f"→ keyframe #{idx + 1} (same slot · {use_pin}){name_note}",
                     replace_index=idx,
                     slot_id=kf.slot_id,
                 )
@@ -1904,25 +1932,252 @@ class FrameEditorView:
                 timestamp_s=use_ts,
                 status=status
                 or (
-                    f"Studio → new keyframe · pin={use_pin}"
+                    f"→ new keyframe · pin={use_pin}"
                     + (f" · t={use_ts:.2f}s" if use_pin == "timestamp" else "")
+                    + name_note
                 ),
             )
             self.state.frame_editor_return = None
             return ok
 
-        # No round-trip context — normal add
-        use_pin = pin if pin in ("first", "last", "timestamp") else "first"
-        use_ts = float(timestamp_s or 0.0)
+        # Explicit pin/time from caller
+        if pin in ("first", "last", "timestamp") or timestamp_s is not None:
+            use_pin = pin if pin in ("first", "last", "timestamp") else "first"
+            use_ts = float(timestamp_s or 0.0)
+            return self.add_keyframe(
+                resolved,
+                pin=use_pin,
+                timestamp_s=use_ts,
+                status=status or f"Keyframe: {Path(resolved).name}{name_note}",
+            )
+
+        # Selected keyframe → replace that slot only
+        if self._selected_kf is not None and 0 <= self._selected_kf < len(
+            self.keyframes
+        ):
+            kf = self.keyframes[self._selected_kf]
+            return self.add_keyframe(
+                resolved,
+                pin=kf.pin,
+                timestamp_s=float(kf.timestamp_s),
+                status=status
+                or f"→ keyframe #{self._selected_kf + 1} (replaced){name_note}",
+                replace_index=self._selected_kf,
+                slot_id=kf.slot_id,
+            )
+
+        # Selected filmstrip time → pin timestamp (add or update same time)
+        if self._selected_strip is not None and 0 <= self._selected_strip < len(
+            self._strip_frames
+        ):
+            t = float(self._strip_frames[self._selected_strip].timestamp_s)
+            for i, kf in enumerate(self.keyframes):
+                if kf.pin == "timestamp" and abs(float(kf.timestamp_s) - t) < 0.06:
+                    return self.add_keyframe(
+                        resolved,
+                        pin="timestamp",
+                        timestamp_s=t,
+                        status=status
+                        or f"→ keyframe #{i + 1} @ {t:.2f}s{name_note}",
+                        replace_index=i,
+                        slot_id=kf.slot_id,
+                    )
+            return self.add_keyframe(
+                resolved,
+                pin="timestamp",
+                timestamp_s=t,
+                status=status
+                or f"Keyframe @ {t:.2f}s: {Path(resolved).name}{name_note}",
+            )
+
+        # Append new slot
         return self.add_keyframe(
             resolved,
-            pin=use_pin,
-            timestamp_s=use_ts,
-            status=status or f"Keyframe: {Path(resolved).name}",
+            pin="first",
+            timestamp_s=0.0,
+            status=status or f"Keyframe: {Path(resolved).name}{name_note}",
         )
 
     def load_image(self, path: str, *, status: str | None = None) -> bool:
         return self.receive_keyframe(path, status=status)
+
+    # ----------------------------------------------------------- Send to ▾
+
+    def _rebuild_send_menu(self) -> None:
+        """Left-rail Send to ▾ for selected filmstrip / keyframe still."""
+        from media_studio.flet_send_to import make_send_menu_button
+
+        items = [
+            ft.PopupMenuItem(
+                content="Studio Image (edit frame)",
+                on_click=self._send_frame_to_studio,
+            ),
+            ft.PopupMenuItem(),
+            ft.PopupMenuItem(
+                content="Creative Vision · Image → Image (source)",
+                on_click=self._make_send_vision("i2i"),
+            ),
+            ft.PopupMenuItem(
+                content="Creative Vision · Start frame",
+                on_click=self._make_send_vision("start"),
+            ),
+            ft.PopupMenuItem(
+                content="Creative Vision · End frame",
+                on_click=self._make_send_vision("end"),
+            ),
+            ft.PopupMenuItem(
+                content="Creative Vision · I2V source",
+                on_click=self._make_send_vision("i2v"),
+            ),
+        ]
+        btn = make_send_menu_button(
+            items,
+            tooltip=(
+                "Send selected filmstrip / keyframe still to Studio Image or "
+                "Creative Vision (I2I / Start / End / I2V). Source video stays here."
+            ),
+        )
+        if btn is not None:
+            self.send_host.content = btn
+            self.send_host.visible = True
+        else:
+            self.send_host.visible = False
+
+    def _rebuild_result_send_menu(self, path: str | None = None) -> None:
+        """Result-row Send to ▾ — still from selection, or poster of Aleph result."""
+        from media_studio.flet_send_to import make_send_menu_button
+
+        items = [
+            ft.PopupMenuItem(
+                content="Studio Image (edit frame)",
+                on_click=self._send_frame_to_studio,
+            ),
+            ft.PopupMenuItem(),
+            ft.PopupMenuItem(
+                content="Creative Vision · Image → Image (source)",
+                on_click=self._make_send_vision("i2i"),
+            ),
+            ft.PopupMenuItem(
+                content="Creative Vision · Start frame",
+                on_click=self._make_send_vision("start"),
+            ),
+            ft.PopupMenuItem(
+                content="Creative Vision · End frame",
+                on_click=self._make_send_vision("end"),
+            ),
+            ft.PopupMenuItem(
+                content="Creative Vision · I2V source",
+                on_click=self._make_send_vision("i2v"),
+            ),
+        ]
+        # Also allow sending Aleph result video as Studio Video source if present
+        if path and Path(path).is_file():
+            ext = Path(path).suffix.lower()
+            if ext in {".mp4", ".mov", ".webm", ".m4v", ".avi", ".mkv"}:
+                items.append(ft.PopupMenuItem())
+                items.append(
+                    ft.PopupMenuItem(
+                        content="Studio Video (source clip)",
+                        on_click=self._send_result_video(path),
+                    )
+                )
+        btn = make_send_menu_button(
+            items,
+            tooltip="Send still plate to Studio / Creative Vision",
+        )
+        if btn is not None:
+            self.result_send_host.content = btn
+            self.result_send_host.visible = True
+        else:
+            self.result_send_host.visible = False
+
+    def _send_result_video(self, path: str):
+        from media_studio.flet_send_to import send_to_video_source
+
+        return send_to_video_source(
+            self.state,
+            path,
+            status_cb=lambda m: self._set_status(m, False),
+        )
+
+    def _make_send_vision(self, role: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            await self._send_still_to_vision(role)
+
+        return _click
+
+    async def _send_still_to_vision(self, role: str) -> None:
+        """
+        Resolve selected filmstrip / keyframe / result plate and send to Vision.
+        Does not run Enhance. Preserves optional job label in status only.
+        """
+        still, pin, ts, slot_index, _slot_id = await self._resolve_edit_still()
+        if not still or not Path(still).is_file():
+            # Fall back: result poster / extract t=0 from Aleph result
+            still = await self._resolve_result_still()
+        if not still or not Path(still).is_file():
+            self._set_status(
+                "Select a filmstrip frame, keyframe, or generate a result first.",
+                True,
+            )
+            return
+
+        job_name = None
+        if slot_index is not None:
+            job_name = f"FE keyframe #{slot_index + 1}"
+            if pin == "timestamp":
+                job_name = f"FE t={ts:.2f}s"
+        elif pin == "timestamp":
+            job_name = f"FE t={ts:.2f}s"
+
+        from media_studio.flet_send_to import send_to_vision
+
+        # Invoke the same handler used by menus (opens Vision + loads slot)
+        handler = send_to_vision(
+            self.state,
+            still,
+            role=role,
+            job_name=job_name,
+            status_cb=lambda m: self._set_status(m, False),
+        )
+        await handler(None)  # type: ignore[arg-type]
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _resolve_result_still(self) -> str | None:
+        """Still plate from Aleph result: selected strip, then poster, then t=0."""
+        # Selected strip already covered by _resolve_edit_still when strip is
+        # sampled from the result path after generate.
+        if self._preview_img_src and Path(self._preview_img_src).is_file():
+            ext = Path(self._preview_img_src).suffix.lower()
+            if ext in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+                return str(Path(self._preview_img_src).resolve())
+        if self._source_poster and Path(self._source_poster).is_file():
+            # Prefer poster only when no video result; if result is video extract
+            pass
+        result = self._result_path
+        if result and Path(result).is_file():
+            ext = Path(result).suffix.lower()
+            if ext in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+                return str(Path(result).resolve())
+            if ext in {".mp4", ".mov", ".webm", ".m4v", ".avi", ".mkv"}:
+                full, _ = await asyncio.to_thread(
+                    _extract_still,
+                    result,
+                    0.0,
+                    self.state.output_dir,
+                    tag="fe_result_send",
+                )
+                if full:
+                    return full
+                poster, _ = await asyncio.to_thread(
+                    _ensure_poster, result, self.state.output_dir
+                )
+                if poster:
+                    return poster
+        return None
 
     async def _send_frame_to_studio(self, _e: ft.ControlEvent) -> None:
         """
@@ -1932,21 +2187,39 @@ class FrameEditorView:
         updates the same slot. Source video stays loaded here.
         """
         if not self.video_path and not self.original_video_path:
+            # Allow sending handoff still to Studio even without video
+            still = self._handoff_still
+            if still and Path(still).is_file():
+                iv = getattr(self.state, "image_view", None)
+                if iv is not None and hasattr(iv, "load_source_path"):
+                    iv.load_source_path(still, status="Frame Editor handoff still")
+                switch = getattr(self.state, "switch_to_image", None)
+                if switch:
+                    switch()
+                self.status.value = f"Sent handoff still to Studio: {Path(still).name}"
+                self.status.color = TEXT_MUTED
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+                return
             self._set_status(
-                "Load a source video before sending a frame to Studio.",
+                "Load a source video (or stage a still) before sending to Studio.",
                 True,
             )
             return
         still, pin, ts, slot_index, slot_id = await self._resolve_edit_still()
         if not still or not Path(still).is_file():
+            still = await self._resolve_result_still()
+        if not still or not Path(still).is_file():
             self._set_status(
-                "Select a filmstrip frame or keyframe first, then Send to Studio.",
+                "Select a filmstrip frame or keyframe first, then Send to ▾.",
                 True,
             )
             return
 
         # Ensure a keyframe slot exists so the return has somewhere to land
-        if slot_index is None:
+        if slot_index is None and (self.video_path or self.original_video_path):
             if len(self.keyframes) >= ALEPH_MAX_KEYFRAMES:
                 self._set_status(
                     f"Max {ALEPH_MAX_KEYFRAMES} keyframes — select an existing "
@@ -2010,7 +2283,7 @@ class FrameEditorView:
                 f"Sent to Studio Image · keyframe #{(slot_index or 0) + 1} "
                 f"({pin}"
                 + (f" @ {ts:.2f}s" if pin == "timestamp" else "")
-                + "). Edit freely — Send to Frame Editor as keyframe returns here."
+                + "). Edit freely — Send to Frame Editor · keyframe returns here."
             )
             self.status.color = TEXT_MUTED
         else:
@@ -2477,6 +2750,10 @@ class FrameEditorView:
             if result.ok and result.path:
                 self._result_path = result.path
                 show_result_actions(self.btn_folder, self.btn_resolve, visible=True)
+                try:
+                    self._rebuild_result_send_menu(result.path)
+                except Exception:
+                    pass
                 done = result.status or "OK"
                 self.job_progress.finish_ok(done, self.page)
                 self.status.value = done

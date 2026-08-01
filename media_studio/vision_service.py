@@ -1,4 +1,4 @@
-"""Run Creative Vision jobs (T2I / T2V / I2V / bridge) via fal."""
+"""Run Creative Vision jobs (T2I / I2I / T2V / I2V / bridge) via fal."""
 
 from __future__ import annotations
 
@@ -30,6 +30,8 @@ from media_studio.vision_registry import (
     estimate_vision_cost,
     find_vision_model,
     format_vision_cost,
+    is_still_mode,
+    map_t2i_image_size,
 )
 
 ProgressCallback = Callable[[str], None]
@@ -62,13 +64,14 @@ def run_vision(
     resolution: str | None = None,
     negative_prompt: str | None = None,
     generate_audio: bool | None = None,
+    strength: float | None = None,
     output_dir: str | Path,
     on_progress: ProgressCallback | None = None,
 ) -> VisionResult:
     """
-    Generate a Creative Vision still (T2I) or clip (T2V / I2V / bridge).
+    Generate a Creative Vision still (T2I / I2I) or clip (T2V / I2V / bridge).
 
-    T2I indexes as Image; video modes as creative_vision (Video filter).
+    Still modes index as Image; video modes as creative_vision (Video filter).
     """
     spec = find_vision_model(model_label, mode) or default_vision_model(mode)
 
@@ -92,10 +95,27 @@ def run_vision(
     first_url = None
     last_url = None
     ref_urls: list[str] = []
+    source_still_path: Path | None = None
+    build_notes: list[str] = []
 
     try:
         if mode == "text_to_image":
             pass  # no uploads
+        elif mode == "image_to_image":
+            ip = Path(image_path) if image_path else None
+            if not ip or not ip.is_file():
+                return VisionResult(
+                    ok=False,
+                    model_key=spec.key,
+                    endpoint=spec.endpoint,
+                    status="Image→Image needs a source still.",
+                    cost_label=format_vision_cost(
+                        spec, aspect_ratio=aspect_ratio, resolution=resolution
+                    ),
+                )
+            source_still_path = ip
+            progress(f"Uploading source still: {ip.name}")
+            image_url = upload_file(ip, on_progress=progress)
         elif mode == "image_to_video":
             ip = Path(image_path) if image_path else None
             if not ip or not ip.is_file():
@@ -130,17 +150,19 @@ def run_vision(
             last_url = upload_file(lp, on_progress=progress)
 
         # Reference pack (and subject stills) for reference-to-video / vision context
-        for rp in ref_paths or []:
-            try:
-                p = Path(rp)
-                if not p.is_file():
-                    continue
-                progress(f"Uploading ref: {p.name}")
-                ref_urls.append(upload_file(p, on_progress=progress))
-            except Exception as exc:
-                progress(f"Skip ref {rp}: {exc}")
-            if len(ref_urls) >= max(1, spec.max_refs or 8):
-                break
+        # I2I v1 is single-source only — skip multi-ref
+        if mode != "image_to_image":
+            for rp in ref_paths or []:
+                try:
+                    p = Path(rp)
+                    if not p.is_file():
+                        continue
+                    progress(f"Uploading ref: {p.name}")
+                    ref_urls.append(upload_file(p, on_progress=progress))
+                except Exception as exc:
+                    progress(f"Skip ref {rp}: {exc}")
+                if len(ref_urls) >= max(1, spec.max_refs or 8):
+                    break
 
     except (FalClientError, Exception) as exc:
         return VisionResult(
@@ -152,19 +174,72 @@ def run_vision(
         )
 
     try:
-        arguments = build_vision_arguments(
-            spec,
-            prompt=prompt,
-            image_url=image_url,
-            first_frame_url=first_url,
-            last_frame_url=last_url,
-            ref_urls=ref_urls or None,
-            duration=duration,
-            aspect_ratio=aspect_ratio,
-            resolution=resolution,
-            negative_prompt=negative_prompt,
-            generate_audio=generate_audio,
-        )
+        if mode == "image_to_image":
+            from media_studio.fal.models import (
+                build_edit_arguments,
+                resolve_image_edit_model,
+            )
+
+            edit_key = (spec.edit_model_key or "").strip() or None
+            edit_spec = resolve_image_edit_model(edit_key) or resolve_image_edit_model(
+                "flux 2 pro"
+            )
+            if edit_spec is None:
+                return VisionResult(
+                    ok=False,
+                    model_key=spec.key,
+                    endpoint=spec.endpoint,
+                    status="No image-edit model resolved for Image→Image.",
+                    cost_label=est_lbl,
+                )
+            # Prefer the real edit endpoint / key on the result
+            spec_endpoint = edit_spec.endpoint
+            spec_key = edit_spec.key
+            # Build parameters for Studio-compatible edit path
+            from media_studio.vision_registry import map_t2i_aspect_colon
+
+            params: dict[str, Any] = {"num_images": 1}
+            asp = (aspect_ratio or "").strip()
+            # "Match source" / empty → leave aspect to build_edit_arguments (source image)
+            if asp and "match" not in asp.lower():
+                params["image_size"] = map_t2i_image_size(asp)
+                params["aspect_ratio"] = map_t2i_aspect_colon(asp)
+            else:
+                params["aspect_ratio"] = "auto"
+                params["image_size"] = "auto"
+            if resolution and str(resolution).strip():
+                params["resolution"] = str(resolution).strip()
+            if strength is not None and spec.supports_strength:
+                try:
+                    params["strength"] = float(strength)
+                except (TypeError, ValueError):
+                    pass
+            arguments, build_notes = build_edit_arguments(
+                edit_spec,
+                prompt=prompt,
+                image_urls=[image_url] if image_url else [],
+                parameters=params,
+                source_image_path=source_still_path,
+            )
+            # Keep endpoint aligned with resolved edit model
+            endpoint_for_run = spec_endpoint
+            model_key_for_result = spec_key
+        else:
+            arguments = build_vision_arguments(
+                spec,
+                prompt=prompt,
+                image_url=image_url,
+                first_frame_url=first_url,
+                last_frame_url=last_url,
+                ref_urls=ref_urls or None,
+                duration=duration,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                negative_prompt=negative_prompt,
+                generate_audio=generate_audio,
+            )
+            endpoint_for_run = spec.endpoint
+            model_key_for_result = spec.key
     except ValueError as exc:
         return VisionResult(
             ok=False,
@@ -177,13 +252,13 @@ def run_vision(
     progress("Running Creative Vision on fal…")
     t0 = time.perf_counter()
     try:
-        result = subscribe(spec.endpoint, arguments, on_progress=progress)
+        result = subscribe(endpoint_for_run, arguments, on_progress=progress)
     except FalClientError as exc:
         render_s = time.perf_counter() - t0
         return VisionResult(
             ok=False,
-            model_key=spec.key,
-            endpoint=spec.endpoint,
+            model_key=model_key_for_result,
+            endpoint=endpoint_for_run,
             status=str(exc),
             cost_label=est_lbl,
             metrics_line=format_render_metrics(render_s, None, cost_is_estimate=True),
@@ -192,8 +267,8 @@ def run_vision(
         render_s = time.perf_counter() - t0
         return VisionResult(
             ok=False,
-            model_key=spec.key,
-            endpoint=spec.endpoint,
+            model_key=model_key_for_result,
+            endpoint=endpoint_for_run,
             status=friendly_error(exc, context=spec.label),
             cost_label=est_lbl,
             metrics_line=format_render_metrics(render_s, None, cost_is_estimate=True),
@@ -206,8 +281,8 @@ def run_vision(
     metrics = format_render_metrics(render_s, cost_usd, cost_is_estimate=is_est)
     cost_lbl = format_cost_label(cost_usd, estimate=is_est)
 
-    is_t2i = mode == "text_to_image" or spec.mode == "text_to_image"
-    if is_t2i:
+    still_job = is_still_mode(mode) or is_still_mode(spec.mode)
+    if still_job:
         urls = extract_image_urls(result)
         out_url = urls[0] if urls else None
         if not out_url:
@@ -220,8 +295,8 @@ def run_vision(
         if not out_url:
             return VisionResult(
                 ok=False,
-                model_key=spec.key,
-                endpoint=spec.endpoint,
+                model_key=model_key_for_result,
+                endpoint=endpoint_for_run,
                 status=f"{spec.label}: fal returned no image.",
                 cost_label=cost_lbl,
                 metrics_line=metrics,
@@ -232,17 +307,20 @@ def run_vision(
             ext = ".png"
         elif low.endswith(".webp"):
             ext = ".webp"
-        kind_tag = "creative-vision-t2i"
+        if mode == "image_to_image":
+            kind_tag = "creative-vision-i2i"
+            scenario = "creative_vision_i2i"
+        else:
+            kind_tag = "creative-vision-t2i"
+            scenario = "creative_vision_t2i"
         job_kind = "image"
-        scenario = "creative_vision_t2i"
-        media_word = "image"
     else:
         out_url = extract_video_url(result)
         if not out_url:
             return VisionResult(
                 ok=False,
-                model_key=spec.key,
-                endpoint=spec.endpoint,
+                model_key=model_key_for_result,
+                endpoint=endpoint_for_run,
                 status=f"{spec.label}: fal returned no video.",
                 cost_label=cost_lbl,
                 metrics_line=metrics,
@@ -251,13 +329,12 @@ def run_vision(
         kind_tag = "creative-vision"
         job_kind = "creative_vision"
         scenario = "creative_vision"
-        media_word = "video"
 
     stamp = timestamp_now()
     media_dir = job_media_dir(output_dir, stamp=stamp)
     stem = make_output_stem(
         prompt or "vision",
-        spec.key,
+        model_key_for_result or spec.key,
         stamp=stamp,
         kind=kind_tag,
     )
@@ -268,8 +345,8 @@ def run_vision(
     except FalClientError as exc:
         return VisionResult(
             ok=False,
-            model_key=spec.key,
-            endpoint=spec.endpoint,
+            model_key=model_key_for_result,
+            endpoint=endpoint_for_run,
             status=str(exc),
             cost_label=cost_lbl,
             metrics_line=metrics,
@@ -277,14 +354,20 @@ def run_vision(
         )
 
     resolved = str(dest.resolve())
+    if mode == "image_to_image":
+        send_hint = (
+            "Send to Frame Editor · keyframe, or Start / End / I2V for motion."
+        )
+    elif still_job:
+        send_hint = "Send to Start / End frame for a bridge, or Studio Image."
+    else:
+        send_hint = "Use Show in folder or Send to Resolve."
+    note_bits = [spec.notes] if spec.notes else [f"mode={mode}"]
+    if build_notes:
+        note_bits.extend(build_notes[:3])
     status = (
         f"{spec.label} OK. Saved {Path(resolved).name} → {media_dir.name}/. "
-        f"{metrics}. "
-        + (
-            "Send to Start / End frame for a bridge, or Studio Image."
-            if is_t2i
-            else "Use Show in folder or Send to Resolve."
-        )
+        f"{metrics}. {send_hint}"
     )
 
     try:
@@ -294,7 +377,7 @@ def run_vision(
             prompt=prompt or "",
             files=[resolved],
             cost_estimate=cost_lbl,
-            notes=[spec.notes] if spec.notes else [f"mode={mode}"],
+            notes=note_bits,
             output_dir=output_dir,
             timestamp=stamp,
             scenario=scenario,
@@ -305,10 +388,10 @@ def run_vision(
     return VisionResult(
         ok=True,
         path=resolved,
-        model_key=spec.key,
-        endpoint=spec.endpoint,
+        model_key=model_key_for_result,
+        endpoint=endpoint_for_run,
         status=status,
-        notes=[spec.notes] if spec.notes else [],
+        notes=note_bits,
         cost_label=cost_lbl,
         metrics_line=metrics,
         timestamp=stamp,

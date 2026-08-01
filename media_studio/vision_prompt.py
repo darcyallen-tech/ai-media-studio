@@ -277,6 +277,21 @@ def default_still_prompt() -> str:
     )
 
 
+def default_i2i_prompt() -> str:
+    """Default Image→Image creative edit language (still-only, no motion)."""
+    return compile_still_prompt(
+        base_prompt=(
+            "Edit only what the prompt asks for. Keep camera, framing, architecture, "
+            "materials, and identity consistent unless the edit requires change. "
+            "Photoreal composite — no text, no watermark."
+        ),
+        framing=STILL_FRAMINGS[0],
+        lens_look=STILL_LENS_LOOKS[1],
+        lighting=STILL_LIGHTING[0],
+        style_preset="Clean modern day",
+    )
+
+
 def clear_vision_helper_values() -> dict[str, Any]:
     return {
         "shot_type": SHOT_TYPES[1],  # Slow push-in (video)

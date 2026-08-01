@@ -3324,14 +3324,16 @@ def main(page: ft.Page) -> None:
         except Exception:
             pass
 
-    def switch_to_vision() -> None:
-        """Select Creative Vision tab."""
+    def switch_to_vision(role: str | None = None) -> None:
+        """Select Creative Vision tab (optional role hint: start / end / i2v)."""
         try:
             main_tabs.selected_index = 2
             try:
                 main_tabs.move_to(2)
             except Exception:
                 pass
+            # Role is applied by receive_* before switch; no mode wipe here
+            _ = role
             page.update()
         except Exception:
             pass
@@ -3364,12 +3366,14 @@ def main(page: ft.Page) -> None:
         keyframe_path: str | None = None,
         pin: str | None = None,
         timestamp_s: float | None = None,
+        job_name: str | None = None,
     ) -> None:
         """
         Select Frame Editor; optionally load source video and/or keyframe still.
 
         Keyframes honor ``state.frame_editor_return`` (Studio round-trip) so an
-        edited still re-pins the same slot / timestamp when set.
+        edited still re-pins the same slot / timestamp when set. Without a
+        source video, stills stage as handoff (load clip next).
         """
         try:
             main_tabs.selected_index = 3
@@ -3391,6 +3395,7 @@ def main(page: ft.Page) -> None:
                             keyframe_path,
                             pin=pin,
                             timestamp_s=timestamp_s,
+                            job_name=job_name,
                             status=f"Keyframe: {Path(keyframe_path).name}",
                         )
                         if not ok and not getattr(fe, "video_path", None):

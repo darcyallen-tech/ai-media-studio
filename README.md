@@ -114,18 +114,18 @@ Dashboards:
 |-----|----------------|
 | **Studio** | Image (scenarios, Region edit, compare) · Video (Received / Blank / Camera Lock) |
 | **Tools** | Image \| Video tools + large result viewer (upscale, **Denoise**, **Slow Mo**, cleanup, sky, …) |
-| **Creative Vision** | **Text → Image**, Text → Video, Image → Video, Bridge / Connect (expensive playground) |
+| **Creative Vision** | **Text → Image**, **Image → Image**, Text → Video, Image → Video, Bridge / Connect |
 | **Frame Editor** | Aleph 2.0 keyframe edit via **Runware** + optional fal 1080p proxy |
 | **Audio** | Music, SFX, Ambience, VO, Voice clone, **Video → SFX** |
 | **Library** | History; Send to Studio / Tools / Frame Editor / Resolve |
 
 ### Creative Vision highlights
 
-- **Text → Image** first for still-then-bridge workflows (Flux, Nano Banana, Seedream families, …).
+- **Text → Image** for inventing stills; **Image → Image** for creative plate edits (Aleph round-trip).
 - Still helpers (framing / lens / lighting) never inject camera motion; video modes use shot/motion helpers.
 - Every helper has **(None)** to skip that dimension.
 - **Creative direction** is Enhance-only intent — not sent raw on Generate.
-- T2I results: **Send to Start / End frame** or Studio Image.
+- Frame Editor ↔ Vision: Send stills as **I2I source**, Start / End / I2V; I2I results pin back as **Frame Editor · keyframe**.
 - Cost labels are **job totals** (e.g. Veo standard ~$0.40/s × duration, Fast ~$0.15/s × duration on fal).
 
 ### Tools video extras

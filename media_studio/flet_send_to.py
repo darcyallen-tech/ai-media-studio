@@ -166,26 +166,53 @@ def send_to_frame_editor(
     state: Any,
     path: str,
     *,
-    as_video: bool,
+    as_video: bool = False,
+    pin: str | None = None,
+    timestamp_s: float | None = None,
+    job_name: str | None = None,
     status_cb: Callable[[str], None] | None = None,
 ) -> Callable:
+    """
+    Send media to Frame Editor.
+
+    Stills: pin as keyframe when a source video is loaded; otherwise stage as a
+    handoff still (load video next). Never wipes other keyframes unless the FE
+    round-trip context or selected-slot replace path applies.
+    """
+
     async def _click(_e: ft.ControlEvent) -> None:
         switch = getattr(state, "switch_to_frame_editor", None)
         if switch:
             if as_video:
                 switch(video_path=path)
             else:
-                switch(keyframe_path=path)
+                try:
+                    switch(
+                        keyframe_path=path,
+                        pin=pin,
+                        timestamp_s=timestamp_s,
+                        job_name=job_name,
+                    )
+                except TypeError:
+                    switch(keyframe_path=path)
         else:
             fe = getattr(state, "frame_editor_view", None)
             if fe is not None:
                 if as_video and hasattr(fe, "load_source"):
                     fe.load_source(path)
                 elif hasattr(fe, "receive_keyframe"):
-                    fe.receive_keyframe(path)
+                    fe.receive_keyframe(
+                        path,
+                        pin=pin,
+                        timestamp_s=timestamp_s,
+                        job_name=job_name,
+                    )
         kind = "source video" if as_video else "keyframe"
+        name_note = f" · {job_name}" if job_name else ""
         if status_cb:
-            status_cb(f"Sent to Frame Editor ({kind}): {Path(path).name}")
+            status_cb(
+                f"Sent to Frame Editor ({kind}){name_note}: {Path(path).name}"
+            )
 
     return _click
 
@@ -194,31 +221,63 @@ def send_to_vision(
     state: Any,
     path: str,
     *,
+    role: str = "start",
     as_video: bool = False,
     as_end_frame: bool = False,
+    job_name: str | None = None,
     status_cb: Callable[[str], None] | None = None,
 ) -> Callable:
+    """
+    Send a still (or video) into Creative Vision.
+
+    ``role`` for stills:
+      - ``start`` — Start frame (bridge / I2V)
+      - ``end`` — End frame (bridge)
+      - ``i2v`` — Image → Video primary source still
+      - ``i2i`` — Image → Image edit source still
+    ``as_end_frame`` kept for callers; maps to role=end.
+    ``job_name`` optional label preserved in status (does not auto-Enhance).
+    """
+
     async def _click(_e: ft.ControlEvent) -> None:
+        use_role = "end" if as_end_frame else (role or "start")
+        if as_video:
+            use_role = "video"
         vv = getattr(state, "vision_view", None)
         if vv is not None:
-            if as_video and hasattr(vv, "receive_video"):
-                vv.receive_video(path)
-            elif as_end_frame and hasattr(vv, "receive_end_frame"):
-                vv.receive_end_frame(path)
+            if use_role == "video" and hasattr(vv, "receive_video"):
+                vv.receive_video(path, job_name=job_name)
+            elif use_role == "end" and hasattr(vv, "receive_end_frame"):
+                vv.receive_end_frame(path, job_name=job_name)
+            elif use_role == "i2v" and hasattr(vv, "receive_i2v_source"):
+                vv.receive_i2v_source(path, job_name=job_name)
+            elif use_role == "i2i" and hasattr(vv, "receive_i2i_source"):
+                vv.receive_i2i_source(path, job_name=job_name)
             elif hasattr(vv, "receive_start_frame"):
-                vv.receive_start_frame(path)
+                vv.receive_start_frame(path, job_name=job_name)
             elif hasattr(vv, "load_start_image"):
                 vv.load_start_image(path)
             elif hasattr(vv, "set_start_path"):
                 vv.set_start_path(path)
         switch = getattr(state, "switch_to_vision", None)
         if switch:
-            switch()
+            try:
+                switch(role=use_role if use_role != "video" else None)
+            except TypeError:
+                switch()
+        role_labels = {
+            "start": "Start frame",
+            "end": "End frame",
+            "i2v": "I2V source",
+            "i2i": "Image → Image source",
+            "video": "video",
+        }
+        label = role_labels.get(use_role, use_role)
+        name_note = f" · {job_name}" if job_name else ""
         if status_cb:
-            role = "end frame" if as_end_frame else "start frame"
-            if as_video:
-                role = "video"
-            status_cb(f"Sent to Creative Vision ({role}): {Path(path).name}")
+            status_cb(
+                f"Sent to Creative Vision ({label}){name_note}: {Path(path).name}"
+            )
 
     return _click
 
@@ -271,6 +330,42 @@ def send_to_resolve(
 # ---------------------------------------------------------------------------
 
 
+def vision_still_menu_items(
+    state: Any,
+    path: str,
+    *,
+    job_name: str | None = None,
+    status_cb: Callable[[str], None] | None = None,
+) -> list[ft.Control]:
+    """Creative Vision still targets with clear labels."""
+    return [
+        _item(
+            "Creative Vision · Image → Image (source)",
+            send_to_vision(
+                state, path, role="i2i", job_name=job_name, status_cb=status_cb
+            ),
+        ),
+        _item(
+            "Creative Vision · Start frame",
+            send_to_vision(
+                state, path, role="start", job_name=job_name, status_cb=status_cb
+            ),
+        ),
+        _item(
+            "Creative Vision · End frame",
+            send_to_vision(
+                state, path, role="end", job_name=job_name, status_cb=status_cb
+            ),
+        ),
+        _item(
+            "Creative Vision · I2V source",
+            send_to_vision(
+                state, path, role="i2v", job_name=job_name, status_cb=status_cb
+            ),
+        ),
+    ]
+
+
 def build_send_menu_items(
     state: Any,
     *,
@@ -289,8 +384,8 @@ def build_send_menu_items(
     Destination matrix for a still and/or video path.
 
     Image still:
-      Studio Image, Studio Video (ref), Region, Image tools, Frame Editor keyframe,
-      Creative Vision (start), Resolve
+      Studio Image, Studio Video (ref), Region, Image tools,
+      Frame Editor · keyframe, Creative Vision · Start/End/I2V, Resolve
     Video:
       Studio Video (source), Video tools, Frame Editor source, Creative Vision,
       Audio Video→SFX, Resolve
@@ -329,25 +424,13 @@ def build_send_menu_items(
             items.append(_sep())
             items.append(
                 _item(
-                    "Frame Editor (as keyframe)",
+                    "Frame Editor · keyframe",
                     send_to_frame_editor(state, img, as_video=False, status_cb=_ok),
                 )
             )
         if include_vision:
-            items.append(
-                _item(
-                    "Creative Vision (start frame)",
-                    send_to_vision(state, img, as_video=False, status_cb=_ok),
-                )
-            )
-            items.append(
-                _item(
-                    "Creative Vision (end frame)",
-                    send_to_vision(
-                        state, img, as_video=False, as_end_frame=True, status_cb=_ok
-                    ),
-                )
-            )
+            items.append(_sep())
+            items.extend(vision_still_menu_items(state, img, status_cb=_ok))
         if include_resolve:
             items.append(_sep())
             items.append(

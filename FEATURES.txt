@@ -120,6 +120,16 @@ Modes (left → right):
       Framing / composition · Lens look · Lighting · Still style presets
     Aspect / size presets (model-specific; some support 0.5K–4K)
 
+  Image → Image (I2I) — creative still edit (Aleph plate round-trip)
+    Source still required (upload, Previously used, or Send from Frame Editor /
+    Library / Studio). Single source for v1 (not multi-ref).
+    Models (fal edit): Flux 2 Pro / Max / Flex, Flux Kontext Pro,
+                       Nano Banana / 2 / Pro edit, Seedream 5 Pro edit
+    Strength slider when the API exposes it (Flux family)
+    Still-only helpers + (None); Creative direction for Enhance;
+    Grok Enhance with vision on the source still
+    Result → Frame Editor · keyframe, Start / End / I2V, Library
+
   Text → Video (T2V)
     e.g. Veo 3.1 / Veo 3.1 Fast / Reference pack, Luma Ray 2
     Veo on fal: ~$0.40/s standard, ~$0.15/s Fast (totals = rate × duration)

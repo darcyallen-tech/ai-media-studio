@@ -1,5 +1,5 @@
 """
-Creative Vision tab — T2I / T2V / I2V / bridge shots.
+Creative Vision tab — T2I / I2I / T2V / I2V / bridge shots.
 
 Separate from Studio listing camera-lock flows. Expensive models; cost shown
 before generate. Same export habits: Library, folder, Resolve, Send to ▾.
@@ -17,6 +17,7 @@ import flet as ft
 from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_image
 from media_studio.flet_progress import JobProgress, classify_progress
+from media_studio.flet_source_strip import PreviousSourcesStrip
 from media_studio.flet_theme import (
     ACCENT_BRIGHT,
     BORDER,
@@ -46,6 +47,7 @@ from media_studio.vision_prompt import (
     compile_still_prompt,
     compile_vision_prompt,
     default_bridge_prompt,
+    default_i2i_prompt,
     default_still_prompt,
 )
 from media_studio.vision_registry import (
@@ -53,6 +55,7 @@ from media_studio.vision_registry import (
     default_vision_model,
     find_vision_model,
     format_vision_cost,
+    is_still_mode,
     vision_labels,
 )
 from media_studio.vision_service import run_vision
@@ -98,10 +101,11 @@ class CreativeVisionView:
         self.ref_paths: list[str] = []
         self._result_path: str | None = None
 
-        # Mode nav (T2I first for still-then-bridge workflows)
+        # Mode nav (T2I / I2I first for still-then-Aleph / bridge workflows)
         self._mode_nav = PillNav(
             [
                 ("text_to_image", "Text → Image"),
+                ("image_to_image", "Image → Image"),
                 ("text_to_video", "Text → Video"),
                 ("image_to_video", "Image → Video"),
                 ("bridge", "Bridge / Connect"),
@@ -290,6 +294,29 @@ class CreativeVisionView:
             on_click=self._pick_end,
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
         )
+        # Strength for Image→Image when model supports it
+        self.strength_label = ft.Text(
+            "Strength 0.60",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            visible=False,
+        )
+        self.strength = ft.Slider(
+            min=0.15,
+            max=1.0,
+            divisions=17,
+            value=0.60,
+            label="{value}",
+            on_change=self._on_strength,
+            visible=False,
+        )
+        self.prev_strip = PreviousSourcesStrip(
+            page,
+            get_output_dir=lambda: self.state.output_dir,
+            on_load=self._on_prev_still,
+            media_kind="image",
+        )
+        self.prev_strip.root.visible = False
         self.btn_refs = ft.OutlinedButton(
             content="Add reference stills",
             icon=ft.Icons.COLLECTIONS,
@@ -427,8 +454,8 @@ class CreativeVisionView:
                 [
                     section_title("Creative Vision"),
                     ft.Text(
-                        "Cinematic invention — text→image (nail a still cheaply), "
-                        "text/image→video, and bridge shots. "
+                        "Cinematic invention — text→image, image→image (creative still "
+                        "edit / Aleph plates), text/image→video, and bridge shots. "
                         "Not listing camera-lock staging (use Studio for that). "
                         "Video models are expensive — check Est. cost before Generate.",
                         size=FONT_SM,
@@ -439,6 +466,8 @@ class CreativeVisionView:
                     self.model_dd,
                     self.model_notes,
                     ft.Row([self.dur_dd, self.aspect_dd, self.res_dd], spacing=8),
+                    self.strength_label,
+                    self.strength,
                     self.gen_audio,
                     _cost_box(self.cost_text),
                     ft.Divider(height=1, color=BORDER),
@@ -471,6 +500,7 @@ class CreativeVisionView:
                         spacing=16,
                     ),
                     ft.Row([self.btn_refs, self.btn_clear_refs, self.refs_label], spacing=8),
+                    self.prev_strip.root,
                     ft.Divider(height=1, color=BORDER),
                     # Collapsed by default to reduce left-column density (Phase F)
                     ft.ExpansionTile(
@@ -540,7 +570,7 @@ class CreativeVisionView:
                     section_title("Result"),
                     ft.Text(
                         "Still preview or video playback. "
-                        "T2I: Send to Start / End frame for a bridge. "
+                        "T2I / I2I: Send to Frame Editor keyframe, Start / End, or I2V. "
                         "Show in folder · Send to Resolve · Send to ▾",
                         size=FONT_SM,
                         color=TEXT_MUTED,
@@ -589,7 +619,7 @@ class CreativeVisionView:
     def _duration_token_for_cost(self, spec=None) -> str | None:
         """Selected duration for estimates — falls back to model default."""
         spec = spec or self._current_spec()
-        if self._mode == "text_to_image":
+        if is_still_mode(self._mode):
             return None
         raw = _dd(self.dur_dd)
         choices = list(spec.duration_choices or ())
@@ -601,7 +631,7 @@ class CreativeVisionView:
         try:
             spec = self._current_spec()
             audio = None
-            if spec.supports_audio and self._mode != "text_to_image":
+            if spec.supports_audio and not is_still_mode(self._mode):
                 audio = bool(self.gen_audio.value)
             return format_vision_cost(
                 spec,
@@ -615,6 +645,24 @@ class CreativeVisionView:
         except Exception:
             return "Est. cost: —"
 
+    def _on_strength(self, e: ft.ControlEvent | None = None) -> None:
+        try:
+            v = float(self.strength.value or 0.6)
+        except (TypeError, ValueError):
+            v = 0.6
+        self.strength_label.value = f"Strength {v:.2f}"
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _on_prev_still(self, path: str) -> None:
+        """Previously used still → I2I source (or start when in video modes)."""
+        if self._mode == "image_to_image":
+            self.receive_i2i_source(path, status=f"Previous: {Path(path).name}")
+        else:
+            self.receive_start_frame(path, status=f"Previous: {Path(path).name}")
+
     async def _refresh_cost(self, e: ft.ControlEvent | None = None) -> None:
         """Recompute total est. cost when duration / resolution / audio / model change."""
         self.cost_text.value = self._cost_label()
@@ -626,9 +674,10 @@ class CreativeVisionView:
     def _sync_model_ui(self) -> None:
         spec = self._current_spec()
         self.model_notes.value = spec.notes or ""
-        is_t2i = self._mode == "text_to_image"
+        still = is_still_mode(self._mode)
+        is_i2i = self._mode == "image_to_image"
         # Duration (video only) — always offer choices for T2V/I2V/Bridge
-        if is_t2i:
+        if still:
             self.dur_dd.visible = False
         else:
             choices = list(spec.duration_choices) if spec.duration_choices else [
@@ -641,11 +690,11 @@ class CreativeVisionView:
             if _dd(self.dur_dd) not in choices:
                 pref = spec.default_duration or choices[-1]
                 self.dur_dd.value = pref if pref in choices else choices[0]
-        # Aspect (T2I size presets or video aspect)
+        # Aspect (still size presets or video aspect)
         self.aspect_dd.options = dropdown_options(list(spec.aspect_choices))
         if _dd(self.aspect_dd) not in spec.aspect_choices:
             self.aspect_dd.value = spec.default_aspect
-        self.aspect_dd.label = "Size / aspect" if is_t2i else "Aspect"
+        self.aspect_dd.label = "Size / aspect" if still else "Aspect"
         if spec.resolution_choices:
             self.res_dd.options = dropdown_options(list(spec.resolution_choices))
             self.res_dd.visible = True
@@ -653,11 +702,20 @@ class CreativeVisionView:
                 self.res_dd.value = spec.default_resolution
         else:
             self.res_dd.visible = False
-        self.gen_audio.visible = bool(spec.supports_audio) and not is_t2i
-        self.negative.visible = bool(spec.supports_negative) or is_t2i
+        self.gen_audio.visible = bool(spec.supports_audio) and not still
+        self.negative.visible = bool(spec.supports_negative) or still
+        # Strength (I2I when model supports)
+        show_str = is_i2i and bool(getattr(spec, "supports_strength", False))
+        self.strength.visible = show_str
+        self.strength_label.visible = show_str
+        if show_str:
+            self._on_strength(None)
         # Prompt label
         try:
-            if is_t2i:
+            if is_i2i:
+                self.prompt.label = "Edit prompt (editable — Enhance rewrites)"
+                self.btn_generate.content = "Generate edit"
+            elif still:
                 self.prompt.label = "Image prompt (editable — Enhance rewrites)"
                 self.btn_generate.content = "Generate still"
             else:
@@ -673,6 +731,7 @@ class CreativeVisionView:
     def _on_mode(self, mode_id: str) -> None:
         if mode_id not in (
             "text_to_image",
+            "image_to_image",
             "text_to_video",
             "image_to_video",
             "bridge",
@@ -692,6 +751,19 @@ class CreativeVisionView:
             cur = (self.prompt.value or "").strip()
             if not cur or "Bridge the start frame" not in cur:
                 self.prompt.value = default_bridge_prompt()
+        elif self._mode == "image_to_image":
+            cur = (self.prompt.value or "").strip()
+            low = cur.lower()
+            video_stock = (
+                not cur
+                or "camera motion:" in low
+                or "camera —" in low
+                or "push in" in low
+                or "slow push-in" in low
+                or "bridge the start frame" in low
+            )
+            if video_stock:
+                self.prompt.value = default_i2i_prompt()
         elif self._mode == "text_to_image":
             # Soft-switch to still helpers when prompt still looks like video stock
             cur = (self.prompt.value or "").strip()
@@ -724,38 +796,61 @@ class CreativeVisionView:
 
     def _apply_mode_visibility(self) -> None:
         is_t2i = self._mode == "text_to_image"
+        is_i2i = self._mode == "image_to_image"
         is_i2v = self._mode == "image_to_video"
         is_bridge = self._mode == "bridge"
-        show_start = is_i2v or is_bridge
+        still = is_still_mode(self._mode)
+        show_start = is_i2v or is_bridge or is_i2i
         show_end = is_bridge or (is_i2v and self._supports_end_frame())
-        # T2I: no source still; hide frame pickers
+        # Source / start still picker
         self.btn_start.visible = show_start
         self.btn_end.visible = show_end
-        self.start_ph.visible = show_start and not self.start_path
-        self.end_ph.visible = show_end and not self.end_path
-        # Refs less relevant for pure T2I
         try:
-            self.btn_refs.visible = not is_t2i
-            self.btn_clear_refs.visible = not is_t2i
-            self.refs_label.visible = not is_t2i
+            if is_i2i:
+                self.btn_start.content = "Source still"
+                self.start_ph.content = ft.Text(
+                    "Source still", size=FONT_SM, color=TEXT_MUTED
+                )
+            else:
+                self.btn_start.content = "Start frame"
+                self.start_ph.content = ft.Text(
+                    "Start still", size=FONT_SM, color=TEXT_MUTED
+                )
         except Exception:
             pass
-        # Still vs video helpers (T2I must never inject camera motion language)
-        self._sync_helper_controls_for_mode(is_t2i=is_t2i)
+        self.start_ph.visible = show_start and not self.start_path
+        self.end_ph.visible = show_end and not self.end_path
+        # Refs: hide for pure T2I / single-source I2I v1
+        try:
+            self.btn_refs.visible = not still
+            self.btn_clear_refs.visible = not still
+            self.refs_label.visible = not still
+        except Exception:
+            pass
+        # Previously used stills for I2I (and I2V/bridge start)
+        try:
+            self.prev_strip.root.visible = is_i2i or is_i2v or is_bridge
+            if self.prev_strip.root.visible:
+                self.prev_strip.refresh()
+        except Exception:
+            pass
+        # Still vs video helpers (still modes never inject camera motion language)
+        self._sync_helper_controls_for_mode(is_still=still)
         try:
             self.start_preview.visible = bool(self.start_path) and show_start
             self.end_preview.visible = bool(self.end_path) and show_end
         except Exception:
             pass
 
-    def _sync_helper_controls_for_mode(self, *, is_t2i: bool) -> None:
+    def _sync_helper_controls_for_mode(self, *, is_still: bool = False, is_t2i: bool = False) -> None:
         """
-        T2I: framing / lens look / lighting / still styles — no motion.
+        Still modes (T2I / I2I): framing / lens look / lighting / still styles — no motion.
         Video modes: shot type / lens / motion / video styles.
         Every helper list starts with (None) so dimensions can be silenced.
         """
+        use_still = is_still or is_t2i
         try:
-            if is_t2i:
+            if use_still:
                 self.helpers_title.value = "Still photography helpers (None = skip)"
                 # Framing replaces video shot types (no push-in / orbit / pan)
                 self.shot_dd.label = "Framing / composition"
@@ -831,7 +926,7 @@ class CreativeVisionView:
             "workspace": "creative_vision",
             "mode": self._mode,
         }
-        if self._mode == "text_to_image":
+        if is_still_mode(self._mode):
             for key, val in (
                 ("framing", _dd(self.shot_dd)),
                 ("lens_look", _dd(self.lens_dd)),
@@ -841,13 +936,27 @@ class CreativeVisionView:
                 a = active_helper(val)
                 if a:
                     snap[key] = a
-            snap["guidance"] = (
-                "Rewrite for a single still photograph (text-to-image). "
-                "Use still photography language only from the helpers that are set "
-                "(skip any missing dimensions). Do NOT invent camera motion "
-                "(no push-in, pan, tilt, orbit, tracking) unless the user prompt "
-                "or creative_direction already asks for it. Locked frame."
-            )
+            if self._mode == "image_to_image":
+                snap["guidance"] = (
+                    "Rewrite for a single-image edit (image-to-image). "
+                    "Preserve camera, framing, architecture, and identity unless the "
+                    "edit requires change. Use still photography language only from "
+                    "helpers that are set. Do NOT invent camera motion "
+                    "(no push-in, pan, tilt, orbit, tracking) unless the user prompt "
+                    "or creative_direction already asks for it. Locked frame. "
+                    "Vision is on the source still — describe the creative change clearly."
+                )
+                snap["has_source_still"] = bool(
+                    self.start_path and Path(self.start_path).is_file()
+                )
+            else:
+                snap["guidance"] = (
+                    "Rewrite for a single still photograph (text-to-image). "
+                    "Use still photography language only from the helpers that are set "
+                    "(skip any missing dimensions). Do NOT invent camera motion "
+                    "(no push-in, pan, tilt, orbit, tracking) unless the user prompt "
+                    "or creative_direction already asks for it. Locked frame."
+                )
         else:
             for key, val in (
                 ("shot_type", _dd(self.shot_dd)),
@@ -881,10 +990,16 @@ class CreativeVisionView:
     def _compiled_helpers(self) -> str:
         style_key = _dd(self.style_dd)
         sub = self._active_subject_notes()
-        if self._mode == "text_to_image":
+        if is_still_mode(self._mode):
             # Still-only: never inject camera motion language; skip (None) helpers
+            base = ""
+            if self._mode == "image_to_image":
+                base = (
+                    "Edit only what the prompt asks for. Keep camera, framing, "
+                    "architecture, and identity consistent unless the edit requires change."
+                )
             return compile_still_prompt(
-                base_prompt="",
+                base_prompt=base,
                 framing=active_helper(_dd(self.shot_dd)),
                 lens_look=active_helper(_dd(self.lens_dd)),
                 lighting=active_helper(_dd(self.lighting_dd)),
@@ -910,10 +1025,12 @@ class CreativeVisionView:
         if cur == stock:
             return True
         low = cur.lower()
-        if self._mode == "text_to_image":
+        if is_still_mode(self._mode):
             if "still photography —" in low and len(cur) < 500:
                 return True
             if "single still image, locked frame" in low and len(cur) < 500:
+                return True
+            if "edit only what the prompt asks" in low and len(cur) < 700:
                 return True
             return False
         # Soft stock: mostly camera helper language without freeform body
@@ -963,8 +1080,8 @@ class CreativeVisionView:
         def _extra() -> dict[str, Any]:
             return self._helper_snapshot_for_enhance()
 
-        # Multi-image: enhance uses primary image; pass start or first ref
-        # T2I: no source required
+        # Multi-image: enhance uses primary image; pass start/source or first ref
+        # T2I: no source required; I2I: vision on source still
         img = None
         if self._mode != "text_to_image":
             img = self.start_path
@@ -998,8 +1115,18 @@ class CreativeVisionView:
 
     # ----- pickers -----
 
-    def receive_start_frame(self, path: str, *, status: str | None = None) -> bool:
-        """Load a still as I2V / bridge start frame (Send-to from Library/Tools)."""
+    def _job_status(self, base: str, *, job_name: str | None = None) -> str:
+        name = (job_name or "").strip()
+        return f"{base} · {name}" if name else base
+
+    def receive_start_frame(
+        self,
+        path: str,
+        *,
+        status: str | None = None,
+        job_name: str | None = None,
+    ) -> bool:
+        """Load a still as bridge/I2V start frame (does not wipe prompt or preset)."""
         try:
             p = Path(path)
             if not p.is_file():
@@ -1013,21 +1140,36 @@ class CreativeVisionView:
         self.start_preview.src = resolved
         self.start_preview.visible = True
         self.start_ph.visible = False
-        # Prefer I2V (or keep bridge) when receiving a still
+        # Prefer bridge when end already set; else I2V from text-only modes.
+        # Stay in Image→Image when that mode is active (source still).
         try:
-            if self._mode in ("text_to_video", "text_to_image"):
+            if self._mode == "image_to_image":
+                pass
+            elif self.end_path and Path(self.end_path).is_file():
+                if self._mode != "bridge":
+                    self._on_mode("bridge")
+            elif self._mode in ("text_to_video", "text_to_image"):
                 self._on_mode("image_to_video")
         except Exception:
             pass
-        self.status.value = status or f"Start: {Path(resolved).name}"
+        role = "Source still" if self._mode == "image_to_image" else "Start frame"
+        self.status.value = status or self._job_status(
+            f"{role}: {Path(resolved).name}", job_name=job_name
+        )
         try:
             self.page.update()
         except Exception:
             pass
         return True
 
-    def receive_end_frame(self, path: str, *, status: str | None = None) -> bool:
-        """Load a still as bridge end frame (e.g. from T2I result)."""
+    def receive_end_frame(
+        self,
+        path: str,
+        *,
+        status: str | None = None,
+        job_name: str | None = None,
+    ) -> bool:
+        """Load a still as bridge end frame (e.g. from T2I / Frame Editor)."""
         try:
             p = Path(path)
             if not p.is_file():
@@ -1043,25 +1185,109 @@ class CreativeVisionView:
         self.end_ph.visible = False
         try:
             if self._mode != "bridge":
-                # Switch to bridge so end frame is meaningful
-                if not self.start_path:
-                    # Keep user in bridge; they can still set start
-                    self._on_mode("bridge")
-                else:
-                    self._on_mode("bridge")
+                self._on_mode("bridge")
         except Exception:
             pass
-        self.status.value = status or f"End: {Path(resolved).name}"
+        self.status.value = status or self._job_status(
+            f"End frame: {Path(resolved).name}", job_name=job_name
+        )
         try:
             self.page.update()
         except Exception:
             pass
         return True
 
-    def receive_video(self, path: str, *, status: str | None = None) -> bool:
+    def receive_i2v_source(
+        self,
+        path: str,
+        *,
+        status: str | None = None,
+        job_name: str | None = None,
+    ) -> bool:
+        """
+        Load primary still for Image → Video. Forces I2V mode; does not clear
+        end frame (user can still switch to bridge later).
+        """
+        try:
+            p = Path(path)
+            if not p.is_file():
+                self.status.value = f"I2V source missing: {path}"
+                return False
+            resolved = str(p.resolve())
+        except OSError as exc:
+            self.status.value = f"I2V source error: {exc}"
+            return False
+        self.start_path = resolved
+        self.start_preview.src = resolved
+        self.start_preview.visible = True
+        self.start_ph.visible = False
+        try:
+            if self._mode != "image_to_video":
+                self._on_mode("image_to_video")
+        except Exception:
+            pass
+        self.status.value = status or self._job_status(
+            f"I2V source: {Path(resolved).name}", job_name=job_name
+        )
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        return True
+
+    def receive_i2i_source(
+        self,
+        path: str,
+        *,
+        status: str | None = None,
+        job_name: str | None = None,
+    ) -> bool:
+        """
+        Load source still for Image → Image creative edit (Aleph plate round-trip).
+        Forces I2I mode. Does not wipe prompt or other keyframes elsewhere.
+        """
+        try:
+            p = Path(path)
+            if not p.is_file():
+                self.status.value = f"I2I source missing: {path}"
+                return False
+            resolved = str(p.resolve())
+        except OSError as exc:
+            self.status.value = f"I2I source error: {exc}"
+            return False
+        # Switch mode first so UI labels update, then set still
+        try:
+            if self._mode != "image_to_image":
+                self._on_mode("image_to_image")
+        except Exception:
+            pass
+        self.start_path = resolved
+        self.start_preview.src = resolved
+        self.start_preview.visible = True
+        self.start_ph.visible = False
+        try:
+            self.prev_strip.record_and_refresh(resolved)
+        except Exception:
+            pass
+        self.status.value = status or self._job_status(
+            f"I2I source: {Path(resolved).name}", job_name=job_name
+        )
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        return True
+
+    def receive_video(
+        self,
+        path: str,
+        *,
+        status: str | None = None,
+        job_name: str | None = None,
+    ) -> bool:
         """
         Receive a video from Send-to. Vision is still-driven; surface the path
-        in status and open Studio Video for full clip workflows if needed.
+        in status (use Studio Video / Tools for full clip workflows).
         """
         try:
             p = Path(path)
@@ -1072,10 +1298,11 @@ class CreativeVisionView:
         except OSError as exc:
             self.status.value = f"Video error: {exc}"
             return False
-        self.status.value = status or (
+        base = (
             f"Received video {name} — use Send to Studio Video or Tools for "
             "clip workflows; Vision is primarily still → video."
         )
+        self.status.value = status or self._job_status(base, job_name=job_name)
         try:
             self.page.update()
         except Exception:
@@ -1083,15 +1310,23 @@ class CreativeVisionView:
         return True
 
     async def _pick_start(self, e: ft.ControlEvent) -> None:
+        title = (
+            "Source still (Image → Image)"
+            if self._mode == "image_to_image"
+            else "Start frame / I2V still"
+        )
         try:
-            files = await pick_image(self.page, dialog_title="Start frame / I2V still")
+            files = await pick_image(self.page, dialog_title=title)
         except Exception as exc:
             self.status.value = f"Picker error: {exc}"
             self.page.update()
             return
         if not files or not files[0].path:
             return
-        self.receive_start_frame(files[0].path)
+        if self._mode == "image_to_image":
+            self.receive_i2i_source(files[0].path)
+        else:
+            self.receive_start_frame(files[0].path)
         self.page.update()
 
     async def _pick_end(self, e: ft.ControlEvent) -> None:
@@ -1239,7 +1474,13 @@ class CreativeVisionView:
             pass
 
     def _apply_preset(self, p: VisionPreset) -> None:
-        if p.mode in ("text_to_image", "text_to_video", "image_to_video", "bridge"):
+        if p.mode in (
+            "text_to_image",
+            "image_to_image",
+            "text_to_video",
+            "image_to_video",
+            "bridge",
+        ):
             self._mode = p.mode  # type: ignore[assignment]
             try:
                 self._mode_nav.set_selected(p.mode, notify=False)
@@ -1258,7 +1499,7 @@ class CreativeVisionView:
         if p.motion:
             self.motion_dd.value = p.motion
         if p.style_preset:
-            if self._mode == "text_to_image" and p.style_preset in STILL_STYLE_PRESETS:
+            if is_still_mode(self._mode) and p.style_preset in STILL_STYLE_PRESETS:
                 self.style_dd.value = p.style_preset
             elif p.style_preset in STYLE_PRESETS:
                 self.style_dd.value = p.style_preset
@@ -1337,13 +1578,19 @@ class CreativeVisionView:
         prompt = (self.prompt.value or "").strip()
         if not prompt:
             self.status.value = (
-                "Enter an image prompt."
-                if self._mode == "text_to_image"
+                "Enter an image / edit prompt."
+                if is_still_mode(self._mode)
                 else "Enter a motion / shot prompt."
             )
             self.page.update()
             return
 
+        if self._mode == "image_to_image" and not (
+            self.start_path and Path(self.start_path).is_file()
+        ):
+            self.status.value = "Image→Image needs a source still."
+            self.page.update()
+            return
         if self._mode == "image_to_video" and not (
             self.start_path and Path(self.start_path).is_file()
         ):
@@ -1361,9 +1608,9 @@ class CreativeVisionView:
                 self.page.update()
                 return
 
-        # Merge subject refs (not required for T2I)
+        # Merge subject refs (not required for pure still T2I / I2I v1)
         refs = list(self.ref_paths)
-        if self._mode != "text_to_image":
+        if not is_still_mode(self._mode):
             sn = _dd(self.subject_dd)
             if sn and sn != "(none)":
                 s = find_subject(sn, self.state.output_dir)
@@ -1387,7 +1634,7 @@ class CreativeVisionView:
             from media_studio.vision_registry import estimate_vision_cost
 
             audio = None
-            if spec.supports_audio and self._mode != "text_to_image":
+            if spec.supports_audio and not is_still_mode(self._mode):
                 audio = bool(self.gen_audio.value)
             est = estimate_vision_cost(
                 spec,
@@ -1424,13 +1671,13 @@ class CreativeVisionView:
             pass
         self.send_host.visible = False
         self.cost_text.value = self._cost_label()
-        is_t2i = self._mode == "text_to_image"
+        still_job = is_still_mode(self._mode)
         self.job_progress.start(
-            "Generating still…" if is_t2i else "Uploading…", self.page
+            "Generating still…" if still_job else "Uploading…", self.page
         )
         self.status.value = (
             f"Running {spec.label}…"
-            if is_t2i
+            if still_job
             else f"Running {spec.label}… (can take several minutes)"
         )
         self.page.update()
@@ -1438,25 +1685,47 @@ class CreativeVisionView:
         def on_progress(msg: str) -> None:
             self.job_progress.set_message(classify_progress(msg), self.page)
 
+        strength_val = None
+        if self._mode == "image_to_image" and getattr(spec, "supports_strength", False):
+            try:
+                strength_val = float(self.strength.value or 0.6)
+            except (TypeError, ValueError):
+                strength_val = 0.6
+
         try:
+            # Record I2I source for Previously used
+            if self._mode == "image_to_image" and self.start_path:
+                try:
+                    self.prev_strip.record_and_refresh(self.start_path)
+                except Exception:
+                    pass
             result = await asyncio.to_thread(
                 run_vision,
                 mode=self._mode,
                 prompt=prompt,
                 model_label=_dd(self.model_dd),
-                image_path=self.start_path if self._mode == "image_to_video" else None,
+                image_path=(
+                    self.start_path
+                    if self._mode in ("image_to_video", "image_to_image")
+                    else None
+                ),
                 first_frame_path=self.start_path if self._mode == "bridge" else None,
                 last_frame_path=(
                     self.end_path
                     if self._mode == "bridge"
                     else (self.end_path if self._mode == "image_to_video" else None)
                 ),
-                ref_paths=None if is_t2i else (refs or None),
-                duration=None if is_t2i else _dd(self.dur_dd),
+                ref_paths=None if still_job else (refs or None),
+                duration=None if still_job else _dd(self.dur_dd),
                 aspect_ratio=_dd(self.aspect_dd),
-                resolution=None if is_t2i else _dd(self.res_dd),
+                resolution=(
+                    _dd(self.res_dd)
+                    if still_job and getattr(self.res_dd, "visible", False)
+                    else (None if still_job else _dd(self.res_dd))
+                ),
                 negative_prompt=self.negative.value,
-                generate_audio=False if is_t2i else bool(self.gen_audio.value),
+                generate_audio=False if still_job else bool(self.gen_audio.value),
+                strength=strength_val,
                 output_dir=self.state.output_dir,
                 on_progress=on_progress,
             )
@@ -1506,12 +1775,11 @@ class CreativeVisionView:
             self.player.set_result(path)
 
     def _refresh_send_menu(self, path: str) -> None:
-        """Send-to matrix: T2I stills get Start/End frame + Studio Image, etc."""
+        """Send-to matrix: stills get FE keyframe + Start/End/I2V + shared matrix."""
         from media_studio.flet_send_to import (
             build_send_menu_items,
             make_send_menu_button,
-            send_to_image,
-            send_to_resolve,
+            send_to_frame_editor,
         )
 
         def _st(msg: str) -> None:
@@ -1523,12 +1791,26 @@ class CreativeVisionView:
 
         ext = Path(path).suffix.lower()
         is_img = ext in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+        job_name = self._active_job_name()
 
         if is_img:
             import flet as ft
 
             items: list = []
-            # Primary Creative Vision handoffs
+            # Primary Aleph / motion handoffs after creative I2I or T2I
+            items.append(
+                ft.PopupMenuItem(
+                    content="Frame Editor · keyframe",
+                    on_click=send_to_frame_editor(
+                        self.state,
+                        path,
+                        as_video=False,
+                        job_name=job_name,
+                        status_cb=_st,
+                    ),
+                )
+            )
+            items.append(ft.PopupMenuItem())
             items.append(
                 ft.PopupMenuItem(
                     content="→ Start frame (this Vision tab)",
@@ -1541,19 +1823,25 @@ class CreativeVisionView:
                     on_click=self._apply_as_end(path),
                 )
             )
-            items.append(ft.PopupMenuItem())  # separator
             items.append(
                 ft.PopupMenuItem(
-                    content="Studio Image (edit further)",
-                    on_click=send_to_image(self.state, path, status_cb=_st),
+                    content="→ I2V source (this Vision tab)",
+                    on_click=self._apply_as_i2v(path),
                 )
             )
-            # Full shared matrix (tools, FE, Resolve, …)
+            items.append(
+                ft.PopupMenuItem(
+                    content="→ Image → Image source (this Vision tab)",
+                    on_click=self._apply_as_i2i(path),
+                )
+            )
+            # Shared matrix (Studio, Tools, Resolve, …) — skip vision + FE
             more = build_send_menu_items(
                 self.state,
                 image_path=path,
                 status_cb=_st,
-                include_vision=False,  # already have Start/End above
+                include_vision=False,
+                include_frame_editor=False,
             )
             if more:
                 items.append(ft.PopupMenuItem())
@@ -1565,19 +1853,29 @@ class CreativeVisionView:
                 status_cb=_st,
             )
 
-        btn = make_send_menu_button(items)
+        btn = make_send_menu_button(
+            items,
+            tooltip="Send to Frame Editor, Vision slots, Studio, Tools, or Resolve",
+        )
         if btn is None:
             self.send_host.visible = False
             return
         self.send_host.content = btn
         self.send_host.visible = True
 
+    def _active_job_name(self) -> str | None:
+        """Optional label from preset name if the user set one (not auto-cleared)."""
+        try:
+            name = (self.preset_name.value or "").strip()
+            return name or None
+        except Exception:
+            return None
+
     def _apply_as_start(self, path: str):
         async def _click(_e: ft.ControlEvent) -> None:
             self.receive_start_frame(
-                path, status=f"T2I → Start frame: {Path(path).name}"
+                path, status=f"Still → Start frame: {Path(path).name}"
             )
-            # Prefer bridge if end already set
             if self.end_path and Path(self.end_path).is_file():
                 try:
                     self._on_mode("bridge")
@@ -1592,7 +1890,29 @@ class CreativeVisionView:
 
     def _apply_as_end(self, path: str):
         async def _click(_e: ft.ControlEvent) -> None:
-            self.receive_end_frame(path, status=f"T2I → End frame: {Path(path).name}")
+            self.receive_end_frame(path, status=f"Still → End frame: {Path(path).name}")
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click
+
+    def _apply_as_i2v(self, path: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            self.receive_i2v_source(path, status=f"Still → I2V: {Path(path).name}")
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click
+
+    def _apply_as_i2i(self, path: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            self.receive_i2i_source(
+                path, status=f"Still → I2I source: {Path(path).name}"
+            )
             try:
                 self.page.update()
             except Exception:

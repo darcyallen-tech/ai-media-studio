@@ -1,5 +1,5 @@
 """
-Creative Vision model registry — text-to-image, text-to-video, I2V, bridge.
+Creative Vision model registry — T2I, I2I, T2V, I2V, bridge.
 
 Cinematic invention only (not listing camera-lock staging). Costs are
 intentionally conservative ballparks — show them before generate.
@@ -10,7 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-VisionMode = Literal["text_to_image", "text_to_video", "image_to_video", "bridge"]
+VisionMode = Literal[
+    "text_to_image",
+    "image_to_image",
+    "text_to_video",
+    "image_to_video",
+    "bridge",
+]
 
 
 @dataclass(frozen=True)
@@ -39,10 +45,14 @@ class VisionModelSpec:
     # Bridge: first + last frame field names
     first_frame_field: str = "first_frame_url"
     last_frame_field: str = "last_frame_url"
-    # I2V start frame field
+    # I2V start frame / I2I source field
     image_field: str = "image_url"
     # I2V optional end frame (e.g. Hailuo) — hide UI when False
     supports_end_frame: bool = False
+    # Image→Image: key into fal IMAGE_EDIT_MODELS for build_edit_arguments
+    edit_model_key: str = ""
+    # Show strength slider when True (passed if API accepts)
+    supports_strength: bool = False
     extra_defaults: dict[str, Any] = field(default_factory=dict)
 
 
@@ -365,6 +375,190 @@ T2I_MODELS: dict[str, VisionModelSpec] = {
 }
 
 # ---------------------------------------------------------------------------
+# Image → Image (creative still edit — Aleph plate / source still)
+# Endpoints mirror Studio image-edit models via edit_model_key.
+# ---------------------------------------------------------------------------
+
+I2I_ASPECT_CHOICES: tuple[str, ...] = (
+    "Match source",
+    "16:9 landscape",
+    "9:16 portrait",
+    "4:3 landscape",
+    "3:4 portrait",
+    "1:1 square",
+    "1:1 square HD",
+)
+
+I2I_MODELS: dict[str, VisionModelSpec] = {
+    "flux 2 pro i2i": VisionModelSpec(
+        key="flux 2 pro i2i",
+        label="Flux 2 Pro (edit)",
+        mode="image_to_image",
+        endpoint="fal-ai/flux-2-pro/edit",
+        cost_estimate_usd=0.03,
+        notes=(
+            "Default. Creative single-image edit via Flux 2 Pro. "
+            "Ideal for Aleph plate edits (insert creature, giant prop, etc.). ~$0.03/image."
+        ),
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=I2I_ASPECT_CHOICES,
+        default_aspect="Match source",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        image_field="image_urls",
+        edit_model_key="flux 2 pro",
+        supports_strength=True,
+        extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "4"},
+    ),
+    "flux 2 max i2i": VisionModelSpec(
+        key="flux 2 max i2i",
+        label="Flux 2 Max (edit)",
+        mode="image_to_image",
+        endpoint="fal-ai/flux-2-max/edit",
+        cost_estimate_usd=0.07,
+        notes="Highest quality Flux edit. ~$0.07 first MP. Strong for detailed creative inserts.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=I2I_ASPECT_CHOICES,
+        default_aspect="Match source",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        image_field="image_urls",
+        edit_model_key="flux 2 max",
+        supports_strength=True,
+        extra_defaults={"num_images": 1, "output_format": "jpeg"},
+    ),
+    "flux 2 flex i2i": VisionModelSpec(
+        key="flux 2 flex i2i",
+        label="Flux 2 Flex (edit)",
+        mode="image_to_image",
+        endpoint="fal-ai/flux-2-flex/edit",
+        cost_estimate_usd=0.04,
+        notes="Flux 2 Flex edit — flexible style control. ~$0.04/image.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=I2I_ASPECT_CHOICES,
+        default_aspect="Match source",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        image_field="image_urls",
+        edit_model_key="flux 2 flex",
+        supports_strength=True,
+        extra_defaults={"num_images": 1, "output_format": "jpeg"},
+    ),
+    "flux kontext pro i2i": VisionModelSpec(
+        key="flux kontext pro i2i",
+        label="Flux Kontext Pro (edit)",
+        mode="image_to_image",
+        endpoint="fal-ai/flux-pro/kontext",
+        cost_estimate_usd=0.04,
+        notes="Flux Kontext Pro single-image edit — strong subject/context preservation.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=("Match source", "16:9", "9:16", "4:3", "3:4", "1:1", "3:2", "2:3"),
+        default_aspect="Match source",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        image_field="image_url",
+        edit_model_key="flux kontext pro",
+        supports_strength=True,
+        extra_defaults={},
+    ),
+    "nano banana pro i2i": VisionModelSpec(
+        key="nano banana pro i2i",
+        label="Nano Banana Pro (edit)",
+        mode="image_to_image",
+        endpoint="fal-ai/nano-banana-pro/edit",
+        cost_estimate_usd=0.15,
+        notes="Nano Banana Pro edit — excellent prompt adherence for creative inserts. 1K/2K/4K.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=("Match source",) + T2I_NANO_ASPECT_CHOICES,
+        default_aspect="Match source",
+        resolution_choices=T2I_NANO_PRO_RES_CHOICES,
+        default_resolution="1K",
+        supports_audio=False,
+        supports_negative=False,
+        image_field="image_urls",
+        edit_model_key="nano banana pro",
+        supports_strength=False,
+        extra_defaults={"num_images": 1},
+    ),
+    "nano banana 2 i2i": VisionModelSpec(
+        key="nano banana 2 i2i",
+        label="Nano Banana 2 (edit · fast)",
+        mode="image_to_image",
+        endpoint="fal-ai/nano-banana-2/edit",
+        cost_estimate_usd=0.08,
+        notes="Nano Banana 2 edit — faster/cheaper creative still edits. 0.5K–4K.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=("Match source",) + T2I_NANO_ASPECT_CHOICES,
+        default_aspect="Match source",
+        resolution_choices=T2I_NANO2_RES_CHOICES,
+        default_resolution="1K",
+        supports_audio=False,
+        supports_negative=False,
+        image_field="image_urls",
+        edit_model_key="nano banana 2",
+        supports_strength=False,
+        extra_defaults={"num_images": 1},
+    ),
+    "nano banana i2i": VisionModelSpec(
+        key="nano banana i2i",
+        label="Nano Banana (edit)",
+        mode="image_to_image",
+        endpoint="fal-ai/nano-banana/edit",
+        cost_estimate_usd=0.04,
+        notes="Original Nano Banana edit — solid general still edits.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=("Match source",) + T2I_NANO_ASPECT_CHOICES,
+        default_aspect="Match source",
+        resolution_choices=("1K",),
+        default_resolution="1K",
+        supports_audio=False,
+        supports_negative=False,
+        image_field="image_urls",
+        edit_model_key="nano banana",
+        supports_strength=False,
+        extra_defaults={"num_images": 1},
+    ),
+    "seedream 5 pro i2i": VisionModelSpec(
+        key="seedream 5 pro i2i",
+        label="Seedream 5.0 Pro (edit)",
+        mode="image_to_image",
+        endpoint="bytedance/seedream/v5/pro/edit",
+        cost_estimate_usd=0.07,
+        notes=(
+            "Seedream 5 Pro edit — grounded still edits; listing-friendly detail. "
+            "Same family as Studio Seedream (single source for Vision I2I v1)."
+        ),
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=I2I_ASPECT_CHOICES + ("Auto 2K", "Auto 4K"),
+        default_aspect="Match source",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        image_field="image_urls",
+        edit_model_key="seedream 5 pro",
+        supports_strength=False,
+        extra_defaults={"num_images": 1, "enable_safety_checker": True},
+    ),
+}
+
+# ---------------------------------------------------------------------------
 # Text → Video
 # ---------------------------------------------------------------------------
 
@@ -565,6 +759,8 @@ BRIDGE_MODELS: dict[str, VisionModelSpec] = {
 def models_for_mode(mode: VisionMode) -> dict[str, VisionModelSpec]:
     if mode == "text_to_image":
         return T2I_MODELS
+    if mode == "image_to_image":
+        return I2I_MODELS
     if mode == "text_to_video":
         return T2V_MODELS
     if mode == "image_to_video":
@@ -586,7 +782,7 @@ def find_vision_model(
     registries = (
         [models_for_mode(mode)]
         if mode
-        else [T2I_MODELS, T2V_MODELS, I2V_MODELS, BRIDGE_MODELS]
+        else [T2I_MODELS, I2I_MODELS, T2V_MODELS, I2V_MODELS, BRIDGE_MODELS]
     )
     for reg in registries:
         if raw in reg:
@@ -602,6 +798,7 @@ def default_vision_model(mode: VisionMode) -> VisionModelSpec:
     # Prefer practical defaults per mode
     for key in (
         "flux 2 pro t2i",
+        "flux 2 pro i2i",
         "veo 3.1 fast",
         "veo 3.1 fast i2v",
         "veo 3.1 fast bridge",
@@ -609,6 +806,11 @@ def default_vision_model(mode: VisionMode) -> VisionModelSpec:
         if key in reg:
             return reg[key]
     return next(iter(reg.values()))
+
+
+def is_still_mode(mode: VisionMode | str | None) -> bool:
+    """True for pure still modes (T2I / I2I) — no video duration / audio."""
+    return mode in ("text_to_image", "image_to_image")
 
 
 def duration_seconds(token: str | None) -> float:
@@ -648,11 +850,13 @@ def estimate_vision_cost(
     Video modes: **total job cost** = rate × selected duration (seconds), then
     resolution / audio multipliers. Never show a bare per-second rate as the total.
     """
-    if spec.mode == "text_to_image":
+    if is_still_mode(spec.mode):
         # Flat per-image estimates; bump for large aspect / higher resolution
         base = float(spec.cost_estimate_usd)
         asp = (aspect_ratio or spec.default_aspect or "").lower()
-        if "16:9" in asp or "9:16" in asp or "hd" in asp or "auto 4" in asp:
+        if "match" in asp:
+            pass  # source-sized edit — no bump
+        elif "16:9" in asp or "9:16" in asp or "hd" in asp or "auto 4" in asp:
             base *= 1.15
         if "auto 4" in asp or "auto_4" in asp:
             base *= 1.35
@@ -721,7 +925,7 @@ def format_vision_cost(
         aspect_ratio=aspect_ratio,
         generate_audio=generate_audio,
     )
-    if spec.mode == "text_to_image":
+    if is_still_mode(spec.mode):
         return format_job_cost(amt, unit="1 image", model=spec.label)
     dur_token = duration_token if duration_token not in (None, "") else spec.default_duration
     secs = duration_seconds(dur_token)
@@ -749,7 +953,7 @@ def build_vision_arguments(
     if not text:
         raise ValueError(
             "Enter a prompt."
-            if spec.mode == "text_to_image"
+            if is_still_mode(spec.mode)
             else "Enter a motion / shot prompt."
         )
     args["prompt"] = text
@@ -790,6 +994,12 @@ def build_vision_arguments(
             if args[k] is None or args[k] == "":
                 args.pop(k, None)
         return args
+
+    # --- Image → Image is built via fal build_edit_arguments in vision_service ---
+    if spec.mode == "image_to_image":
+        raise ValueError(
+            "Image→Image uses build_edit_arguments in vision_service (not this path)."
+        )
 
     dur = (duration or spec.default_duration or "").strip()
     if dur and spec.duration_param and spec.duration_choices:
