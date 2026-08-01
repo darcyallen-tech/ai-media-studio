@@ -119,23 +119,31 @@ Dashboards:
 | **Creative Vision** | **Text → Image**, **Image → Image**, Text → Video, Image → Video, Bridge / Connect |
 | **Frame Editor** | Aleph 2.0 keyframe edit via **Runware** + optional fal 1080p proxy |
 | **Audio** | Music, SFX, Ambience, VO, Voice clone, **Video → SFX** |
-| **Library** | History; Send to Studio / Tools / Frame Editor / Resolve |
+| **Library** | History; filters including **From Resolve**; Send to Studio / Tools / Frame Editor / Resolve |
 
 ### Creative Vision highlights
 
-- **Text → Image** — invent stills (no source). Still-only helpers (framing / lens / lighting / style); **no camera motion** on rebuild or Enhance. T2I models include Flux family, **Nano Banana** / 2 / Pro, **Seedream** 4.5 / 5 Lite / 5 Pro, Recraft (see FEATURES.txt). **# Images 1–4** multi-variant; cost × count; separate Library rows; sequential if the API is one-at-a-time (per-tab busy only).
-- **Studio Image** — same 1–4 multi-variant pattern when generating edits. Multi-reference stills when the model allows (primary + optional refs: Nano Banana, Seedream, Flux multi-ref, Grok Imagine); single-image models stay one still. Region edit uses the annotated primary only.
-- **Image → Image** — creative plate edits (Aleph round-trip); same still helpers.
+- **Text → Image** — invent stills (no source). Still-only helpers (framing / lens / lighting / style); **no camera motion** on rebuild or Enhance. T2I models include Flux family, **Nano Banana** / 2 / Pro, **Seedream** 4.5 / 5 Lite / 5 Pro, Recraft (see FEATURES.txt). **# Images 1–4** multi-variant; **cost always × count** (including sequential singles); separate Library rows; sequential if the API is one-at-a-time (per-tab busy only).
+- **Studio Image** — same 1–4 multi-variant pattern when generating edits. Est. cost scales with **# Images** even when the model max is 1 per call (e.g. Flux 2 Pro · 4 images → ~4× rate). Multi-reference stills when the model allows (primary + optional refs); single-image models stay one still. Region edit uses the annotated primary only. **Previously used** + **From Resolve** stills.
+- **Image → Image** — creative plate edits (Aleph round-trip); same still helpers; From Resolve when relevant.
 - T2I / still results: **Send to ▾ → Start frame / End frame** (bridge handoff) without re-exporting from disk.
 - Every helper that feeds Rebuild/Enhance has **(None)** — omit that dimension. Same pattern in Studio scene builders and Audio builders where helpers inject text.
 - **Creative direction for Enhance** (optional) — steers Grok Enhance only; **not** sent raw on Generate. Empty = helpers + prompt only.
 - Frame Editor ↔ Vision: **I2I source**, Start / End / I2V; I2I results pin back as **Frame Editor · keyframe**.
 - Cost labels are **job totals** (e.g. Veo standard ~$0.40/s × duration, Fast ~$0.15/s × duration on fal).
 
+### Frame Editor highlights
+
+- **Edit intent**: Apply through clip · Transition first→last · Custom timestamps (UI helper only — Aleph still gets first/last/timestamp pins + prompt).
+- Dense **filmstrip** (more samples on short clips; scroll on long); click to preview, Pin frame for a slot.
+- **Result playback**: full CONTAIN in-app video with play/pause; Show in folder / Send to Resolve stay under the player.
+- Day→night style transitions: pin day @ **first**, night @ **last**, transition prompt / Enhance.
+
 ### Tools video extras
 
 - **Denoise / Clean** — Topaz Nyx / Artemis (control-driven).
 - **Slow Mo / Interpolate** — RIFE (default) or FILM; 2×–5×.
+- **From Resolve** strips on image + video tool forms (with Previously used).
 
 Full tool and model lists: **FEATURES.txt**.
 
@@ -145,7 +153,7 @@ Full tool and model lists: **FEATURES.txt**.
 
 ### Studio → Resolve
 
-**Send to Resolve** on results (Media Pool bin for the day).  
+**Send to Resolve** on results (Media Pool bin for the day; DaVinci Resolve logo on the button).  
 Requires Resolve Studio with **External scripting = Local**.
 
 ### Resolve → Studio
@@ -158,6 +166,10 @@ Requires Resolve Studio with **External scripting = Local**.
    - Path registered when you open AI Media Studio once.
 3. Prefer **Render in Place** before send.
 4. In Studio: auto-import or **Import from Resolve**.
+
+**From Resolve** recent strips appear wherever media can load (Studio Image/Video, Tools, Vision, Frame Editor). Imports are stored in **Library** with a **Resolve** badge and a **From Resolve** filter (`origin=resolve`).
+
+**Single-instance:** a second launch (e.g. Resolve Send) focuses the open window instead of starting a second app.
 
 Details: [resolve_scripts/README.md](resolve_scripts/README.md).  
 Handoff: `data/resolve_handoff/` (auto-purge ~7 days; Settings → Clear handoff cache).
@@ -206,7 +218,7 @@ Optional field (address, client, shoot date) shared by all generate surfaces. La
 | Empty | `outputs/YYYY-MM-DD/…` (default) |
 | Set | `outputs/jobs/<safe-name>/YYYY-MM-DD/…` |
 
-Library can filter or group by job; cards show the job label. History JSON stays at the output root. No cloud sync.
+Library can filter or group by job; cards show the job label. Media filters: **All | Image | Video | Audio | From Resolve**. Handoff imports show a **Resolve** chip in All. History JSON stays at the output root. No cloud sync.
 
 **Assign later:** each Library card has **Assign to ▾** (Image / Video / Audio). Pick an existing job, **New Job / Listing…**, or **Clear job (Ungrouped)**. Metadata always updates so filters and grouping work; files under the output folder are moved into `jobs/<slug>/…` when safe. Paths outside the output root stay put.
 

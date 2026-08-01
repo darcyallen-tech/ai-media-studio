@@ -71,7 +71,7 @@ STUDIO — IMAGE
 ==============================================================================
 - Standard edit mode (full-frame prompt)
 - Region edit mode (colored boxes + per-box prompts; Seedream annotation only)
-- Source still upload + Previously used
+- Source still upload + Previously used + From Resolve (handoff stills)
 - Multi-reference stills (Standard mode, when model allows):
     Primary source + optional “Add reference” slots up to model max
     Nano Banana family / Seedream / Flux multi-ref / Grok Imagine: multi-ref
@@ -79,7 +79,9 @@ STUDIO — IMAGE
     Region mode: annotated primary only (no extra refs)
 - Model list (Flux 2 Pro/Max Edit, MAI-Image, Seedream, etc.)
 - # Images 1–4 multi-variant (when model multi-outputs in one call, or sequential
-  singles if the API is one-at-a-time). Cost estimate = per-image × count.
+  singles if the API is one-at-a-time — e.g. Flux 2 Pro max 1 per call).
+  Est. cost always = per-image rate × selected count (never capped at 1× for
+  sequential batch). Label e.g. $0.12 · 4 images · 4 sequential runs (Model).
   Each still is a separate Library item (Send to ▾ per variant). Per-tab busy only.
 - Strength / relevant controls
 - Grok Enhance (vision-aware, model-specific, scenario-aware; can attach/mention
@@ -102,6 +104,7 @@ STUDIO — VIDEO
 ==============================================================================
 Workspaces include Received, Blank Canvas, Camera Lock (and related).
 - Source video + reference still (from Image “use as reference”)
+- Recently from Resolve (clips / stills from handoff history)
 - Camera-lock style prompts for furniture / day-night / etc.
 - Models: Kling family, Seedance 2.0 I2V/V2V, others on fal
 - Grok Enhance on video prompts
@@ -112,8 +115,9 @@ Workspaces include Received, Blank Canvas, Camera Lock (and related).
 TOOLS
 ==============================================================================
 Split: Image tools | Video tools
-Large result viewer with Overlay / A/B where applicable
-Previously used sources on tools that accept media
+Large result viewer with Overlay / A/B where applicable (CONTAIN previews)
+Previously used + From Resolve strips on tools that accept media
+  (image tools: handoff stills; video tools: handoff clips)
 Per-tab busy scopes so long jobs do not freeze every tab
 
 Image tools:
@@ -147,8 +151,9 @@ Modes (left → right):
     Still photography helpers:
       Framing / composition · Lens look · Lighting · Still style presets
       Each helper includes (None) = omit from Rebuild + Enhance
-    Multi-variant: # Images 1–4 (or model API max per call)
-      Cost estimate = per-image × count
+    Multi-variant: # Images 1–4 (UI batch; sequential when API is 1-at-a-time)
+      Cost estimate = per-image × selected count (full job total, not capped at
+      API max). Label notes “N sequential runs” when batching singles.
       Multi-output in one fal call when the model allows; else sequential
       singles (vision tab busy only — not a global queue)
       Each still lands as a separate Library item with its own Send to ▾
@@ -157,8 +162,8 @@ Modes (left → right):
     bridge handoff, plus Studio / Frame Editor / Tools / Resolve as elsewhere
 
   Image → Image (I2I) — creative still edit (Aleph plate round-trip)
-    Source still required (upload, Previously used, or Send from Frame Editor /
-    Library / Studio). Single source for v1 (not multi-ref).
+    Source still required (upload, Previously used, From Resolve, or Send from
+    Frame Editor / Library / Studio). Single source for v1 (not multi-ref).
     Models (fal edit): Flux 2 Pro / Max / Flex, Flux Kontext Pro,
                        Nano Banana / 2 / Pro edit, Seedream 5 Pro edit
     Strength slider when the API exposes it (Flux family)
@@ -191,9 +196,11 @@ Shared Vision UI:
   - Cost labels are job totals, e.g.
       Est. cost: $3.20 · 8s (Veo 3.1)
       Est. cost: $0.03 · 1 image (Flux 2 Pro (T2I))
+      Est. cost: $0.12 · 4 images (Flux 2 Pro (T2I))
     never a bare unit rate alone
   - Optional cost guard (Settings: warn at $2+ / $5+; default off)
-  - Result: play (video) / preview (still), Library, Resolve, Send to ▾
+  - Result: play (video, CONTAIN) / preview (still), Library, Resolve, Send to ▾
+  - Previously used + From Resolve stills on I2I / I2V / bridge start where relevant
 
 Helper (None) also applies to Studio scene-builder helpers (style / density /
 camera) and Audio prompt builders (Music / SFX / Ambience / Video→SFX chips)
@@ -204,14 +211,23 @@ FRAME EDITOR (Aleph 2.0)
 ==============================================================================
 Requires Runware API key — not fal (fal only for optional 1080p proxy).
 
-Keyframe-guided video edit:
-  - Upload source video
-  - Auto-downscale to 1080p-class proxy when needed (fal scale-video)
-  - Filmstrip of sampled frames (JPEG thumbs; LRU-bounded cache)
-  - Up to 5 keyframes (first / last / timestamp)
+Keyframe-guided video edit (Aleph frameImages: first | last | timestamp + prompt):
+  - Upload source video; Previously used + From Resolve (stills → pin, clips → source)
+  - Auto-downscale to 1080p-class proxy when needed (fal scale-video); 2–30s source
+  - Edit intent helper (UI only — no invented API params):
+      Apply through clip | Transition first→last | Custom timestamps
+      One keyframe ≈ apply look through clip; first+last ≈ transition between looks
+      Day→night tip: pin day @ first, night @ last, then Generate
+  - Dense filmstrip (more thumbs on short clips; more + horizontal scroll on long)
+      Click = preview; Pin frame = keyframe slot; selected / pinned times highlighted
+  - Up to 5 keyframes with clear position badges (first / last / 1.61s) + image name
   - Send frame to Studio for cleanup gens → pin still back
-  - Prompt + Grok Enhance
+  - Prompt + Grok Enhance (transition intent steers dual-anchor language;
+      motion / architecture locked; change-only wording)
+  - Sticky Generate + est. cost on left rail
   - Generate via Aleph 2.0
+  - Result: full in-app play (CONTAIN, no crop) with play/pause controls;
+      Show in folder / Send to Resolve / Send to ▾ under player (reachable)
   - Result → Library, Show in folder, Send to Resolve
 
 ==============================================================================
@@ -233,7 +249,10 @@ AUDIO
 ==============================================================================
 LIBRARY
 ==============================================================================
-- Filters: All | Image | Video | Audio
+- Filters: All | Image | Video | Audio | From Resolve
+- From Resolve: handoff-origin stills/clips (plugin Send or Import from Resolve)
+- Resolve badge on cards in All (and other filters) when origin=resolve
+- History stores origin=resolve on import so filter/badge stay reliable
 - Job / Listing dropdown: All jobs or a specific label from history
 - Visual group headers by job when viewing All jobs
 - Job label shown on cards when set
@@ -250,7 +269,7 @@ LIBRARY
     Top models + by provider; missing or $0 cost rows skipped
     Also summarized in Settings → Local spend
 - Hide missing media (Settings)
-- Thumbnails + metadata (model, job, scenario, cost, time)
+- Thumbnails + metadata (model, job, scenario, cost, time, Resolve badge)
 - Send to ▾ (Image, Video, tools, Frame Editor, Resolve, etc.)
 - Show in folder (uses updated path after assign-move)
 - Open large (stills / posters)
@@ -259,11 +278,17 @@ LIBRARY
 ==============================================================================
 RESOLVE INTEGRATION
 ==============================================================================
-- Import from Resolve (stills / clips via handoff folder)
+- Import from Resolve (stills / clips via handoff folder) + auto-watch handoff
 - Send to Resolve from Studio, Tools, Frame Editor, Audio, Library
+    (DaVinci Resolve logo asset on Send buttons)
+- From Resolve strips wherever media can load:
+    Studio Image / Video, Tools image + video forms, Creative Vision
+    (I2I / start frames), Frame Editor (stills → pin, clips → source)
+- Handoff import records Library rows with origin=resolve
 - Studio path auto-detected (no hardcoded personal path)
 - Prefer graded proxies; Render in Place when needed
 - Handoff auto-purge (~7 days / ~200 files) + Clear handoff cache
+- Single-instance: Resolve Send reuses the open Studio window (no second UI)
 
 ==============================================================================
 SETTINGS / DISK SAFETY
@@ -293,7 +318,9 @@ UI cost lines are estimated job totals, not bare rates:
   Est. cost: $X.XX · {unit} ({model})
   e.g. $3.20 · 8s for Veo 3.1 standard ($0.40/s × 8s on fal)
   e.g. $0.90 · 6s for Veo 3.1 Fast ($0.15/s × 6s)
-  e.g. $0.03 · 1 image for Flux T2I
+  e.g. $0.03 · 1 image for Flux T2I / Studio Image edit
+  e.g. $0.12 · 4 images · 4 sequential runs when API is 1-image-at-a-time
+Still batch: always rate × selected # Images (Studio Image, Vision T2I, …).
 Estimates are conservative UI ballparks, not billing. No invented audio
 surcharge unless the provider quotes one.
 
