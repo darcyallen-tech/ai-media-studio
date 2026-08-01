@@ -1,5 +1,5 @@
 """
-Creative Vision model registry — text-to-video, image-to-video, bridge shots.
+Creative Vision model registry — text-to-image, text-to-video, I2V, bridge.
 
 Cinematic invention only (not listing camera-lock staging). Costs are
 intentionally conservative ballparks — show them before generate.
@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-VisionMode = Literal["text_to_video", "image_to_video", "bridge"]
+VisionMode = Literal["text_to_image", "text_to_video", "image_to_video", "bridge"]
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,324 @@ class VisionModelSpec:
     supports_end_frame: bool = False
     extra_defaults: dict[str, Any] = field(default_factory=dict)
 
+
+# Friendly aspect labels for Flux / Seedream image_size enums
+T2I_ASPECT_CHOICES: tuple[str, ...] = (
+    "16:9 landscape",
+    "9:16 portrait",
+    "4:3 landscape",
+    "3:4 portrait",
+    "1:1 square",
+    "1:1 square HD",
+)
+
+# Nano Banana family uses colon aspect ratios (+ resolution on 2/Pro)
+T2I_NANO_ASPECT_CHOICES: tuple[str, ...] = (
+    "16:9",
+    "9:16",
+    "4:3",
+    "3:4",
+    "1:1",
+    "3:2",
+    "2:3",
+    "21:9",
+)
+
+T2I_NANO2_RES_CHOICES: tuple[str, ...] = ("0.5K", "1K", "2K", "4K")
+T2I_NANO_PRO_RES_CHOICES: tuple[str, ...] = ("1K", "2K", "4K")
+
+# Seedream: image_size presets (+ auto 2K/4K where supported)
+T2I_SEEDREAM_ASPECT_CHOICES: tuple[str, ...] = (
+    "16:9 landscape",
+    "9:16 portrait",
+    "4:3 landscape",
+    "3:4 portrait",
+    "1:1 square",
+    "1:1 square HD",
+    "Auto 2K",
+    "Auto 4K",
+)
+
+_T2I_ASPECT_TO_IMAGE_SIZE: dict[str, str] = {
+    "16:9 landscape": "landscape_16_9",
+    "9:16 portrait": "portrait_16_9",
+    "4:3 landscape": "landscape_4_3",
+    "3:4 portrait": "portrait_4_3",
+    "1:1 square": "square",
+    "1:1 square hd": "square_hd",
+    "landscape_16_9": "landscape_16_9",
+    "portrait_16_9": "portrait_16_9",
+    "landscape_4_3": "landscape_4_3",
+    "portrait_4_3": "portrait_4_3",
+    "square": "square",
+    "square_hd": "square_hd",
+    "auto 2k": "auto_2K",
+    "auto 4k": "auto_4K",
+    "auto 1k": "auto_1K",
+    "auto_2k": "auto_2K",
+    "auto_4k": "auto_4K",
+    "auto_1k": "auto_1K",
+}
+
+
+def map_t2i_image_size(aspect_label: str | None) -> str:
+    raw = (aspect_label or "").strip().lower()
+    if not raw:
+        return "landscape_16_9"
+    return _T2I_ASPECT_TO_IMAGE_SIZE.get(raw, "landscape_16_9")
+
+
+def map_t2i_aspect_colon(aspect_label: str | None) -> str:
+    """Map UI aspect label → '16:9' style string for Nano Banana / Recraft / Ultra."""
+    raw = (aspect_label or "").strip().lower()
+    if not raw:
+        return "16:9"
+    # Already colon form
+    for tok in (
+        "21:9",
+        "16:9",
+        "9:16",
+        "4:3",
+        "3:4",
+        "3:2",
+        "2:3",
+        "5:4",
+        "4:5",
+        "1:1",
+    ):
+        if tok in raw.replace(" ", ""):
+            return tok
+    size = map_t2i_image_size(aspect_label)
+    return {
+        "landscape_16_9": "16:9",
+        "portrait_16_9": "9:16",
+        "landscape_4_3": "4:3",
+        "portrait_4_3": "3:4",
+        "square": "1:1",
+        "square_hd": "1:1",
+    }.get(size, "16:9")
+
+
+# ---------------------------------------------------------------------------
+# Text → Image (pure T2I — no source still required)
+# ---------------------------------------------------------------------------
+
+T2I_MODELS: dict[str, VisionModelSpec] = {
+    "flux 2 pro t2i": VisionModelSpec(
+        key="flux 2 pro t2i",
+        label="Flux 2 Pro (T2I)",
+        mode="text_to_image",
+        endpoint="fal-ai/flux-2-pro",
+        cost_estimate_usd=0.04,
+        notes=(
+            "Default. Studio-grade Flux 2 Pro text→image. Nail an end/start still "
+            "cheaply before expensive Veo bridge. ~$0.03–0.05 / image."
+        ),
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=T2I_ASPECT_CHOICES,
+        default_aspect="16:9 landscape",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "4"},
+    ),
+    "flux 2 t2i": VisionModelSpec(
+        key="flux 2 t2i",
+        label="Flux 2 (T2I · cheaper)",
+        mode="text_to_image",
+        endpoint="fal-ai/flux-2",
+        cost_estimate_usd=0.02,
+        notes="Flux 2 [dev] text→image — faster/cheaper iteration. ~$0.012/MP.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=T2I_ASPECT_CHOICES,
+        default_aspect="16:9 landscape",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        extra_defaults={"num_images": 1, "output_format": "jpeg"},
+    ),
+    "flux 2 flex t2i": VisionModelSpec(
+        key="flux 2 flex t2i",
+        label="Flux 2 Flex (T2I)",
+        mode="text_to_image",
+        endpoint="fal-ai/flux-2-flex",
+        cost_estimate_usd=0.05,
+        notes="Flux 2 Flex — more control / quality tradeoff. ~$0.05/MP.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=T2I_ASPECT_CHOICES,
+        default_aspect="16:9 landscape",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        extra_defaults={"num_images": 1, "output_format": "jpeg"},
+    ),
+    "flux 1.1 pro ultra t2i": VisionModelSpec(
+        key="flux 1.1 pro ultra t2i",
+        label="Flux 1.1 Pro Ultra (T2I)",
+        mode="text_to_image",
+        endpoint="fal-ai/flux-pro/v1.1-ultra",
+        cost_estimate_usd=0.06,
+        notes="Flux 1.1 Pro Ultra — high-res photoreal stills (up to ~2K).",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=T2I_ASPECT_CHOICES,
+        default_aspect="16:9 landscape",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "2"},
+    ),
+    "recraft v3 t2i": VisionModelSpec(
+        key="recraft v3 t2i",
+        label="Recraft V3 (T2I)",
+        mode="text_to_image",
+        endpoint="fal-ai/recraft/v3/text-to-image",
+        cost_estimate_usd=0.04,
+        notes="Recraft V3 text→image — strong design/illustration alternative.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=("16:9 landscape", "9:16 portrait", "1:1 square", "4:3 landscape"),
+        default_aspect="16:9 landscape",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        extra_defaults={},
+    ),
+    # --- Nano Banana family ---
+    "nano banana t2i": VisionModelSpec(
+        key="nano banana t2i",
+        label="Nano Banana (T2I)",
+        mode="text_to_image",
+        endpoint="fal-ai/nano-banana",
+        cost_estimate_usd=0.04,
+        notes="Nano Banana text→image — solid general stills, many aspect ratios.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=T2I_NANO_ASPECT_CHOICES,
+        default_aspect="16:9",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "4"},
+    ),
+    "nano banana 2 t2i": VisionModelSpec(
+        key="nano banana 2 t2i",
+        label="Nano Banana 2 (T2I · fast)",
+        mode="text_to_image",
+        endpoint="fal-ai/nano-banana-2",
+        cost_estimate_usd=0.06,
+        notes=(
+            "Nano Banana 2 — faster T2I with resolution control (0.5K–4K). "
+            "Good for quick end-frame exploration before video."
+        ),
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=T2I_NANO_ASPECT_CHOICES,
+        default_aspect="16:9",
+        resolution_choices=T2I_NANO2_RES_CHOICES,
+        default_resolution="1K",
+        supports_audio=False,
+        supports_negative=False,
+        extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "4"},
+    ),
+    "nano banana pro t2i": VisionModelSpec(
+        key="nano banana pro t2i",
+        label="Nano Banana Pro (T2I)",
+        mode="text_to_image",
+        endpoint="fal-ai/nano-banana-pro",
+        cost_estimate_usd=0.12,
+        notes=(
+            "Nano Banana Pro — higher adherence T2I; resolution 1K/2K/4K. "
+            "Pricier stills; great when prompt fidelity matters."
+        ),
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=T2I_NANO_ASPECT_CHOICES,
+        default_aspect="16:9",
+        resolution_choices=T2I_NANO_PRO_RES_CHOICES,
+        default_resolution="1K",
+        supports_audio=False,
+        supports_negative=False,
+        extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "4"},
+    ),
+    # --- Seedream family ---
+    "seedream 4.5 t2i": VisionModelSpec(
+        key="seedream 4.5 t2i",
+        label="Seedream 4.5 (T2I)",
+        mode="text_to_image",
+        endpoint="fal-ai/bytedance/seedream/v4.5/text-to-image",
+        cost_estimate_usd=0.05,
+        notes="ByteDance Seedream 4.5 text→image — strong detail / listing-friendly stills.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=T2I_SEEDREAM_ASPECT_CHOICES,
+        default_aspect="16:9 landscape",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        extra_defaults={"num_images": 1, "enable_safety_checker": True},
+    ),
+    "seedream 5 lite t2i": VisionModelSpec(
+        key="seedream 5 lite t2i",
+        label="Seedream 5.0 Lite (T2I · cheaper)",
+        mode="text_to_image",
+        endpoint="fal-ai/bytedance/seedream/v5/lite/text-to-image",
+        cost_estimate_usd=0.03,
+        notes="Seedream 5 Lite — cheaper/faster Seedream 5 T2I for iteration.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=T2I_SEEDREAM_ASPECT_CHOICES,
+        default_aspect="16:9 landscape",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        extra_defaults={"num_images": 1, "enable_safety_checker": True},
+    ),
+    "seedream 5 pro t2i": VisionModelSpec(
+        key="seedream 5 pro t2i",
+        label="Seedream 5.0 Pro (T2I)",
+        mode="text_to_image",
+        endpoint="bytedance/seedream/v5/pro/text-to-image",
+        cost_estimate_usd=0.07,
+        notes=(
+            "Seedream 5 Pro text→image — highest Seedream T2I quality on fal "
+            "(stable pro T2I endpoint)."
+        ),
+        duration_choices=(),
+        default_duration="",
+        # Pro image_size: no auto_4K; keep Auto 2K + presets
+        aspect_choices=(
+            "16:9 landscape",
+            "9:16 portrait",
+            "4:3 landscape",
+            "3:4 portrait",
+            "1:1 square",
+            "1:1 square HD",
+            "Auto 2K",
+        ),
+        default_aspect="16:9 landscape",
+        resolution_choices=(),
+        default_resolution="",
+        supports_audio=False,
+        supports_negative=False,
+        extra_defaults={
+            "num_images": 1,
+            "enable_safety_checker": True,
+            "output_format": "jpeg",
+        },
+    ),
+}
 
 # ---------------------------------------------------------------------------
 # Text → Video
@@ -238,6 +556,8 @@ BRIDGE_MODELS: dict[str, VisionModelSpec] = {
 
 
 def models_for_mode(mode: VisionMode) -> dict[str, VisionModelSpec]:
+    if mode == "text_to_image":
+        return T2I_MODELS
     if mode == "text_to_video":
         return T2V_MODELS
     if mode == "image_to_video":
@@ -259,7 +579,7 @@ def find_vision_model(
     registries = (
         [models_for_mode(mode)]
         if mode
-        else [T2V_MODELS, I2V_MODELS, BRIDGE_MODELS]
+        else [T2I_MODELS, T2V_MODELS, I2V_MODELS, BRIDGE_MODELS]
     )
     for reg in registries:
         if raw in reg:
@@ -272,8 +592,9 @@ def find_vision_model(
 
 def default_vision_model(mode: VisionMode) -> VisionModelSpec:
     reg = models_for_mode(mode)
-    # Prefer Fast variants as practical defaults
+    # Prefer practical defaults per mode
     for key in (
+        "flux 2 pro t2i",
         "veo 3.1 fast",
         "veo 3.1 fast i2v",
         "veo 3.1 fast bridge",
@@ -298,8 +619,29 @@ def estimate_vision_cost(
     *,
     duration_token: str | None = None,
     resolution: str | None = None,
+    aspect_ratio: str | None = None,
 ) -> float:
     """Conservative USD ballpark for UI (not billing)."""
+    if spec.mode == "text_to_image":
+        # Flat per-image estimates; bump for large aspect / higher resolution
+        base = float(spec.cost_estimate_usd)
+        asp = (aspect_ratio or spec.default_aspect or "").lower()
+        if "16:9" in asp or "9:16" in asp or "hd" in asp or "auto 4" in asp:
+            base *= 1.15
+        if "auto 4" in asp or "auto_4" in asp:
+            base *= 1.35
+        res = (resolution or spec.default_resolution or "").lower()
+        if res in ("4k", "4K".lower()):
+            base *= 2.4
+        elif res in ("2k", "2K".lower()):
+            base *= 1.55
+        elif res in ("0.5k", "0.5K".lower()):
+            base *= 0.7
+        # Nano Banana Pro is steeper at high res
+        if "nano-banana-pro" in spec.endpoint and res in ("2k", "4k"):
+            base *= 1.15
+        return round(max(0.01, base), 3)
+
     secs = duration_seconds(duration_token or spec.default_duration)
     base = spec.cost_estimate_usd
     if spec.cost_per_second is not None and secs > 0:
@@ -319,10 +661,16 @@ def format_vision_cost(
     *,
     duration_token: str | None = None,
     resolution: str | None = None,
+    aspect_ratio: str | None = None,
 ) -> str:
     amt = estimate_vision_cost(
-        spec, duration_token=duration_token, resolution=resolution
+        spec,
+        duration_token=duration_token,
+        resolution=resolution,
+        aspect_ratio=aspect_ratio,
     )
+    if spec.mode == "text_to_image":
+        return f"Est. cost: ${amt:.2f} · still ({spec.label})"
     secs = duration_seconds(duration_token or spec.default_duration)
     return f"Est. cost: ${amt:.2f} · ~{secs:.0f}s ({spec.label})"
 
@@ -345,11 +693,52 @@ def build_vision_arguments(
     args: dict[str, Any] = dict(spec.extra_defaults)
     text = (prompt or "").strip()
     if not text:
-        raise ValueError("Enter a motion / shot prompt.")
+        raise ValueError(
+            "Enter a prompt."
+            if spec.mode == "text_to_image"
+            else "Enter a motion / shot prompt."
+        )
     args["prompt"] = text
 
+    # --- Text → Image (no media uploads) ---
+    if spec.mode == "text_to_image":
+        ep = spec.endpoint.lower()
+        size = map_t2i_image_size(aspect_ratio or spec.default_aspect)
+        colon_ar = map_t2i_aspect_colon(aspect_ratio or spec.default_aspect)
+        res = (resolution or spec.default_resolution or "").strip()
+
+        if "nano-banana" in ep:
+            # Nano Banana / 2 / Pro: aspect_ratio "16:9"; 2+Pro also resolution
+            args["aspect_ratio"] = colon_ar
+            if spec.resolution_choices:
+                # Map loose UI value to API enum (0.5K, 1K, 2K, 4K)
+                picked = None
+                for a in spec.resolution_choices:
+                    if str(a).lower() == res.lower():
+                        picked = str(a)
+                        break
+                args["resolution"] = picked or (spec.default_resolution or "1K")
+        elif "seedream" in ep or "bytedance" in ep:
+            # Seedream T2I: image_size preset or auto_2K / auto_4K
+            args["image_size"] = size
+        elif "recraft" in ep:
+            args["aspect_ratio"] = colon_ar
+        elif "flux-pro/v1.1-ultra" in ep or "flux-pro/v1.1" in ep:
+            args["aspect_ratio"] = colon_ar
+        else:
+            # Flux 2 family: image_size enum
+            args["image_size"] = size
+
+        neg = (negative_prompt or "").strip()
+        if neg and spec.supports_negative:
+            args["negative_prompt"] = neg
+        for k in list(args.keys()):
+            if args[k] is None or args[k] == "":
+                args.pop(k, None)
+        return args
+
     dur = (duration or spec.default_duration or "").strip()
-    if dur and spec.duration_param:
+    if dur and spec.duration_param and spec.duration_choices:
         # Normalize: some models want "8s", others "8" / "5"
         if "veo" in spec.endpoint or "luma" in spec.endpoint:
             if not dur.endswith("s") and dur.isdigit():

@@ -1,4 +1,4 @@
-"""Run Creative Vision jobs (T2V / I2V / bridge) via fal."""
+"""Run Creative Vision jobs (T2I / T2V / I2V / bridge) via fal."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from media_studio.errors import friendly_error
 from media_studio.fal.client import (
     FalClientError,
     download_url,
+    extract_image_urls,
     extract_video_url,
     subscribe,
     upload_file,
@@ -65,9 +66,9 @@ def run_vision(
     on_progress: ProgressCallback | None = None,
 ) -> VisionResult:
     """
-    Generate a Creative Vision clip.
+    Generate a Creative Vision still (T2I) or clip (T2V / I2V / bridge).
 
-    Indexes successful outputs in Library as Video (job_kind=creative_vision).
+    T2I indexes as Image; video modes as creative_vision (Video filter).
     """
     spec = find_vision_model(model_label, mode) or default_vision_model(mode)
 
@@ -76,20 +77,25 @@ def run_vision(
             on_progress(msg)
 
     est = estimate_vision_cost(
-        spec, duration_token=duration or spec.default_duration, resolution=resolution
+        spec,
+        duration_token=duration or spec.default_duration,
+        resolution=resolution,
+        aspect_ratio=aspect_ratio,
     )
     est_lbl = format_cost_label(est, estimate=True)
     progress(f"{spec.label} · {est_lbl}")
     progress(f"Endpoint: {spec.endpoint}")
 
-    # Upload media
+    # Upload media (not needed for pure T2I)
     image_url = None
     first_url = None
     last_url = None
     ref_urls: list[str] = []
 
     try:
-        if mode == "image_to_video":
+        if mode == "text_to_image":
+            pass  # no uploads
+        elif mode == "image_to_video":
             ip = Path(image_path) if image_path else None
             if not ip or not ip.is_file():
                 return VisionResult(
@@ -199,16 +205,52 @@ def run_vision(
     metrics = format_render_metrics(render_s, cost_usd, cost_is_estimate=is_est)
     cost_lbl = format_cost_label(cost_usd, estimate=is_est)
 
-    out_url = extract_video_url(result)
-    if not out_url:
-        return VisionResult(
-            ok=False,
-            model_key=spec.key,
-            endpoint=spec.endpoint,
-            status=f"{spec.label}: fal returned no video.",
-            cost_label=cost_lbl,
-            metrics_line=metrics,
-        )
+    is_t2i = mode == "text_to_image" or spec.mode == "text_to_image"
+    if is_t2i:
+        urls = extract_image_urls(result)
+        out_url = urls[0] if urls else None
+        if not out_url:
+            # Nested {image: {url}} already handled in extract_image_urls
+            img = result.get("image") if isinstance(result, dict) else None
+            if isinstance(img, dict) and img.get("url"):
+                out_url = str(img["url"])
+            elif isinstance(img, str):
+                out_url = img
+        if not out_url:
+            return VisionResult(
+                ok=False,
+                model_key=spec.key,
+                endpoint=spec.endpoint,
+                status=f"{spec.label}: fal returned no image.",
+                cost_label=cost_lbl,
+                metrics_line=metrics,
+            )
+        ext = ".jpg"
+        low = out_url.lower().split("?")[0]
+        if low.endswith(".png"):
+            ext = ".png"
+        elif low.endswith(".webp"):
+            ext = ".webp"
+        kind_tag = "creative-vision-t2i"
+        job_kind = "image"
+        scenario = "creative_vision_t2i"
+        media_word = "image"
+    else:
+        out_url = extract_video_url(result)
+        if not out_url:
+            return VisionResult(
+                ok=False,
+                model_key=spec.key,
+                endpoint=spec.endpoint,
+                status=f"{spec.label}: fal returned no video.",
+                cost_label=cost_lbl,
+                metrics_line=metrics,
+            )
+        ext = ".mp4"
+        kind_tag = "creative-vision"
+        job_kind = "creative_vision"
+        scenario = "creative_vision"
+        media_word = "video"
 
     stamp = timestamp_now()
     media_dir = job_media_dir(output_dir, stamp=stamp)
@@ -216,9 +258,9 @@ def run_vision(
         prompt or "vision",
         spec.key,
         stamp=stamp,
-        kind="creative-vision",
+        kind=kind_tag,
     )
-    dest = unique_path(media_dir, stem, ".mp4")
+    dest = unique_path(media_dir, stem, ext)
 
     try:
         download_url(out_url, dest, on_progress=progress, timeout=900.0)
@@ -236,12 +278,17 @@ def run_vision(
     resolved = str(dest.resolve())
     status = (
         f"{spec.label} OK. Saved {Path(resolved).name} → {media_dir.name}/. "
-        f"{metrics}. Use Show in folder or Send to Resolve."
+        f"{metrics}. "
+        + (
+            "Send to Start / End frame for a bridge, or Studio Image."
+            if is_t2i
+            else "Use Show in folder or Send to Resolve."
+        )
     )
 
     try:
         append_history(
-            job_kind="creative_vision",
+            job_kind=job_kind,
             model=spec.label,
             prompt=prompt or "",
             files=[resolved],
@@ -249,7 +296,7 @@ def run_vision(
             notes=[spec.notes] if spec.notes else [f"mode={mode}"],
             output_dir=output_dir,
             timestamp=stamp,
-            scenario="creative_vision",
+            scenario=scenario,
         )
     except Exception:
         pass

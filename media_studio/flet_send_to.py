@@ -195,6 +195,7 @@ def send_to_vision(
     path: str,
     *,
     as_video: bool = False,
+    as_end_frame: bool = False,
     status_cb: Callable[[str], None] | None = None,
 ) -> Callable:
     async def _click(_e: ft.ControlEvent) -> None:
@@ -202,6 +203,8 @@ def send_to_vision(
         if vv is not None:
             if as_video and hasattr(vv, "receive_video"):
                 vv.receive_video(path)
+            elif as_end_frame and hasattr(vv, "receive_end_frame"):
+                vv.receive_end_frame(path)
             elif hasattr(vv, "receive_start_frame"):
                 vv.receive_start_frame(path)
             elif hasattr(vv, "load_start_image"):
@@ -212,7 +215,10 @@ def send_to_vision(
         if switch:
             switch()
         if status_cb:
-            status_cb(f"Sent to Creative Vision: {Path(path).name}")
+            role = "end frame" if as_end_frame else "start frame"
+            if as_video:
+                role = "video"
+            status_cb(f"Sent to Creative Vision ({role}): {Path(path).name}")
 
     return _click
 
@@ -332,6 +338,14 @@ def build_send_menu_items(
                 _item(
                     "Creative Vision (start frame)",
                     send_to_vision(state, img, as_video=False, status_cb=_ok),
+                )
+            )
+            items.append(
+                _item(
+                    "Creative Vision (end frame)",
+                    send_to_vision(
+                        state, img, as_video=False, as_end_frame=True, status_cb=_ok
+                    ),
                 )
             )
         if include_resolve:
