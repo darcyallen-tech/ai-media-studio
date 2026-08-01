@@ -159,13 +159,12 @@ class ToolsResultPane:
         )
 
         # --- stage (overlay for stills) ---
+        # Non-positioned + BoxFit.CONTAIN: fit inside stage, preserve aspect,
+        # letterbox/pillarbox on dark stage — never crop on wide windows.
         self.overlay_base = ft.Image(
             src="",
             fit=ft.BoxFit.CONTAIN,
-            left=0,
-            top=0,
-            right=0,
-            bottom=0,
+            expand=True,
             visible=False,
             gapless_playback=True,
         )
@@ -178,32 +177,24 @@ class ToolsResultPane:
         self.overlay_gen_layer = ft.Container(
             content=self.overlay_gen_img,
             opacity=0.5,
-            left=0,
-            top=0,
-            right=0,
-            bottom=0,
+            expand=True,
             visible=False,
             alignment=ft.Alignment.CENTER,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            # No HARD_EDGE crop of letterboxed CONTAIN frames
+            clip_behavior=ft.ClipBehavior.NONE,
         )
         # Single result image when no A/B pair
         self.single_result = ft.Image(
             src="",
             fit=ft.BoxFit.CONTAIN,
-            left=0,
-            top=0,
-            right=0,
-            bottom=0,
+            expand=True,
             visible=False,
             gapless_playback=True,
         )
         self.video_poster = ft.Image(
             src="",
             fit=ft.BoxFit.CONTAIN,
-            left=0,
-            top=0,
-            right=0,
-            bottom=0,
+            expand=True,
             visible=False,
             gapless_playback=True,
         )
@@ -225,10 +216,7 @@ class ToolsResultPane:
                 tight=True,
             ),
             alignment=ft.Alignment.CENTER,
-            left=0,
-            top=0,
-            right=0,
-            bottom=0,
+            expand=True,
             visible=False,
         )
         # In-app video result (shared with Creative Vision / Frame Editor)
@@ -265,7 +253,7 @@ class ToolsResultPane:
             border=ft.Border.all(1, BORDER),
             visible=True,
         )
-        # expand only when a result is showing (see _apply_visuals)
+        # Dark letterbox stage: expands with pane; images CONTAIN inside
         self.stage = ft.Container(
             content=self.overlay_stack,
             expand=False,
@@ -273,7 +261,7 @@ class ToolsResultPane:
             border_radius=8,
             border=ft.Border.all(1, BORDER),
             alignment=ft.Alignment.CENTER,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            clip_behavior=ft.ClipBehavior.NONE,
             visible=False,
         )
 
@@ -406,6 +394,7 @@ class ToolsResultPane:
             [rail, self._workspace],
             spacing=10,
             expand=False,
+            # STRETCH when result open so stage height grows with window
             vertical_alignment=ft.CrossAxisAlignment.START,
         )
         self._root_col = ft.Column(
@@ -583,6 +572,7 @@ class ToolsResultPane:
                 self._workspace.expand = False
                 self._workspace.tight = True
                 self._body_row.expand = False
+                self._body_row.vertical_alignment = ft.CrossAxisAlignment.START
                 self._root_col.expand = False
                 self._root_col.tight = True
             except Exception:
@@ -599,6 +589,8 @@ class ToolsResultPane:
             self._workspace.expand = True
             self._workspace.tight = False
             self._body_row.expand = True
+            # Stretch so stage height tracks window; width from CapRight expand
+            self._body_row.vertical_alignment = ft.CrossAxisAlignment.STRETCH
             self._root_col.expand = True
             self._root_col.tight = False
         except Exception:
@@ -614,6 +606,13 @@ class ToolsResultPane:
         try:
             self.video_player.control.visible = False
             self.video_player.control.expand = False
+        except Exception:
+            pass
+        try:
+            self.overlay_base.fit = ft.BoxFit.CONTAIN
+            self.overlay_gen_img.fit = ft.BoxFit.CONTAIN
+            self.single_result.fit = ft.BoxFit.CONTAIN
+            self.video_poster.fit = ft.BoxFit.CONTAIN
         except Exception:
             pass
 
@@ -649,7 +648,17 @@ class ToolsResultPane:
             try:
                 self.video_player.set_result(res, note=f"Tools · {name}")
                 self.video_player.control.visible = True
-                self.video_player.control.expand = False
+                self.video_player.control.expand = True
+                try:
+                    self.video_player.control.height = None  # type: ignore[assignment]
+                except Exception:
+                    pass
+                if getattr(self.video_player, "_video", None) is not None:
+                    try:
+                        self.video_player._video.fit = ft.BoxFit.CONTAIN
+                        self.video_player._video.expand = True
+                    except Exception:
+                        pass
                 has_player = getattr(self.video_player, "_video", None) is not None
             except Exception:
                 has_player = False
@@ -926,6 +935,7 @@ class ToolsResultPane:
                 height=body_h,
                 bgcolor="#0a0c10",
                 alignment=ft.Alignment.CENTER,
+                clip_behavior=ft.ClipBehavior.NONE,
             ),
             actions=[
                 ft.TextButton("Close", on_click=_close),

@@ -826,17 +826,13 @@ class StudioImageView:
 
         # Instant overlay: Stack source under generation + Container.opacity
         # (no PIL re-blend on slider — stays smooth).
-        # Images are positioned to fill the stage (left/top/right/bottom) so they
-        # never collapse to 0×0 grey inside an expand Stack.
+        # CONTAIN + expand (not edge-pinned) so wide windows letterbox, never crop.
         self._overlay_opacity = 0.5
         self._ab_gen: bool | None = None  # None = slider; True/False = force gen/source
         self.overlay_base = ft.Image(
             src="",
             fit=ft.BoxFit.CONTAIN,
-            left=0,
-            top=0,
-            right=0,
-            bottom=0,
+            expand=True,
             visible=False,
             gapless_playback=True,
         )
@@ -849,13 +845,10 @@ class StudioImageView:
         self.overlay_gen_layer = ft.Container(
             content=self.overlay_gen_img,
             opacity=0.5,
-            left=0,
-            top=0,
-            right=0,
-            bottom=0,
+            expand=True,
             visible=False,
             alignment=ft.Alignment.CENTER,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            clip_behavior=ft.ClipBehavior.NONE,
         )
         self.overlay_stack = ft.Stack(
             [
@@ -891,7 +884,7 @@ class StudioImageView:
             border_radius=8,
             border=ft.Border.all(1, BORDER),
             alignment=ft.Alignment.CENTER,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            clip_behavior=ft.ClipBehavior.NONE,
             visible=False,
         )
 
@@ -1062,6 +1055,7 @@ class StudioImageView:
             expand=False,
             vertical_alignment=ft.CrossAxisAlignment.START,
         )
+        # When media is present, STRETCH so stage height grows with window (CONTAIN letterbox)
         self._right_col = ft.Column(
             [
                 ft.Row(
@@ -2139,6 +2133,7 @@ class StudioImageView:
                 self._workspace_col.expand = False
                 self._workspace_col.tight = True
                 self._compare_body_row.expand = False
+                self._compare_body_row.vertical_alignment = ft.CrossAxisAlignment.START
                 self._right_col.expand = False
                 self._right_col.tight = True
                 self._compare_rail.visible = False
@@ -2155,9 +2150,12 @@ class StudioImageView:
             self._workspace_col.expand = True
             self._workspace_col.tight = False
             self._compare_body_row.expand = True
+            self._compare_body_row.vertical_alignment = ft.CrossAxisAlignment.STRETCH
             self._right_col.expand = True
             self._right_col.tight = False
             self._compare_rail.visible = True
+            self.overlay_base.fit = ft.BoxFit.CONTAIN
+            self.overlay_gen_img.fit = ft.BoxFit.CONTAIN
         except Exception:
             pass
 

@@ -475,13 +475,24 @@ class CreativeVisionView:
             self.player.control.expand = False
         except Exception:
             pass
-        # Still preview for Text→Image results (content-sized when empty)
+        # Still preview: CONTAIN inside dark frame — letterbox, never crop on wide panes
         self.result_image = ft.Image(
             src="",
             fit=ft.BoxFit.CONTAIN,
-            height=280,
-            visible=False,
+            expand=True,
+            visible=True,
             gapless_playback=True,
+        )
+        self._result_frame = ft.Container(
+            content=self.result_image,
+            expand=False,
+            height=280,
+            bgcolor="#111318",
+            border_radius=8,
+            border=ft.Border.all(1, BORDER),
+            alignment=ft.Alignment.CENTER,
+            clip_behavior=ft.ClipBehavior.NONE,
+            visible=False,
         )
         self.send_host = ft.Container(visible=False)
 
@@ -638,7 +649,7 @@ class CreativeVisionView:
                     size=FONT_SM,
                     color=TEXT_MUTED,
                 ),
-                self.result_image,
+                self._result_frame,
                 self.player.control,
                 self.variant_host,
                 self.send_host,
@@ -1745,7 +1756,9 @@ class CreativeVisionView:
             pass
         try:
             self.result_image.src = ""
-            self.result_image.visible = False
+            self._result_frame.visible = False
+            self._result_frame.expand = False
+            self._result_frame.height = 280
         except Exception:
             pass
         self.send_host.visible = False
@@ -1859,15 +1872,27 @@ class CreativeVisionView:
                 pass
             try:
                 self.player.control.visible = False
+                self.player.control.expand = False
             except Exception:
                 pass
             self.result_image.src = path
-            self.result_image.visible = True
+            self.result_image.fit = ft.BoxFit.CONTAIN
+            self._result_frame.visible = True
+            try:
+                self._result_frame.expand = True
+                self._result_frame.height = None  # type: ignore[assignment]
+            except Exception:
+                self._result_frame.height = 480
         else:
-            self.result_image.visible = False
+            self._result_frame.visible = False
             self.result_image.src = ""
             try:
                 self.player.control.visible = True
+                self.player.control.expand = True
+                self.player.control.height = None  # type: ignore[assignment]
+                if getattr(self.player, "_video", None) is not None:
+                    self.player._video.fit = ft.BoxFit.CONTAIN
+                    self.player._video.expand = True
             except Exception:
                 pass
             self.player.set_result(path)

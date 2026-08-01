@@ -166,12 +166,28 @@ class VideoResultPlayer:
             pass
 
     def _set_result_layout(self) -> None:
+        """
+        When parent sets control.expand=True (Tools/Vision wide pane), drop fixed
+        height so the video CONTAIN-fills the area without cropping.
+        """
         try:
-            self.control.expand = False
-            self.control.height = self._height + 56
-            if self._video is not None:
-                self._video.height = max(160.0, self._height - 48)
-                self._video.expand = False
+            parent_expands = bool(getattr(self.control, "expand", False))
+            if parent_expands:
+                self.control.height = None  # type: ignore[assignment]
+                if self._video is not None:
+                    self._video.fit = ft.BoxFit.CONTAIN
+                    self._video.expand = True
+                    try:
+                        self._video.height = None  # type: ignore[assignment]
+                    except Exception:
+                        pass
+            else:
+                self.control.expand = False
+                self.control.height = self._height + 56
+                if self._video is not None:
+                    self._video.fit = ft.BoxFit.CONTAIN
+                    self._video.height = max(160.0, self._height - 48)
+                    self._video.expand = False
         except Exception:
             pass
 
