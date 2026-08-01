@@ -77,6 +77,7 @@ from media_studio.flet_tools import ToolsView
 from media_studio.flet_video import StudioVideoView
 from media_studio.flet_vision import CreativeVisionView
 from media_studio.services import describe_job_kind, enhance_prompt, generate
+from media_studio.flet_source_strip import ResolveSourcesStrip
 from media_studio.source_history import gallery_value, record_source
 
 
@@ -276,6 +277,11 @@ class StudioImageView:
         )
 
         self.prev_row = ft.Row(spacing=6, scroll=ft.ScrollMode.AUTO, height=56)
+        self.resolve_strip = ResolveSourcesStrip(
+            page,
+            on_load=self._on_resolve_still,
+            media_kind="image",
+        )
 
         # Optional multi-reference stills (primary is source_path; extras when model allows)
         self._extra_ref_paths: list[str] = []
@@ -958,6 +964,7 @@ class StudioImageView:
             self.refs_panel,
             label("Previously used", muted=True),
             self.prev_row,
+            self.resolve_strip.root,
             self.suggest_banner,
             self.furniture_builder,
             self.simple_builder,
@@ -1216,6 +1223,22 @@ class StudioImageView:
         self.prev_row.controls = thumbs or [
             ft.Text("No previous sources yet", size=FONT_SM, color=TEXT_MUTED)
         ]
+        try:
+            self.resolve_strip.refresh()
+        except Exception:
+            pass
+
+    def _on_resolve_still(self, path: str) -> None:
+        """From Resolve still → Image source (same path as previous/upload)."""
+        self.load_source_path(path, status=f"From Resolve: {Path(path).name}")
+        try:
+            asyncio.get_event_loop().create_task(self._maybe_suggest_scenario(path))
+        except Exception:
+            pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     async def _load_source(self, path: str) -> None:
         self.load_source_path(path)
@@ -3073,6 +3096,46 @@ def main(page: ft.Page) -> None:
                 )
             except Exception:
                 pass
+        # Library: origin=resolve so All can badge and From Resolve filter works
+        try:
+            from media_studio.history import record_resolve_library
+
+            record_resolve_library(
+                still_path=h.still_path if h.has_still else None,
+                video_path=h.video_path if h.has_video else None,
+                clip_name=h.clip_name,
+                handoff_id=h.handoff_id,
+                output_dir=state.output_dir,
+            )
+        except Exception:
+            pass
+        # Refresh From Resolve strips everywhere media can load
+        try:
+            studio_image.resolve_strip.refresh()
+        except Exception:
+            pass
+        try:
+            studio_video._refresh_resolve_recent()
+        except Exception:
+            pass
+        try:
+            frame_editor_view.refresh_resolve_strip()
+        except Exception:
+            pass
+        try:
+            tools_view._refresh_active_prev_strip()
+        except Exception:
+            pass
+        try:
+            rs = getattr(vision_view, "resolve_strip", None)
+            if rs is not None:
+                rs.refresh()
+        except Exception:
+            pass
+        try:
+            library_view.refresh()
+        except Exception:
+            pass
         set_last_imported_id(h.handoff_id)
         msg = format_import_status(h)
         # Prefer Video tab when a clip was loaded so Source video is visible
@@ -3817,9 +3880,10 @@ def main(page: ft.Page) -> None:
             if idx == 5:  # Library
                 library_view.refresh()
                 page.update()
-            elif idx == 3:  # Frame Editor — refresh key banner
+            elif idx == 3:  # Frame Editor — key banner + From Resolve strip
                 try:
                     frame_editor_view.apply_key_gates()
+                    frame_editor_view.refresh_resolve_strip()
                     page.update()
                 except Exception:
                     pass

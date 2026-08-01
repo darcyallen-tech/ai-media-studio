@@ -25,7 +25,7 @@ from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_image, pick_video
 from media_studio.flet_progress import JobProgress, classify_progress
 from media_studio.flet_result_actions import make_result_action_row, show_result_actions
-from media_studio.flet_source_strip import PreviousSourcesStrip
+from media_studio.flet_source_strip import PreviousSourcesStrip, ResolveSourcesStrip
 from media_studio.flet_theme import (
     ACCENT,
     ACCENT_BRIGHT,
@@ -437,6 +437,12 @@ class FrameEditorView:
             on_load=self._on_prev_video,
             media_kind="video",
         )
+        self.resolve_strip = ResolveSourcesStrip(
+            page,
+            on_load=self._on_resolve_media,
+            media_kind="both",
+            empty_hint="Import from Resolve or send from the plugin",
+        )
 
         # ----- 2. Keyframes -----
         # tight + no expand — never a blank flex region under the keyframe list
@@ -699,6 +705,7 @@ class FrameEditorView:
             self.proxy_line,
             self.dual_key_banner,
             self.prev_strip.root,
+            self.resolve_strip.root,
             ft.Divider(height=1, color=BORDER),
             label(f"Keyframes (max {ALEPH_MAX_KEYFRAMES})", muted=True),
             self.kf_host,
@@ -2395,6 +2402,59 @@ class FrameEditorView:
         self.load_source(path, status=f"Previous: {Path(path).name}")
         try:
             self.page.update()
+        except Exception:
+            pass
+
+    def _on_resolve_media(self, path: str) -> None:
+        """
+        From Resolve strip: clip → source video (proxy path); still → keyframe pin.
+        """
+        try:
+            p = Path(path)
+            if not p.is_file():
+                self._set_status(f"Missing: {path}", True)
+                return
+            resolved = str(p.resolve())
+        except OSError as exc:
+            self._set_status(f"Resolve load error: {exc}", True)
+            return
+        is_video = p.suffix.lower() in {
+            ".mp4",
+            ".mov",
+            ".webm",
+            ".m4v",
+            ".avi",
+            ".mkv",
+        }
+        if is_video:
+            self.load_source(resolved, status=f"From Resolve: {p.name}")
+        else:
+            pin = "first"
+            try:
+                pin = str(self.default_pin.value or "first")
+            except Exception:
+                pin = "first"
+            if pin not in ("first", "last", "timestamp"):
+                pin = "first"
+            self.add_keyframe(
+                resolved,
+                pin=pin,
+                timestamp_s=0.0,
+                status=f"From Resolve pin: {p.name}",
+            )
+        try:
+            self.resolve_strip.refresh()
+        except Exception:
+            pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def refresh_resolve_strip(self) -> None:
+        """Reload From Resolve thumbs (after handoff / Import from Resolve)."""
+        try:
+            self.resolve_strip.refresh()
         except Exception:
             pass
 

@@ -17,7 +17,7 @@ import flet as ft
 from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_image
 from media_studio.flet_progress import JobProgress, classify_progress
-from media_studio.flet_source_strip import PreviousSourcesStrip
+from media_studio.flet_source_strip import PreviousSourcesStrip, ResolveSourcesStrip
 from media_studio.flet_theme import (
     ACCENT_BRIGHT,
     BORDER,
@@ -358,6 +358,12 @@ class CreativeVisionView:
             media_kind="image",
         )
         self.prev_strip.root.visible = False
+        self.resolve_strip = ResolveSourcesStrip(
+            page,
+            on_load=self._on_resolve_still,
+            media_kind="image",
+        )
+        self.resolve_strip.root.visible = False
         self.btn_refs = ft.OutlinedButton(
             content="Add reference stills",
             icon=ft.Icons.COLLECTIONS,
@@ -565,6 +571,7 @@ class CreativeVisionView:
             ),
             ft.Row([self.btn_refs, self.btn_clear_refs, self.refs_label], spacing=8),
             self.prev_strip.root,
+            self.resolve_strip.root,
             ft.Divider(height=1, color=BORDER),
             ft.ExpansionTile(
                 title=ft.Text(
@@ -746,6 +753,17 @@ class CreativeVisionView:
         else:
             self.receive_start_frame(path, status=f"Previous: {Path(path).name}")
 
+    def _on_resolve_still(self, path: str) -> None:
+        """From Resolve still → I2I / start frame (same destinations as Previously used)."""
+        if self._mode == "image_to_image":
+            self.receive_i2i_source(path, status=f"From Resolve: {Path(path).name}")
+        else:
+            self.receive_start_frame(path, status=f"From Resolve: {Path(path).name}")
+        try:
+            self.resolve_strip.refresh()
+        except Exception:
+            pass
+
     async def _refresh_cost(self, e: ft.ControlEvent | None = None) -> None:
         """Recompute total est. cost when duration / resolution / audio / model change."""
         self.cost_text.value = self._cost_label()
@@ -916,11 +934,14 @@ class CreativeVisionView:
             self.refs_label.visible = not still
         except Exception:
             pass
-        # Previously used stills for I2I (and I2V/bridge start)
+        # Previously used + From Resolve stills for I2I (and I2V/bridge start)
         try:
-            self.prev_strip.root.visible = is_i2i or is_i2v or is_bridge
-            if self.prev_strip.root.visible:
+            show_src_strips = is_i2i or is_i2v or is_bridge
+            self.prev_strip.root.visible = show_src_strips
+            self.resolve_strip.root.visible = show_src_strips
+            if show_src_strips:
                 self.prev_strip.refresh()
+                self.resolve_strip.refresh()
         except Exception:
             pass
         # Still vs video helpers (still modes never inject camera motion language)

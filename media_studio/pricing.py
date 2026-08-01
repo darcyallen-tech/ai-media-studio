@@ -220,12 +220,19 @@ def live_estimate_cost(
 
     if kind == "image":
         spec = resolve_image_edit_model(model_choice) or default_image_edit_model()
-        amount = spec.estimate_cost(num_images, resolution=str(resolution) if resolution else None)
-        n = max(1, int(num_images))
+        try:
+            n = max(1, int(num_images))
+        except (TypeError, ValueError):
+            n = 1
+        # Full job total = rate × selected # Images (sequential batches included)
+        amount = spec.estimate_cost(n, resolution=str(resolution) if resolution else None)
         unit = f"{n} image" if n == 1 else f"{n} images"
         res = str(resolution or "").strip()
         if res and res.lower() not in ("auto", "default", ""):
             unit = f"{unit} · {res}"
+        api_max = max(1, int(getattr(spec, "max_num_images", 1) or 1))
+        if n > api_max:
+            unit = f"{unit} · {n} sequential runs"
         return format_job_cost(amount, unit=unit, model=spec.label)
 
     if kind == "image_to_video":

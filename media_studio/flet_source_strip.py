@@ -19,9 +19,11 @@ from media_studio.source_history import (
     record_source,
 )
 
-MediaKind = Literal["image", "video"]
+MediaKind = Literal["image", "video", "both"]
 
 LoadCallback = Callable[[str], None]
+
+_VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v", ".avi", ".mkv"}
 
 
 class PreviousSourcesStrip:
@@ -161,6 +163,7 @@ class ResolveSourcesStrip:
 
     Image tools: stills from Resolve handoff JSON / video-history stills.
     Video tools: ``load_resolve_video_history()`` clips (same as Studio Video).
+    Frame Editor: ``both`` — stills (→ pin) + clips (→ source video).
     """
 
     def __init__(
@@ -170,12 +173,17 @@ class ResolveSourcesStrip:
         on_load: LoadCallback,
         media_kind: MediaKind = "image",
         max_items: int = 8,
+        empty_hint: str | None = None,
     ) -> None:
         self.page = page
         self.on_load = on_load
-        self.media_kind: MediaKind = media_kind if media_kind in ("image", "video") else "image"
+        if media_kind not in ("image", "video", "both"):
+            media_kind = "image"
+        self.media_kind: MediaKind = media_kind
         self.max_items = max_items
-        self.row = ft.Row(spacing=6, scroll=ft.ScrollMode.AUTO, height=52)
+        self.empty_hint = empty_hint
+        # Room for thumb + short label under it (tight — no flex voids)
+        self.row = ft.Row(spacing=6, scroll=ft.ScrollMode.AUTO, height=68)
         self.label = ft.Text("From Resolve", size=FONT_SM, color=TEXT_MUTED)
         self.root = ft.Column(
             [self.label, self.row],
@@ -185,7 +193,7 @@ class ResolveSourcesStrip:
         self.refresh()
 
     def set_media_kind(self, kind: MediaKind) -> None:
-        if kind not in ("image", "video"):
+        if kind not in ("image", "video", "both"):
             kind = "image"
         if kind == self.media_kind:
             return
@@ -200,6 +208,29 @@ class ResolveSourcesStrip:
 
                 for ent in load_resolve_video_history()[: self.max_items]:
                     paths.append((ent.path, ent.clip_name or Path(ent.path).name))
+            elif self.media_kind == "both":
+                # Stills + clips for Frame Editor; videos first (source), then stills (pins)
+                from media_studio.resolve_import import (
+                    load_resolve_still_history,
+                    load_resolve_video_history,
+                )
+
+                seen: set[str] = set()
+                half = max(2, self.max_items // 2)
+                for ent in load_resolve_video_history()[:half]:
+                    key = ent.path.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    paths.append((ent.path, ent.clip_name or Path(ent.path).name))
+                for ent in load_resolve_still_history(limit=self.max_items):
+                    if len(paths) >= self.max_items:
+                        break
+                    key = ent.path.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    paths.append((ent.path, ent.clip_name or Path(ent.path).name))
             else:
                 from media_studio.resolve_import import load_resolve_still_history
 
@@ -211,24 +242,20 @@ class ResolveSourcesStrip:
         if paths:
             self.row.controls = [self._thumb(p, lab) for p, lab in paths]
         else:
-            hint = (
-                "Import from Resolve or send a clip from the plugin"
-                if self.media_kind == "video"
-                else "Import from Resolve or send a still from the plugin"
-            )
+            if self.empty_hint:
+                hint = self.empty_hint
+            elif self.media_kind == "video":
+                hint = "Import from Resolve or send a clip from the plugin"
+            elif self.media_kind == "both":
+                hint = "Import from Resolve or send from the plugin"
+            else:
+                hint = "Import from Resolve or send a still from the plugin"
             self.row.controls = [
                 ft.Text(hint, size=FONT_SM, color=TEXT_MUTED, max_lines=2)
             ]
 
     def _thumb(self, path: str, label: str) -> ft.Control:
-        is_video = Path(path).suffix.lower() in {
-            ".mp4",
-            ".mov",
-            ".webm",
-            ".m4v",
-            ".avi",
-            ".mkv",
-        }
+        is_video = Path(path).suffix.lower() in _VIDEO_EXTS
         content: ft.Control
         if is_video:
             try:

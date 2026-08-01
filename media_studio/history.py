@@ -35,6 +35,8 @@ class HistoryEntry:
     scenario: str = ""
     # Optional Job / Listing label (address, client, shoot) — empty = ungrouped
     job: str = ""
+    # Import provenance: "" | "resolve" (Resolve plugin / Import from Resolve)
+    origin: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -53,7 +55,12 @@ class HistoryEntry:
             label=str(data.get("label") or ""),
             scenario=str(data.get("scenario") or ""),
             job=str(data.get("job") or data.get("listing") or ""),
+            origin=str(data.get("origin") or ""),
         )
+
+    @property
+    def is_from_resolve(self) -> bool:
+        return (self.origin or "").strip().lower() == "resolve"
 
     @property
     def media_type(self) -> str:
@@ -183,8 +190,9 @@ def append_history(
     timestamp: str | None = None,
     scenario: str | None = None,
     job: str | None = None,
+    origin: str | None = None,
 ) -> HistoryEntry:
-    """Prepend a successful generation to history.json."""
+    """Prepend a successful generation (or Resolve import) to history.json."""
     stamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
     # Only keep files that still exist
     existing = []
@@ -204,6 +212,7 @@ def append_history(
         except Exception:
             job_label = ""
 
+    origin_val = (origin or "").strip().lower()
     entry = HistoryEntry(
         id=stamp,
         timestamp=stamp,
@@ -215,6 +224,7 @@ def append_history(
         notes=list(notes or []),
         scenario=str(scenario or ""),
         job=job_label,
+        origin=origin_val,
     )
     entry.label = make_label(entry)
 
@@ -225,6 +235,72 @@ def append_history(
         items = items[:HISTORY_MAX]
         save_history(items, output_dir)
     return entry
+
+
+def record_resolve_library(
+    *,
+    still_path: str | Path | None = None,
+    video_path: str | Path | None = None,
+    clip_name: str | None = None,
+    handoff_id: str | None = None,
+    output_dir: str | Path | None = None,
+) -> list[HistoryEntry]:
+    """
+    Record Resolve handoff media in Library with origin=resolve.
+
+    Stable ids per handoff (resolve_<id>_still / _video) so re-import updates
+    rather than spam duplicates.
+    """
+    name = (clip_name or "Resolve").strip() or "Resolve"
+    hid_raw = (handoff_id or "").strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Sanitize id segment for history.json keys
+    hid = "".join(c if c.isalnum() or c in "-_" else "_" for c in hid_raw)[:64]
+    written: list[HistoryEntry] = []
+
+    still = None
+    if still_path:
+        try:
+            sp = Path(str(still_path))
+            if sp.is_file():
+                still = str(sp.resolve())
+        except OSError:
+            still = None
+    video = None
+    if video_path:
+        try:
+            vp = Path(str(video_path))
+            if vp.is_file():
+                video = str(vp.resolve())
+        except OSError:
+            video = None
+
+    if still:
+        written.append(
+            append_history(
+                job_kind="image",
+                model="Resolve",
+                prompt=name,
+                files=[still],
+                notes=["Resolve handoff still"],
+                origin="resolve",
+                timestamp=f"resolve_{hid}_still",
+                output_dir=output_dir,
+            )
+        )
+    if video:
+        written.append(
+            append_history(
+                job_kind="video",
+                model="Resolve",
+                prompt=name,
+                files=[video],
+                notes=["Resolve handoff clip"],
+                origin="resolve",
+                timestamp=f"resolve_{hid}_video",
+                output_dir=output_dir,
+            )
+        )
+    return written
 
 
 def list_job_names(output_dir: str | Path | None = None) -> list[str]:

@@ -963,6 +963,9 @@ def format_vision_cost(
     if is_still_mode(spec.mode):
         n = clamp_vision_num_images(spec, num_images)
         unit = "1 image" if n == 1 else f"{n} images"
+        api_max = max(1, int(getattr(spec, "max_num_images", 1) or 1))
+        if n > api_max:
+            unit = f"{unit} · {n} sequential runs"
         return format_job_cost(amt, unit=unit, model=spec.label)
     dur_token = duration_token if duration_token not in (None, "") else spec.default_duration
     secs = duration_seconds(dur_token)

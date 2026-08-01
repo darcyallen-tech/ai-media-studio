@@ -46,7 +46,9 @@ _FILTER_ALL = "all"
 _FILTER_IMAGE = "image"
 _FILTER_VIDEO = "video"
 _FILTER_AUDIO = "audio"
+_FILTER_RESOLVE = "resolve"
 _JOB_ALL = "(All jobs)"
+_RESOLVE_BADGE = "#c4782a"  # warm amber — distinct from Image/Video/Audio
 
 
 class LibraryView:
@@ -65,9 +67,15 @@ class LibraryView:
             on_click=self._on_refresh,
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
         )
-        # Session-remembered filter (All | Image | Video | Audio); default All
+        # Session-remembered filter (All | Image | Video | Audio | From Resolve)
         last = getattr(state, "library_filter", None)
-        if last not in (_FILTER_ALL, _FILTER_IMAGE, _FILTER_VIDEO, _FILTER_AUDIO):
+        if last not in (
+            _FILTER_ALL,
+            _FILTER_IMAGE,
+            _FILTER_VIDEO,
+            _FILTER_AUDIO,
+            _FILTER_RESOLVE,
+        ):
             last = _FILTER_ALL
         self._filter = last
         state.library_filter = self._filter
@@ -77,6 +85,7 @@ class LibraryView:
                 (_FILTER_IMAGE, "Image"),
                 (_FILTER_VIDEO, "Video"),
                 (_FILTER_AUDIO, "Audio"),
+                (_FILTER_RESOLVE, "From Resolve"),
             ],
             selected=self._filter,
             on_change=self._on_filter_change,
@@ -123,6 +132,7 @@ class LibraryView:
                 ft.Text(
                     "Successful generations (newest first). "
                     "Send assets back to Image / Video / Tools, or to Resolve. "
+                    "From Resolve shows handoff stills/clips; they also get a Resolve badge in All. "
                     "Filter by Job / Listing when you used that field on generate. "
                     "Missing media can be hidden in Settings → Storage.",
                     size=FONT_SM,
@@ -161,6 +171,7 @@ class LibraryView:
             _FILTER_IMAGE,
             _FILTER_VIDEO,
             _FILTER_AUDIO,
+            _FILTER_RESOLVE,
         ) else _FILTER_ALL
         self.state.library_filter = self._filter
         self.refresh()
@@ -193,6 +204,10 @@ class LibraryView:
                 return False
         if self._filter == _FILTER_ALL:
             return True
+        if self._filter == _FILTER_RESOLVE:
+            return bool(getattr(entry, "is_from_resolve", False) or (
+                (entry.origin or "").strip().lower() == "resolve"
+            ))
         media = entry.media_type  # "Image" | "Video" | "Audio"
         if self._filter == _FILTER_IMAGE:
             return media == "Image"
@@ -209,6 +224,11 @@ class LibraryView:
             return "No video generations yet. Run Studio → Video, then check back here."
         if self._filter == _FILTER_AUDIO:
             return "No audio generations yet. Run Audio (music / SFX / VO), then check back here."
+        if self._filter == _FILTER_RESOLVE:
+            return (
+                "No Resolve media yet. Use Import from Resolve or send a still/clip "
+                "from the Resolve plugin."
+            )
         return "No generations yet. Run Image, Video, or Audio, then check back here."
 
     def refresh(self) -> None:
@@ -232,12 +252,15 @@ class LibraryView:
         if self._filter == _FILTER_ALL and not self._job_filter:
             self._count.value = f"{n} item{'s' if n != 1 else ''}"
         else:
-            label = {
-                _FILTER_IMAGE: "image",
-                _FILTER_VIDEO: "video",
-                _FILTER_AUDIO: "audio",
-            }.get(self._filter, "item")
-            bits = [f"{n} {label}{'s' if n != 1 else ''}"]
+            if self._filter == _FILTER_RESOLVE:
+                bits = [f"{n} from Resolve"]
+            else:
+                label = {
+                    _FILTER_IMAGE: "image",
+                    _FILTER_VIDEO: "video",
+                    _FILTER_AUDIO: "audio",
+                }.get(self._filter, "item")
+                bits = [f"{n} {label}{'s' if n != 1 else ''}"]
             if total != n:
                 bits.append(f"{total} total")
             if self._job_filter:
@@ -354,6 +377,10 @@ class LibraryView:
             badge_color = "#6b4c9a"
         else:
             badge_color = "#2e7d6f"
+        from_resolve = bool(
+            getattr(entry, "is_from_resolve", False)
+            or (entry.origin or "").strip().lower() == "resolve"
+        )
         meta_bits = [media, model]
         job = (entry.job or "").strip()
         if job:
@@ -433,6 +460,35 @@ class LibraryView:
                             )
                         )
 
+        badges: list[ft.Control] = [
+            ft.Container(
+                content=ft.Text(
+                    media,
+                    size=11,
+                    color=TEXT,
+                    weight=ft.FontWeight.W_700,
+                ),
+                bgcolor=badge_color,
+                border_radius=4,
+                padding=ft.Padding.symmetric(horizontal=8, vertical=2),
+            ),
+        ]
+        if from_resolve:
+            badges.append(
+                ft.Container(
+                    content=ft.Text(
+                        "Resolve",
+                        size=11,
+                        color=TEXT,
+                        weight=ft.FontWeight.W_700,
+                    ),
+                    bgcolor=_RESOLVE_BADGE,
+                    border_radius=4,
+                    padding=ft.Padding.symmetric(horizontal=8, vertical=2),
+                    tooltip="Imported from Resolve handoff",
+                )
+            )
+
         return ft.Container(
             content=ft.Row(
                 [
@@ -441,17 +497,7 @@ class LibraryView:
                         [
                             ft.Row(
                                 [
-                                    ft.Container(
-                                        content=ft.Text(
-                                            media,
-                                            size=11,
-                                            color=TEXT,
-                                            weight=ft.FontWeight.W_700,
-                                        ),
-                                        bgcolor=badge_color,
-                                        border_radius=4,
-                                        padding=ft.Padding.symmetric(horizontal=8, vertical=2),
-                                    ),
+                                    *badges,
                                     ft.Text(
                                         " · ".join(meta_bits[1:]),
                                         size=FONT_SM,

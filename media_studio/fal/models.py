@@ -326,9 +326,19 @@ class ImageEditModelSpec:
         return res
 
     def estimate_cost(self, num_images: int = 1, resolution: str | None = None) -> float | None:
+        """
+        Total job estimate: per-image rate × selected count × resolution mult.
+
+        Uses the **requested** batch count (not ``max_num_images``). Models that
+        only accept 1 output per API call still sequential-batch in the app, so
+        4 images must estimate as 4 × rate, not 1 × rate.
+        """
         if self.cost_per_image is None:
             return None
-        n = self.clamp_num_images(num_images)
+        try:
+            n = max(1, int(num_images or 1))
+        except (TypeError, ValueError):
+            n = 1
         mult = 1.0
         res = (resolution or self.default_resolution or "1K").upper()
         if self.resolution_cost_mult:
