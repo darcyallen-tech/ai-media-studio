@@ -15,7 +15,14 @@ from typing import Any, Callable
 
 import flet as ft
 
-from media_studio.config import APP_TITLE, MODEL_LABELS, OUTPUT_DIR, ensure_output_dir
+from media_studio.config import (
+    APP_TITLE,
+    APP_VERSION,
+    GITHUB_URL,
+    MODEL_LABELS,
+    OUTPUT_DIR,
+    ensure_output_dir,
+)
 from media_studio.folder_util import open_folder
 from media_studio.flet_theme import (
     ACCENT,
@@ -3308,10 +3315,103 @@ def main(page: ft.Page) -> None:
     )
 
     from media_studio.flet_onboarding import make_help_button, maybe_show_first_run
+    from media_studio.flet_dialogs import open_url_in_browser
+
+    # Quiet update banner (shown only when GitHub is newer)
+    update_banner_text = ft.Text(
+        "",
+        size=FONT_SM,
+        color=TEXT,
+        expand=True,
+        max_lines=2,
+    )
+    update_banner = ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(ft.Icons.SYSTEM_UPDATE_ALT, color=ACCENT_BRIGHT, size=18),
+                update_banner_text,
+                ft.TextButton(
+                    content="Open GitHub",
+                    on_click=lambda _e: open_url_in_browser(
+                        getattr(page, "_update_remote_url", None) or GITHUB_URL
+                    ),
+                    style=ft.ButtonStyle(color=ACCENT_BRIGHT),
+                ),
+                ft.IconButton(
+                    icon=ft.Icons.CLOSE,
+                    icon_size=16,
+                    icon_color=TEXT_MUTED,
+                    tooltip="Dismiss",
+                    on_click=lambda _e: _dismiss_update_banner(),
+                ),
+            ],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        bgcolor="#1a2438",
+        border=ft.Border.all(1, ACCENT),
+        border_radius=6,
+        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+        visible=False,
+    )
+
+    def _dismiss_update_banner() -> None:
+        update_banner.visible = False
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    def _show_update_available(message: str, remote_url: str) -> None:
+        page._update_remote_url = remote_url or GITHUB_URL  # type: ignore[attr-defined]
+        update_banner_text.value = message
+        update_banner.visible = True
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    async def _run_update_check(*, force: bool = False, quiet_if_current: bool = True) -> None:
+        """Background-friendly update check; never blocks generate."""
+        try:
+            from media_studio.ui_prefs import get_check_updates
+            from media_studio.update_check import check_github_update
+
+            if not force and not get_check_updates():
+                return
+            result = await asyncio.to_thread(check_github_update, force=force)
+            if not result.ok:
+                if force:
+                    show_snack(page, result.message, duration_ms=4000)
+                return
+            if result.update_available:
+                _show_update_available(result.message, result.remote_url)
+                try:
+                    show_snack(page, result.message, duration_ms=5500)
+                except Exception:
+                    pass
+            elif force or not quiet_if_current:
+                show_snack(page, result.message, duration_ms=3500)
+        except Exception:
+            if force:
+                try:
+                    show_snack(page, "Could not check for updates (offline?).")
+                except Exception:
+                    pass
+
+    async def _update_check_manual() -> None:
+        await _run_update_check(force=True, quiet_if_current=False)
+
+    async def _update_check_startup() -> None:
+        await _run_update_check(force=False, quiet_if_current=True)
+
+    def _check_updates_now() -> None:
+        _schedule_coro(_update_check_manual)
 
     btn_help = make_help_button(
         page,
         on_open_settings=lambda: _open_settings(),
+        on_check_updates=_check_updates_now,
     )
 
     async def _import_from_resolve(e: ft.ControlEvent) -> None:
@@ -3750,6 +3850,7 @@ def main(page: ft.Page) -> None:
         ft.Column(
             [
                 header,
+                update_banner,
                 scenario_bar,
                 keys_banner,
                 ft.Divider(height=1, color=BORDER),
@@ -3771,6 +3872,15 @@ def main(page: ft.Page) -> None:
 
     # Quiet fal balance on startup
     _schedule_coro(_refresh_credits_ui)
+
+    # Quiet GitHub update check (Settings toggle; default on) — no auto-download
+    try:
+        from media_studio.ui_prefs import get_check_updates
+
+        if get_check_updates():
+            _schedule_coro(_update_check_startup)
+    except Exception:
+        pass
 
     # Watch Resolve handoff folder (poll) — reverse of Send to Resolve
     async def _watch_resolve_handoff() -> None:

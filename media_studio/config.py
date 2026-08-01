@@ -60,6 +60,17 @@ APP_DESCRIPTION = (
     "Outputs: outputs/YYYY-MM-DD/."
 )
 
+# Version / update check (Phase 8) — bump when shipping; build date is calendar day
+try:
+    from media_studio import __version__ as _pkg_ver
+
+    APP_VERSION = str(_pkg_ver or "0.1.0").strip() or "0.1.0"
+except Exception:
+    APP_VERSION = "0.1.0"
+APP_BUILD_DATE = os.environ.get("AI_MEDIA_STUDIO_BUILD_DATE", "2026-08-01").strip()
+GITHUB_REPO = "darcyallen-tech/ai-media-studio"
+GITHUB_URL = f"https://github.com/{GITHUB_REPO}"
+
 XAI_BASE_URL = os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1").rstrip("/")
 XAI_DEFAULT_MODEL = os.environ.get("XAI_MODEL", "grok-4.5")
 

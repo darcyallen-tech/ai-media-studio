@@ -276,6 +276,12 @@ SETTINGS / DISK SAFETY
   never deletes arbitrary user folders outside the app tree)
 - Cost guard for expensive generates (default off; warn at $2+ or $5+)
 - Hide missing Library rows
+- Check for updates on startup (default on):
+    Compares local version/build date with GitHub
+    darcyallen-tech/ai-media-studio (release/tag, else latest commit date)
+    Quiet banner + snack with Open GitHub link — no auto-download
+    Fails soft when offline; toggle in Settings → Storage
+    Help → Check for updates… anytime
 
 ==============================================================================
 COST LABELS

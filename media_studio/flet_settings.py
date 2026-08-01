@@ -38,10 +38,12 @@ from media_studio.secrets_store import (
 from media_studio.ui_prefs import (
     COST_CONFIRM_CHOICES,
     RETENTION_CHOICES,
+    get_check_updates,
     get_cost_confirm_usd,
     get_library_hide_missing,
     get_output_dir_pref,
     get_retention_days,
+    set_check_updates,
     set_cost_confirm_usd,
     set_library_hide_missing,
     set_output_dir_pref,
@@ -229,6 +231,15 @@ def open_settings_dialog(
         value=get_library_hide_missing(),
         active_color=ACCENT_BRIGHT,
     )
+    check_updates_sw = ft.Switch(
+        label="Check for updates on startup",
+        value=get_check_updates(),
+        active_color=ACCENT_BRIGHT,
+        tooltip=(
+            "Quietly compare this app version with GitHub "
+            "(darcyallen-tech/ai-media-studio). No auto-download."
+        ),
+    )
     _cost_pref = get_cost_confirm_usd()
     _cost_key = (
         "off"
@@ -321,6 +332,22 @@ def open_settings_dialog(
             else "Library will show entries even if files are missing."
         )
         storage_status.color = TEXT_MUTED
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    def _on_check_updates_change(_e: ft.ControlEvent) -> None:
+        set_check_updates(bool(check_updates_sw.value))
+        try:
+            show_snack(
+                page,
+                "Update checks on."
+                if check_updates_sw.value
+                else "Update checks off (Help → Check for updates still works).",
+            )
+        except Exception:
+            pass
         try:
             page.update()
         except Exception:
@@ -460,6 +487,7 @@ def open_settings_dialog(
     out_field.on_blur = _on_out_blur
     retention_dd.on_change = _on_retention_change
     hide_missing_sw.on_change = _on_hide_missing_change
+    check_updates_sw.on_change = _on_check_updates_change
     cost_confirm_dd.on_change = _on_cost_confirm_change
 
     # Local spend from history (same root as Library)
@@ -549,6 +577,7 @@ def open_settings_dialog(
         _persist_output_dir(out_field.value or "")
         set_retention_days(str(retention_dd.value or "never"))
         set_library_hide_missing(bool(hide_missing_sw.value))
+        set_check_updates(bool(check_updates_sw.value))
         set_cost_confirm_usd(str(cost_confirm_dd.value or "off"))
 
         # Clear fields so the full key is never left visible in the UI
@@ -739,6 +768,14 @@ def open_settings_dialog(
             ),
             retention_dd,
             hide_missing_sw,
+            check_updates_sw,
+            ft.Text(
+                "Update check compares this build with GitHub "
+                "(releases/tags, else latest commit date). Toast only — no auto-download. "
+                "Default on; fails quietly when offline.",
+                size=FONT_SM,
+                color=TEXT_MUTED,
+            ),
             cost_confirm_dd,
             ft.Text(
                 "Cost guard asks before Creative Vision (and similar) when the "

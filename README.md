@@ -80,7 +80,9 @@ python app.py
 3. Upload a still or clip and Generate — or start in **Creative Vision → Text → Image** and Send to Start/End for a bridge.
 
 Reopen the wizard anytime: top bar **?** → **Quick Start**.  
-Also: **?** → Open FEATURES.txt / README.md.
+Also: **?** → Check for updates… / Open FEATURES.txt / README.md.
+
+**Updates:** on startup (default on, Settings → Storage), the app quietly compares its version/build date with [darcyallen-tech/ai-media-studio](https://github.com/darcyallen-tech/ai-media-studio). If GitHub is newer, a small banner + toast offer a link to the repo — no auto-download. Offline checks fail silently.
 
 ---
 

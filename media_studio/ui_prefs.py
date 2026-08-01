@@ -31,6 +31,8 @@ COST_CONFIRM_USD = "cost_confirm_usd"
 ONBOARDING_DONE = "onboarding_done"
 # Last Job / Listing label (address, client, shoot date) — optional
 JOB_NAME = "job_name"
+# Quiet GitHub update check on startup (default ON)
+CHECK_UPDATES = "check_updates"
 
 RETENTION_CHOICES = ("never", "7", "14", "30", "90")
 COST_CONFIRM_CHOICES = ("off", "2", "5")
@@ -267,3 +269,16 @@ def get_job_name() -> str:
 def set_job_name(name: str | None) -> None:
     """Persist last-used Job / Listing (empty clears)."""
     save_prefs({JOB_NAME: (name or "").strip()})
+
+
+def get_check_updates() -> bool:
+    """True when startup should quietly check GitHub for a newer build (default on)."""
+    raw = load_prefs().get(CHECK_UPDATES, True)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in ("0", "false", "no", "off")
+
+
+def set_check_updates(enabled: bool) -> None:
+    save_prefs({CHECK_UPDATES: bool(enabled)})
+

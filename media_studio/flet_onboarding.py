@@ -286,8 +286,9 @@ def make_help_button(
     page: ft.Page,
     *,
     on_open_settings: Callable[[], None] | None = None,
+    on_check_updates: Callable[[], None] | None = None,
 ) -> ft.Control:
-    """Top-chrome Help control: Quick Start + open FEATURES.txt."""
+    """Top-chrome Help control: Quick Start, FEATURES, update check."""
 
     def _quick(_e: ft.ControlEvent) -> None:
         open_onboarding_dialog(page, force=True, on_open_settings=on_open_settings)
@@ -308,15 +309,39 @@ def make_help_button(
             except Exception:
                 pass
 
+    def _updates(_e: ft.ControlEvent) -> None:
+        if on_check_updates is not None:
+            try:
+                on_check_updates()
+                return
+            except Exception:
+                pass
+        # Fallback: run check inline
+        try:
+            from media_studio.update_check import check_github_update
+            from media_studio.flet_dialogs import open_url_in_browser
+
+            r = check_github_update(force=True)
+            show_snack(page, r.message, duration_ms=5000)
+            if r.update_available and r.remote_url:
+                open_url_in_browser(r.remote_url)
+        except Exception as exc:
+            show_snack(page, f"Update check failed: {exc}")
+
     return ft.PopupMenuButton(
         icon=ft.Icons.HELP_OUTLINE,
         icon_color=TEXT,
-        tooltip="Help — Quick Start, FEATURES.txt",
+        tooltip="Help — Quick Start, updates, FEATURES.txt",
         items=[
             ft.PopupMenuItem(
                 content="Quick Start…",
                 icon=ft.Icons.SCHOOL_OUTLINED,
                 on_click=_quick,
+            ),
+            ft.PopupMenuItem(
+                content="Check for updates…",
+                icon=ft.Icons.SYSTEM_UPDATE_ALT,
+                on_click=_updates,
             ),
             ft.PopupMenuItem(
                 content="Open FEATURES.txt",
