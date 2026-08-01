@@ -462,6 +462,28 @@ def open_settings_dialog(
     hide_missing_sw.on_change = _on_hide_missing_change
     cost_confirm_dd.on_change = _on_cost_confirm_change
 
+    # Local spend from history (same root as Library)
+    spend_summary = ft.Text("", size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600)
+    spend_detail = ft.Text("", size=FONT_SM, color=TEXT_MUTED, selectable=True)
+
+    def _refresh_spend(_e: ft.ControlEvent | None = None) -> None:
+        try:
+            from media_studio.spend import build_spend_report, report_as_lines
+
+            out = (current_output_dir or get_output_dir_pref() or "").strip() or None
+            report = build_spend_report(out)
+            spend_summary.value = report.summary_line()
+            spend_detail.value = "\n".join(report_as_lines(report, top_n=5))
+        except Exception as exc:
+            spend_summary.value = f"Spend unavailable: {exc}"
+            spend_detail.value = ""
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    _refresh_spend()
+
     async def _refresh_fal_balance(_e: ft.ControlEvent | None = None) -> None:
         fal_balance_text.value = "fal · refreshing…"
         try:
@@ -762,6 +784,28 @@ def open_settings_dialog(
                 content="Clear handoff cache",
                 icon=ft.Icons.DELETE_OUTLINE,
                 on_click=_clear_handoff_cache,
+                style=ft.ButtonStyle(color=TEXT_MUTED),
+            ),
+            ft.Divider(height=1, color=BORDER),
+            # Local spend (history costs only — Phase 5)
+            ft.Text(
+                "5. Local spend (history)",
+                size=FONT_SM,
+                weight=ft.FontWeight.W_700,
+                color=TEXT,
+            ),
+            spend_summary,
+            spend_detail,
+            ft.Text(
+                "Sums Est. cost / Cost labels from Library history. "
+                "Missing or $0 rows skipped. No external billing API.",
+                size=FONT_SM,
+                color=TEXT_MUTED,
+            ),
+            ft.TextButton(
+                content="Refresh spend",
+                icon=ft.Icons.REFRESH,
+                on_click=_refresh_spend,
                 style=ft.ButtonStyle(color=TEXT_MUTED),
             ),
             ft.Divider(height=1, color=BORDER),

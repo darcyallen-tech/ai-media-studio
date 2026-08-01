@@ -91,6 +91,15 @@ class LibraryView:
         )
         # Optional open-large dialog host
         self._lightbox_src = ft.Image(src="", fit=ft.BoxFit.CONTAIN, expand=True)
+        # Local spend dashboard (history costs only)
+        from media_studio.flet_spend import build_spend_panel
+
+        self.spend_panel = build_spend_panel(
+            page,
+            state,
+            compact=True,
+            on_status=lambda m: setattr(self._status, "value", m),
+        )
 
     def build(self) -> ft.Control:
         self.refresh()
@@ -114,6 +123,7 @@ class LibraryView:
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
+                    self.spend_panel,
                     self._filter_nav.control,
                     self.job_dd,
                     self._status,
@@ -216,6 +226,15 @@ class LibraryView:
             self._count.value = " · ".join(bits)
         if hidden:
             self._count.value += f" · {hidden} missing hidden"
+        # Keep spend chips in sync when list reloads
+        try:
+            ref = getattr(self.spend_panel, "data", None) or {}
+            fn = ref.get("refresh") if isinstance(ref, dict) else None
+            if callable(fn):
+                fn()
+        except Exception:
+            pass
+
         cards: list[ft.Control] = []
         # Optional visual group headers by job when not filtering a single job
         last_job_header: str | None = None
@@ -256,6 +275,13 @@ class LibraryView:
 
     async def _on_refresh(self, _e: ft.ControlEvent) -> None:
         self.refresh()
+        try:
+            ref = getattr(self.spend_panel, "data", None) or {}
+            fn = ref.get("refresh") if isinstance(ref, dict) else None
+            if callable(fn):
+                fn()
+        except Exception:
+            pass
         self._status.value = "Library refreshed."
         self.page.update()
 

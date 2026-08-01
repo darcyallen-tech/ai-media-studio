@@ -226,6 +226,10 @@ LIBRARY
 - Job / Listing dropdown: All jobs or a specific label from history
 - Visual group headers by job when viewing All jobs
 - Job label shown on cards when set
+- Local spend panel (from history costs only):
+    Today / This week / This month / All time totals
+    Top models + by provider; missing or $0 cost rows skipped
+    Also summarized in Settings → Local spend
 - Hide missing media (Settings)
 - Thumbnails + metadata (model, job, scenario, cost, time)
 - Send to ▾ (Image, Video, tools, Frame Editor, Resolve, etc.)
