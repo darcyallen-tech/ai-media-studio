@@ -282,6 +282,9 @@ SETTINGS / DISK SAFETY
     Quiet banner + snack with Open GitHub link — no auto-download
     Fails soft when offline; toggle in Settings → Storage
     Help → Check for updates… anytime
+- Single-instance app lock (app data): second launch (e.g. Resolve Send)
+    signals the open window and exits — no second UI. Fail soft if lock
+    unavailable.
 
 ==============================================================================
 COST LABELS

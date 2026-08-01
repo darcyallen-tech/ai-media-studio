@@ -12,7 +12,7 @@ import flet as ft
 from media_studio.flet_pickers import pick_video
 from media_studio.flet_progress import JobProgress, classify_progress
 from media_studio.flet_result_actions import make_result_action_row, show_result_actions
-from media_studio.flet_source_strip import PreviousSourcesStrip
+from media_studio.flet_source_strip import PreviousSourcesStrip, ResolveSourcesStrip
 from media_studio.flet_theme import (
     ACCENT,
     ACCENT_BRIGHT,
@@ -109,6 +109,11 @@ class _VideoOnlyCardBase:
         self.prev_strip = PreviousSourcesStrip(
             page,
             get_output_dir=lambda: self.state.output_dir,
+            on_load=self._on_prev_source,
+            media_kind="video",
+        )
+        self.resolve_strip = ResolveSourcesStrip(
+            page,
             on_load=self._on_prev_source,
             media_kind="video",
         )
@@ -215,9 +220,11 @@ class _VideoOnlyCardBase:
                 self.src_video_label,
                 self.btn_upload,
                 self.prev_strip.root,
+                self.resolve_strip.root,
             ],
             spacing=6,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            tight=True,
         )
 
 

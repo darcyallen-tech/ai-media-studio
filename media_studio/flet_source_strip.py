@@ -1,7 +1,8 @@
 """
-Reusable “Previously used” source strip for Studio Image and Tools panels.
+Reusable “Previously used” + “From Resolve” source strips for Studio / Tools.
 
-Shows last ~5 thumbs; click loads the path via callback.
+Shows last ~5–8 thumbs; click loads the path via callback.
+Tight rows only — no expand voids, no nested scroll layers beyond the strip Row.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from typing import Callable, Literal
 
 import flet as ft
 
-from media_studio.flet_theme import BORDER, FONT_SM, TEXT_MUTED
+from media_studio.flet_theme import BORDER, FONT_SM, PANEL_ELEVATED, TEXT, TEXT_MUTED
 from media_studio.source_history import (
     SOURCE_HISTORY_MAX,
     load_source_paths,
@@ -149,6 +150,142 @@ class PreviousSourcesStrip:
             border=ft.Border.all(1, BORDER),
             on_click=make_handler(path),
             tooltip=Path(path).name,
+            ink=True,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
+
+
+class ResolveSourcesStrip:
+    """
+    Compact “From Resolve” strip under Previously used.
+
+    Image tools: stills from Resolve handoff JSON / video-history stills.
+    Video tools: ``load_resolve_video_history()`` clips (same as Studio Video).
+    """
+
+    def __init__(
+        self,
+        page: ft.Page,
+        *,
+        on_load: LoadCallback,
+        media_kind: MediaKind = "image",
+        max_items: int = 8,
+    ) -> None:
+        self.page = page
+        self.on_load = on_load
+        self.media_kind: MediaKind = media_kind if media_kind in ("image", "video") else "image"
+        self.max_items = max_items
+        self.row = ft.Row(spacing=6, scroll=ft.ScrollMode.AUTO, height=52)
+        self.label = ft.Text("From Resolve", size=FONT_SM, color=TEXT_MUTED)
+        self.root = ft.Column(
+            [self.label, self.row],
+            spacing=2,
+            tight=True,
+        )
+        self.refresh()
+
+    def set_media_kind(self, kind: MediaKind) -> None:
+        if kind not in ("image", "video"):
+            kind = "image"
+        if kind == self.media_kind:
+            return
+        self.media_kind = kind
+        self.refresh()
+
+    def refresh(self) -> None:
+        paths: list[tuple[str, str]] = []  # (path, label)
+        try:
+            if self.media_kind == "video":
+                from media_studio.resolve_import import load_resolve_video_history
+
+                for ent in load_resolve_video_history()[: self.max_items]:
+                    paths.append((ent.path, ent.clip_name or Path(ent.path).name))
+            else:
+                from media_studio.resolve_import import load_resolve_still_history
+
+                for ent in load_resolve_still_history(limit=self.max_items):
+                    paths.append((ent.path, ent.clip_name or Path(ent.path).name))
+        except Exception:
+            paths = []
+
+        if paths:
+            self.row.controls = [self._thumb(p, lab) for p, lab in paths]
+        else:
+            hint = (
+                "Import from Resolve or send a clip from the plugin"
+                if self.media_kind == "video"
+                else "Import from Resolve or send a still from the plugin"
+            )
+            self.row.controls = [
+                ft.Text(hint, size=FONT_SM, color=TEXT_MUTED, max_lines=2)
+            ]
+
+    def _thumb(self, path: str, label: str) -> ft.Control:
+        is_video = Path(path).suffix.lower() in {
+            ".mp4",
+            ".mov",
+            ".webm",
+            ".m4v",
+            ".avi",
+            ".mkv",
+        }
+        content: ft.Control
+        if is_video:
+            try:
+                from media_studio.media import video_poster_path
+
+                poster = video_poster_path(path)
+            except Exception:
+                poster = None
+            if poster and Path(poster).is_file():
+                content = ft.Image(
+                    src=poster, fit=ft.BoxFit.COVER, width=48, height=48
+                )
+            else:
+                content = ft.Container(
+                    content=ft.Icon(ft.Icons.MOVIE, color=TEXT_MUTED, size=22),
+                    width=48,
+                    height=48,
+                    alignment=ft.Alignment.CENTER,
+                    bgcolor=PANEL_ELEVATED,
+                )
+        else:
+            content = ft.Image(src=path, fit=ft.BoxFit.COVER, width=48, height=48)
+
+        short = label if len(label) <= 14 else label[:11] + "…"
+
+        def make_handler(pp: str):
+            async def _click(_e: ft.ControlEvent) -> None:
+                try:
+                    self.on_load(pp)
+                except Exception:
+                    pass
+
+            return _click
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    content,
+                    ft.Text(
+                        short,
+                        size=10,
+                        color=TEXT,
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                        width=48,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                ],
+                spacing=1,
+                tight=True,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            border_radius=4,
+            border=ft.Border.all(1, BORDER),
+            padding=2,
+            on_click=make_handler(path),
+            tooltip=f"From Resolve: {label}\n{path}",
             ink=True,
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
         )

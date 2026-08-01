@@ -463,6 +463,87 @@ def load_resolve_video_history() -> list[ResolveVideoEntry]:
     return out
 
 
+@dataclass
+class ResolveStillEntry:
+    """Recent still from Resolve handoff (for Tools Image strip)."""
+
+    path: str
+    clip_name: str = ""
+    handoff_id: str | None = None
+    timestamp: str = ""
+
+    def label(self) -> str:
+        return self.clip_name or Path(self.path).name
+
+
+def load_resolve_still_history(*, limit: int = VIDEO_HISTORY_MAX) -> list[ResolveStillEntry]:
+    """
+    Newest-first stills from Resolve handoff.
+
+    Sources: video_history still_path fields + recent handoff_*.json / latest.json.
+    """
+    ensure_handoff_dir()
+    seen: set[str] = set()
+    out: list[ResolveStillEntry] = []
+    cap = max(1, int(limit or VIDEO_HISTORY_MAX))
+
+    def _add(path: str | None, *, clip: str = "", hid: str | None = None, ts: str = "") -> None:
+        if len(out) >= cap:
+            return
+        p = _normalize_path(path)
+        if not p or not Path(p).is_file():
+            return
+        key = p.lower()
+        if key in seen:
+            return
+        # Skip video files if mis-tagged as still
+        if Path(p).suffix.lower() in _VIDEO_EXTS:
+            return
+        seen.add(key)
+        out.append(
+            ResolveStillEntry(
+                path=p,
+                clip_name=(clip or Path(p).name).strip() or Path(p).name,
+                handoff_id=hid,
+                timestamp=ts,
+            )
+        )
+
+    # 1) Stills attached to remembered video imports (newest first)
+    for ent in load_resolve_video_history():
+        _add(
+            ent.still_path,
+            clip=ent.clip_name,
+            hid=ent.handoff_id,
+            ts=ent.timestamp,
+        )
+
+    # 2) Recent handoff JSON files
+    try:
+        jpaths = sorted(
+            list(HANDOFF_DIR.glob("handoff_*.json"))
+            + ([HANDOFF_DIR / LATEST_NAME] if (HANDOFF_DIR / LATEST_NAME).is_file() else []),
+            key=lambda x: x.stat().st_mtime if x.is_file() else 0,
+            reverse=True,
+        )
+    except OSError:
+        jpaths = []
+    for jp in jpaths:
+        if len(out) >= cap:
+            break
+        h = read_handoff_file(jp)
+        if h is None:
+            continue
+        _add(
+            h.still_path,
+            clip=h.clip_name,
+            hid=h.handoff_id,
+            ts=h.timestamp,
+        )
+
+    return out
+
+
 def record_resolve_video(
     *,
     video_path: str | Path | None,

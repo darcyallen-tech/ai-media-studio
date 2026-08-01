@@ -17,7 +17,7 @@ from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_image, pick_video
 from media_studio.flet_progress import JobProgress, classify_progress
 from media_studio.flet_result_actions import make_result_action_row, show_result_actions
-from media_studio.flet_source_strip import PreviousSourcesStrip
+from media_studio.flet_source_strip import PreviousSourcesStrip, ResolveSourcesStrip
 from media_studio.flet_theme import (
     ACCENT_BRIGHT,
     BORDER,
@@ -154,6 +154,11 @@ class DualMediaToolCard:
             on_load=self._on_prev_source,
             media_kind="image",
         )
+        self.resolve_strip = ResolveSourcesStrip(
+            page,
+            on_load=self._on_prev_source,
+            media_kind="image",
+        )
         labels = image_labels
         self._image_labels = image_labels
         self._video_labels = video_labels
@@ -232,6 +237,7 @@ class DualMediaToolCard:
                 self.video_label,
                 self.btn_upload,
                 self.prev_strip.root,
+                self.resolve_strip.root,
             ],
             spacing=6,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -367,9 +373,9 @@ class DualMediaToolCard:
             "Upload video" if self._mode == "video" else "Upload image"
         )
         try:
-            self.prev_strip.set_media_kind(
-                "video" if self._mode == "video" else "image"
-            )
+            kind = "video" if self._mode == "video" else "image"
+            self.prev_strip.set_media_kind(kind)
+            self.resolve_strip.set_media_kind(kind)
         except Exception:
             pass
         self._refresh_models()
@@ -404,9 +410,9 @@ class DualMediaToolCard:
             "Upload video" if self._mode == "video" else "Upload image"
         )
         try:
-            self.prev_strip.set_media_kind(
-                "video" if self._mode == "video" else "image"
-            )
+            kind = "video" if self._mode == "video" else "image"
+            self.prev_strip.set_media_kind(kind)
+            self.resolve_strip.set_media_kind(kind)
         except Exception:
             pass
         self._refresh_models()
@@ -470,6 +476,7 @@ class DualMediaToolCard:
             self.btn_upload.content = "Upload video"
             try:
                 self.prev_strip.set_media_kind("video")
+                self.resolve_strip.set_media_kind("video")
             except Exception:
                 pass
         else:
@@ -482,6 +489,7 @@ class DualMediaToolCard:
             )
             try:
                 self.prev_strip.set_media_kind("image")
+                self.resolve_strip.set_media_kind("image")
             except Exception:
                 pass
         self._refresh_models()

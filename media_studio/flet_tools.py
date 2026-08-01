@@ -90,7 +90,7 @@ from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_image, pick_video
 from media_studio.flet_progress import JobProgress, classify_progress
 from media_studio.flet_result_actions import make_result_action_row, show_result_actions
-from media_studio.flet_source_strip import PreviousSourcesStrip
+from media_studio.flet_source_strip import PreviousSourcesStrip, ResolveSourcesStrip
 from media_studio.flet_tools_result import ToolsResultPane
 from media_studio.flet_tools_video_extra import VideoDenoiseCard, VideoInterpolateCard
 from media_studio.tools_service import (
@@ -254,6 +254,11 @@ class _ToolCard:
             on_load=self._on_prev_source,
             media_kind="image",
         )
+        self.resolve_strip = ResolveSourcesStrip(
+            page,
+            on_load=self._on_prev_source,
+            media_kind="image",
+        )
         (
             self.result_actions_row,
             self.btn_folder,
@@ -290,6 +295,7 @@ class _ToolCard:
                             ),
                             self.btn_upload,
                             self.prev_strip.root,
+                            self.resolve_strip.root,
                         ],
                         spacing=4,
                         tight=True,
@@ -663,6 +669,11 @@ class _RestoreCard:
             on_load=self._on_prev_source,
             media_kind="image",
         )
+        self.resolve_strip = ResolveSourcesStrip(
+            page,
+            on_load=self._on_prev_source,
+            media_kind="image",
+        )
 
         (
             self.result_actions_row,
@@ -713,6 +724,7 @@ class _RestoreCard:
                                     ),
                                     self.btn_upload_src,
                                     self.prev_strip.root,
+                                    self.resolve_strip.root,
                                 ],
                                 spacing=4,
                                 tight=True,
@@ -776,6 +788,7 @@ class _RestoreCard:
         )
         try:
             self.prev_strip.set_media_kind(want)
+            self.resolve_strip.set_media_kind(want)
         except Exception:
             pass
         self._refresh_models()
@@ -885,7 +898,9 @@ class _RestoreCard:
             "Upload soft video" if self._mode == "video" else "Upload soft source"
         )
         try:
-            self.prev_strip.set_media_kind("video" if self._mode == "video" else "image")
+            kind = "video" if self._mode == "video" else "image"
+            self.prev_strip.set_media_kind(kind)
+            self.resolve_strip.set_media_kind(kind)
         except Exception:
             pass
         self._refresh_models()
@@ -945,7 +960,9 @@ class _RestoreCard:
             except Exception:
                 pass
         try:
-            self.prev_strip.set_media_kind("video" if as_video else "image")
+            kind = "video" if as_video else "image"
+            self.prev_strip.set_media_kind(kind)
+            self.resolve_strip.set_media_kind(kind)
             self.prev_strip.record_and_refresh(resolved)
         except Exception:
             pass
@@ -1226,6 +1243,11 @@ class _ReAspectCard:
             on_load=self._on_prev_source,
             media_kind="image",
         )
+        self.resolve_strip = ResolveSourcesStrip(
+            page,
+            on_load=self._on_prev_source,
+            media_kind="image",
+        )
         (
             self.result_actions_row,
             self.btn_folder,
@@ -1272,6 +1294,7 @@ class _ReAspectCard:
                             ),
                             self.btn_upload,
                             self.prev_strip.root,
+                            self.resolve_strip.root,
                         ],
                         spacing=4,
                         tight=True,
@@ -1368,6 +1391,7 @@ class _ReAspectCard:
         )
         try:
             self.prev_strip.set_media_kind(want)
+            self.resolve_strip.set_media_kind(want)
         except Exception:
             pass
         self._refresh_models()
@@ -1419,7 +1443,9 @@ class _ReAspectCard:
             "Upload video" if self._mode == "video" else "Upload source"
         )
         try:
-            self.prev_strip.set_media_kind("video" if self._mode == "video" else "image")
+            kind = "video" if self._mode == "video" else "image"
+            self.prev_strip.set_media_kind(kind)
+            self.resolve_strip.set_media_kind(kind)
         except Exception:
             pass
         self._refresh_models()
@@ -1479,7 +1505,9 @@ class _ReAspectCard:
             except Exception:
                 pass
         try:
-            self.prev_strip.set_media_kind("video" if as_video else "image")
+            kind = "video" if as_video else "image"
+            self.prev_strip.set_media_kind(kind)
+            self.resolve_strip.set_media_kind(kind)
             self.prev_strip.record_and_refresh(resolved)
         except Exception:
             pass
@@ -1676,6 +1704,11 @@ class _UpscaleCard:
             on_load=self._on_prev_source,
             media_kind="image",
         )
+        self.resolve_strip = ResolveSourcesStrip(
+            page,
+            on_load=self._on_prev_source,
+            media_kind="image",
+        )
 
         self.root = panel(
             ft.Column(
@@ -1697,6 +1730,7 @@ class _UpscaleCard:
                             self.src_video_label,
                             self.btn_upload,
                             self.prev_strip.root,
+                            self.resolve_strip.root,
                         ],
                         spacing=6,
                         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1809,6 +1843,7 @@ class _UpscaleCard:
         )
         try:
             self.prev_strip.set_media_kind(want)
+            self.resolve_strip.set_media_kind(want)
         except Exception:
             pass
         self._refresh_models()
@@ -1834,7 +1869,9 @@ class _UpscaleCard:
             "Upload video" if self._mode == "video" else "Upload image"
         )
         try:
-            self.prev_strip.set_media_kind("video" if self._mode == "video" else "image")
+            kind = "video" if self._mode == "video" else "image"
+            self.prev_strip.set_media_kind(kind)
+            self.resolve_strip.set_media_kind(kind)
         except Exception:
             pass
         self._refresh_models()
@@ -1927,7 +1964,9 @@ class _UpscaleCard:
             except Exception:
                 pass
         try:
-            self.prev_strip.set_media_kind("video" if as_video else "image")
+            kind = "video" if as_video else "image"
+            self.prev_strip.set_media_kind(kind)
+            self.resolve_strip.set_media_kind(kind)
             self.prev_strip.record_and_refresh(resolved)
         except Exception:
             pass
@@ -2568,15 +2607,18 @@ class ToolsView:
             pass
 
     def _refresh_active_prev_strip(self) -> None:
-        """Reload shared Studio/Tools history for the visible tool panel."""
+        """Reload Previously used + From Resolve for the visible tool panel."""
         card = getattr(self, self._selected_tool, None)
-        strip = getattr(card, "prev_strip", None) if card is not None else None
-        if strip is None:
+        if card is None:
             return
-        try:
-            strip.refresh()
-        except Exception:
-            pass
+        for attr in ("prev_strip", "resolve_strip"):
+            strip = getattr(card, attr, None)
+            if strip is None:
+                continue
+            try:
+                strip.refresh()
+            except Exception:
+                pass
 
     def apply_app_scenario(self, key: str) -> None:
         """
@@ -2828,12 +2870,14 @@ class ToolsView:
         self._apply_tool_visibility()
         return ft.Column(
             [
+                # Image | Video tools toggle on the left (next to title)
                 ft.Row(
                     [
                         section_title("Tools"),
-                        ft.Container(expand=True),
                         self._media_nav.control,
+                        ft.Container(expand=True),
                     ],
+                    spacing=12,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 ft.Text(

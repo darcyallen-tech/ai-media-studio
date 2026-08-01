@@ -3882,18 +3882,48 @@ def main(page: ft.Page) -> None:
     except Exception:
         pass
 
-    # Watch Resolve handoff folder (poll) — reverse of Send to Resolve
+    # Watch Resolve handoff folder (poll) — reverse of Send to Resolve.
+    # Also reacts to single-instance wake file when a second launch exits.
     async def _watch_resolve_handoff() -> None:
+        from media_studio.single_instance import (
+            bring_app_window_to_front,
+            consume_wake_signal,
+        )
+
         while True:
             try:
-                await asyncio.sleep(2.5)
+                # Faster when woken by a second instance; otherwise 2s
+                woke = False
+                try:
+                    woke = consume_wake_signal()
+                except Exception:
+                    woke = False
+                await asyncio.sleep(0.35 if woke else 2.0)
+                # Re-check wake after sleep (Resolve may write handoff then launch)
+                try:
+                    if consume_wake_signal():
+                        woke = True
+                except Exception:
+                    pass
                 h = poll_new_handoff(mark=False)
+                if h is None and not woke:
+                    continue
+                if h is None:
+                    # Wake without new id — re-read latest once
+                    try:
+                        h = read_latest_handoff()
+                    except Exception:
+                        h = None
                 if h is None:
                     continue
                 msg = _apply_resolve_handoff(h)
                 studio_image._set_status(msg)
                 try:
                     show_snack(page, msg)
+                except Exception:
+                    pass
+                try:
+                    bring_app_window_to_front(page)
                 except Exception:
                     pass
                 try:
