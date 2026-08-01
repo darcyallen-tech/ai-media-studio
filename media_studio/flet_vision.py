@@ -1,0 +1,1246 @@
+"""
+Creative Vision tab — cinematic T2V / I2V / bridge shots.
+
+Separate from Studio listing camera-lock flows. Expensive models; cost shown
+before generate. Same export habits: Library, folder, Resolve, Send to ▾.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import traceback
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import flet as ft
+
+from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
+from media_studio.flet_pickers import pick_image
+from media_studio.flet_progress import JobProgress, classify_progress
+from media_studio.flet_theme import (
+    ACCENT_BRIGHT,
+    BORDER,
+    FONT_SM,
+    PANEL,
+    PANEL_ELEVATED,
+    TEXT,
+    TEXT_MUTED,
+    PillNav,
+    dropdown_options,
+    label,
+    panel,
+    section_title,
+    styled_dropdown,
+)
+from media_studio.flet_video_player import VideoResultPlayer
+from media_studio.vision_prompt import (
+    LENS_FEELS,
+    MOTIONS,
+    SHOT_TYPES,
+    STYLE_PRESETS,
+    compile_vision_prompt,
+    default_bridge_prompt,
+)
+from media_studio.vision_registry import (
+    VisionMode,
+    default_vision_model,
+    find_vision_model,
+    format_vision_cost,
+    vision_labels,
+)
+from media_studio.vision_service import run_vision
+from media_studio.vision_store import (
+    VisionPreset,
+    add_or_update_subject,
+    add_vision_preset,
+    delete_subject,
+    delete_vision_preset,
+    find_subject,
+    load_presets,
+    preset_choice_labels,
+    subject_choice_labels,
+)
+
+if TYPE_CHECKING:
+    from media_studio.flet_app import StudioState
+
+
+def _dd(dd: ft.Dropdown) -> str | None:
+    return dd.value
+
+
+def _cost_box(text: ft.Text) -> ft.Container:
+    return ft.Container(
+        content=text,
+        bgcolor=PANEL_ELEVATED,
+        border=ft.Border.all(1, BORDER),
+        border_radius=6,
+        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+    )
+
+
+class CreativeVisionView:
+    """Top-level Creative Vision workspace."""
+
+    def __init__(self, page: ft.Page, state: StudioState) -> None:
+        self.page = page
+        self.state = state
+        self._mode: VisionMode = "text_to_video"
+        self.start_path: str | None = None
+        self.end_path: str | None = None
+        self.ref_paths: list[str] = []
+        self._result_path: str | None = None
+
+        # Mode nav
+        self._mode_nav = PillNav(
+            [
+                ("text_to_video", "Text → Video"),
+                ("image_to_video", "Image → Video"),
+                ("bridge", "Bridge / Connect"),
+            ],
+            selected=self._mode,
+            on_change=self._on_mode,
+        )
+
+        # Model + cost
+        labels = vision_labels(self._mode)
+        self.model_dd = styled_dropdown(
+            label_text="Model",
+            options=labels,
+            value=labels[0] if labels else None,
+            on_select=self._on_model,
+            expand=True,
+        )
+        self.model_notes = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=3)
+        self.cost_text = ft.Text(
+            self._cost_label(),
+            size=FONT_SM,
+            color=TEXT,
+            weight=ft.FontWeight.W_600,
+        )
+
+        # Duration / aspect / resolution
+        spec0 = default_vision_model(self._mode)
+        self.dur_dd = styled_dropdown(
+            label_text="Duration",
+            options=list(spec0.duration_choices),
+            value=spec0.default_duration,
+            on_select=self._refresh_cost,
+            expand=True,
+        )
+        self.aspect_dd = styled_dropdown(
+            label_text="Aspect",
+            options=list(spec0.aspect_choices),
+            value=spec0.default_aspect,
+            on_select=self._refresh_cost,
+            expand=True,
+        )
+        self.res_dd = styled_dropdown(
+            label_text="Resolution",
+            options=list(spec0.resolution_choices) or ["720p"],
+            value=spec0.default_resolution or "720p",
+            on_select=self._refresh_cost,
+            expand=True,
+        )
+        self.gen_audio = ft.Checkbox(
+            label="Generate audio (when supported)",
+            value=True,
+            on_change=self._refresh_cost,
+        )
+
+        # Camera helpers
+        self.shot_dd = styled_dropdown(
+            label_text="Shot type",
+            options=SHOT_TYPES,
+            value=SHOT_TYPES[1],
+            on_select=self._rebuild_prompt,
+            expand=True,
+        )
+        self.lens_dd = styled_dropdown(
+            label_text="Lens feel",
+            options=LENS_FEELS,
+            value=LENS_FEELS[1],
+            on_select=self._rebuild_prompt,
+            expand=True,
+        )
+        self.motion_dd = styled_dropdown(
+            label_text="Motion",
+            options=MOTIONS,
+            value=MOTIONS[3],
+            on_select=self._rebuild_prompt,
+            expand=True,
+        )
+        self.style_dd = styled_dropdown(
+            label_text="Style preset",
+            options=list(STYLE_PRESETS.keys()),
+            value="Clean modern day",
+            on_select=self._on_style_preset,
+            expand=True,
+        )
+
+        self.prompt = ft.TextField(
+            label="Motion / shot prompt (editable — Enhance rewrites)",
+            value=compile_vision_prompt(
+                shot_type=SHOT_TYPES[1],
+                lens=LENS_FEELS[1],
+                motion=MOTIONS[3],
+                style_preset="Clean modern day",
+            ),
+            multiline=True,
+            min_lines=4,
+            max_lines=8,
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+        )
+        self.negative = ft.TextField(
+            label="Negative prompt (optional)",
+            value="text overlay, watermark, morphing architecture, deformed rooms",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+        )
+
+        # Media pickers
+        self.start_preview = ft.Image(
+            src="", fit=ft.BoxFit.CONTAIN, width=120, height=80, visible=False
+        )
+        self.start_ph = ft.Container(
+            content=ft.Text("Start still", size=FONT_SM, color=TEXT_MUTED),
+            width=120,
+            height=80,
+            alignment=ft.Alignment.CENTER,
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+        )
+        self.end_preview = ft.Image(
+            src="", fit=ft.BoxFit.CONTAIN, width=120, height=80, visible=False
+        )
+        self.end_ph = ft.Container(
+            content=ft.Text("End still", size=FONT_SM, color=TEXT_MUTED),
+            width=120,
+            height=80,
+            alignment=ft.Alignment.CENTER,
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+        )
+        self.btn_start = ft.OutlinedButton(
+            content="Start frame",
+            icon=ft.Icons.IMAGE,
+            on_click=self._pick_start,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+        )
+        self.btn_end = ft.OutlinedButton(
+            content="End frame",
+            icon=ft.Icons.IMAGE_OUTLINED,
+            on_click=self._pick_end,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+        )
+        self.btn_refs = ft.OutlinedButton(
+            content="Add reference stills",
+            icon=ft.Icons.COLLECTIONS,
+            on_click=self._pick_refs,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+        )
+        self.btn_clear_refs = ft.TextButton(
+            content="Clear refs",
+            on_click=self._clear_refs,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+        )
+        self.refs_label = ft.Text("No reference pack", size=FONT_SM, color=TEXT_MUTED)
+
+        # Subject library
+        self.subject_dd = styled_dropdown(
+            label_text="Use subject",
+            options=subject_choice_labels(state.output_dir),
+            value="(none)",
+            on_select=self._on_subject,
+            expand=True,
+        )
+        self.subject_name = ft.TextField(
+            label="New subject name",
+            hint_text="e.g. Realtor Jane",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            expand=True,
+        )
+        self.subject_notes = ft.TextField(
+            label="Subject notes (optional)",
+            hint_text="warm, navy blazer — consistency help, not a perfect lock",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            expand=True,
+        )
+        self.btn_save_subject = ft.OutlinedButton(
+            content="Save subject from refs",
+            icon=ft.Icons.PERSON_ADD,
+            on_click=self._save_subject,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+        )
+        self.btn_del_subject = ft.TextButton(
+            content="Delete subject",
+            on_click=self._delete_subject,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+        )
+
+        # Vision presets
+        self.preset_dd = styled_dropdown(
+            label_text="Vision preset",
+            options=preset_choice_labels(state.output_dir),
+            value="(none)",
+            on_select=self._on_load_preset,
+            expand=True,
+        )
+        self.preset_name = ft.TextField(
+            label="Preset name",
+            hint_text="e.g. Twilight drone rise",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            expand=True,
+        )
+        self.btn_save_preset = ft.OutlinedButton(
+            content="Save vision preset",
+            icon=ft.Icons.BOOKMARK_ADD,
+            on_click=self._save_preset,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+        )
+        self.btn_del_preset = ft.TextButton(
+            content="Delete preset",
+            on_click=self._delete_preset,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+        )
+
+        # Actions
+        self.btn_generate = ft.FilledButton(
+            content="Generate vision",
+            on_click=self._run,
+            style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+            height=42,
+        )
+        self.btn_enhance = make_enhance_button(on_click=self._on_enhance)
+        self.rebuild_mode = styled_dropdown(
+            label_text="Rebuild mode",
+            options=["Replace", "Append"],
+            value="Replace",
+            expand=True,
+        )
+        self.btn_rebuild = ft.TextButton(
+            content="Rebuild prompt from helpers",
+            on_click=self._rebuild_prompt,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+            tooltip=(
+                "Replace: overwrite prompt with helpers. "
+                "Append: prepend helpers to your text. "
+                "Helper dropdowns only auto-update while the prompt still looks stock."
+            ),
+        )
+        self.status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=5)
+        self.job_progress = JobProgress()
+        self.player = VideoResultPlayer(page, height=320)
+        self.send_host = ft.Container(visible=False)
+
+        self.state.on_keys_changed(self.apply_key_gates)
+        self.apply_key_gates()
+        self._apply_mode_visibility()
+        self._sync_model_ui()
+
+    # ----- layout -----
+
+    def build(self) -> ft.Control:
+        left = ft.Container(
+            width=520,
+            content=ft.Column(
+                [
+                    section_title("Creative Vision"),
+                    ft.Text(
+                        "Cinematic invention — text/image→video and bridge shots for "
+                        "ideas that are hard or impossible to shoot. "
+                        "Not listing camera-lock staging (use Studio for that). "
+                        "These models are expensive — check Est. cost before Generate.",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                    ),
+                    self._mode_nav.control,
+                    ft.Divider(height=1, color=BORDER),
+                    self.model_dd,
+                    self.model_notes,
+                    ft.Row([self.dur_dd, self.aspect_dd, self.res_dd], spacing=8),
+                    self.gen_audio,
+                    _cost_box(self.cost_text),
+                    ft.Divider(height=1, color=BORDER),
+                    label("Camera / shot helpers", muted=True),
+                    ft.Row([self.shot_dd, self.lens_dd], spacing=8),
+                    ft.Row([self.motion_dd, self.style_dd], spacing=8),
+                    ft.Row([self.rebuild_mode, self.btn_rebuild], spacing=8),
+                    self.prompt,
+                    self.negative,
+                    ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
+                    self.job_progress.control,
+                    self.status,
+                    ft.Divider(height=1, color=BORDER),
+                    label("Frames & reference pack", muted=True),
+                    ft.Row(
+                        [
+                            ft.Column(
+                                [self.start_ph, self.start_preview, self.btn_start],
+                                spacing=4,
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            ft.Column(
+                                [self.end_ph, self.end_preview, self.btn_end],
+                                spacing=4,
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                        ],
+                        spacing=16,
+                    ),
+                    ft.Row([self.btn_refs, self.btn_clear_refs, self.refs_label], spacing=8),
+                    ft.Divider(height=1, color=BORDER),
+                    # Collapsed by default to reduce left-column density (Phase F)
+                    ft.ExpansionTile(
+                        title=ft.Text("Subject library", size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600),
+                        subtitle=ft.Text(
+                            "Optional — person/pet/car refs (not identity lock)",
+                            size=FONT_SM,
+                            color=TEXT_MUTED,
+                        ),
+                        expanded=False,
+                        affinity=ft.TileAffinity.LEADING,
+                        controls=[
+                            ft.Column(
+                                [
+                                    ft.Text(
+                                        "Save 3–8 stills of a person/pet/car. “Use subject” attaches refs. "
+                                        "Consistency help — not a perfect identity lock.",
+                                        size=FONT_SM,
+                                        color=TEXT_MUTED,
+                                    ),
+                                    self.subject_dd,
+                                    ft.Row([self.subject_name, self.subject_notes], spacing=8),
+                                    ft.Row([self.btn_save_subject, self.btn_del_subject], spacing=8),
+                                ],
+                                spacing=8,
+                                tight=True,
+                            )
+                        ],
+                    ),
+                    ft.ExpansionTile(
+                        title=ft.Text("Vision presets", size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600),
+                        subtitle=ft.Text(
+                            "Save / load full helper + prompt setups",
+                            size=FONT_SM,
+                            color=TEXT_MUTED,
+                        ),
+                        expanded=False,
+                        affinity=ft.TileAffinity.LEADING,
+                        controls=[
+                            ft.Column(
+                                [
+                                    self.preset_dd,
+                                    ft.Row(
+                                        [self.preset_name, self.btn_save_preset, self.btn_del_preset],
+                                        spacing=8,
+                                    ),
+                                ],
+                                spacing=8,
+                                tight=True,
+                            )
+                        ],
+                    ),
+                ],
+                spacing=8,
+                scroll=ft.ScrollMode.AUTO,
+                expand=True,
+            ),
+            bgcolor=PANEL,
+            border=ft.Border.all(1, BORDER),
+            border_radius=8,
+            padding=12,
+        )
+
+        right = panel(
+            ft.Column(
+                [
+                    section_title("Result"),
+                    ft.Text(
+                        "In-app playback when available. Show in folder · Send to Resolve · Send to ▾",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                    ),
+                    self.player.control,
+                    self.send_host,
+                ],
+                spacing=8,
+                expand=True,
+            ),
+        )
+
+        return ft.Row(
+            [left, ft.Container(content=right, expand=True)],
+            spacing=12,
+            expand=True,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        )
+
+    # ----- key gates / cost -----
+
+    def apply_key_gates(self) -> None:
+        from media_studio.secrets_store import has_fal_key, has_xai_key
+
+        ready = has_fal_key()
+        if not self.state.is_busy("vision"):
+            self.btn_generate.disabled = not ready
+            self.btn_generate.tooltip = (
+                None if ready else "Add your FAL API key in Settings"
+            )
+            xai = has_xai_key()
+            self.btn_enhance.disabled = not xai
+            self.btn_enhance.tooltip = (
+                "Rewrite prompt for the selected Vision model"
+                if xai
+                else "Add xAI API key for Enhance"
+            )
+
+    def _current_spec(self):
+        return (
+            find_vision_model(_dd(self.model_dd), self._mode)
+            or default_vision_model(self._mode)
+        )
+
+    def _cost_label(self) -> str:
+        try:
+            spec = self._current_spec()
+            return format_vision_cost(
+                spec,
+                duration_token=_dd(self.dur_dd),
+                resolution=_dd(self.res_dd),
+            )
+        except Exception:
+            return "Est. cost: —"
+
+    async def _refresh_cost(self, e: ft.ControlEvent | None = None) -> None:
+        self.cost_text.value = self._cost_label()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _sync_model_ui(self) -> None:
+        spec = self._current_spec()
+        self.model_notes.value = spec.notes or ""
+        # Duration / aspect / res options per model
+        self.dur_dd.options = dropdown_options(list(spec.duration_choices))
+        if _dd(self.dur_dd) not in spec.duration_choices:
+            self.dur_dd.value = spec.default_duration
+        self.aspect_dd.options = dropdown_options(list(spec.aspect_choices))
+        if _dd(self.aspect_dd) not in spec.aspect_choices:
+            self.aspect_dd.value = spec.default_aspect
+        if spec.resolution_choices:
+            self.res_dd.options = dropdown_options(list(spec.resolution_choices))
+            self.res_dd.visible = True
+            if _dd(self.res_dd) not in spec.resolution_choices:
+                self.res_dd.value = spec.default_resolution
+        else:
+            self.res_dd.visible = False
+        self.gen_audio.visible = bool(spec.supports_audio)
+        self.negative.visible = bool(spec.supports_negative)
+        self.cost_text.value = self._cost_label()
+
+    # ----- mode / model -----
+
+    def _on_mode(self, mode_id: str) -> None:
+        if mode_id not in ("text_to_video", "image_to_video", "bridge"):
+            return
+        self._mode = mode_id  # type: ignore[assignment]
+        labels = vision_labels(self._mode)
+        self.model_dd.options = dropdown_options(labels)
+        try:
+            self.model_dd.value = default_vision_model(self._mode).label
+        except Exception:
+            self.model_dd.value = labels[0] if labels else None
+        self._apply_mode_visibility()
+        self._sync_model_ui()
+        if self._mode == "bridge":
+            # Soft default bridge language if prompt is empty/stock
+            cur = (self.prompt.value or "").strip()
+            if not cur or "Bridge the start frame" not in cur:
+                self.prompt.value = default_bridge_prompt()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _supports_end_frame(self) -> bool:
+        """End-frame UI only for bridge modes or I2V models that declare support."""
+        if self._mode == "bridge":
+            return True
+        if self._mode != "image_to_video":
+            return False
+        try:
+            spec = self._current_spec()
+            return bool(getattr(spec, "supports_end_frame", False))
+        except Exception:
+            return False
+
+    def _apply_mode_visibility(self) -> None:
+        is_i2v = self._mode == "image_to_video"
+        is_bridge = self._mode == "bridge"
+        show_start = is_i2v or is_bridge
+        show_end = is_bridge or (is_i2v and self._supports_end_frame())
+        # Start for I2V/bridge; end only when model supports it
+        self.btn_start.visible = show_start
+        self.btn_end.visible = show_end
+        self.start_ph.visible = show_start and not self.start_path
+        self.end_ph.visible = show_end and not self.end_path
+        try:
+            self.start_preview.visible = bool(self.start_path) and show_start
+            self.end_preview.visible = bool(self.end_path) and show_end
+        except Exception:
+            pass
+
+    async def _on_model(self, e: ft.ControlEvent) -> None:
+        self._sync_model_ui()
+        self._apply_mode_visibility()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    # ----- prompt helpers -----
+
+    async def _on_style_preset(self, e: ft.ControlEvent) -> None:
+        await self._rebuild_prompt(e)
+
+    def _compiled_helpers(self) -> str:
+        style_key = _dd(self.style_dd)
+        sub = None
+        name = _dd(self.subject_dd)
+        if name and name != "(none)":
+            s = find_subject(name, self.state.output_dir)
+            if s:
+                sub = s.notes or s.name
+        return compile_vision_prompt(
+            base_prompt="",
+            shot_type=_dd(self.shot_dd),
+            lens=_dd(self.lens_dd),
+            motion=_dd(self.motion_dd),
+            style_preset=style_key,
+            bridge=(self._mode == "bridge"),
+            subject_notes=sub,
+        )
+
+    def _prompt_looks_stock(self, text: str) -> bool:
+        """True when the field is empty or still matches a pure helper compile."""
+        cur = (text or "").strip()
+        if not cur:
+            return True
+        stock = self._compiled_helpers().strip()
+        if cur == stock:
+            return True
+        # Soft stock: mostly camera helper language without freeform body
+        low = cur.lower()
+        if low.startswith("bridge the start frame") and len(cur) < 280:
+            return True
+        if "camera —" in low and "shot:" in low and len(cur) < 400:
+            # Likely still helper-built unless user clearly added a long clause
+            return True
+        return False
+
+    async def _rebuild_prompt(self, e: ft.ControlEvent | None = None) -> None:
+        """
+        Rebuild from camera helpers.
+
+        - Helper dropdowns: only rewrite when the prompt still looks stock
+          (never clobber freeform).
+        - Rebuild button + Replace: full overwrite.
+        - Rebuild button + Append: prepend helpers to current text.
+        """
+        compiled = self._compiled_helpers()
+        mode = (_dd(self.rebuild_mode) or "Replace").strip().lower()
+        cur = (self.prompt.value or "").strip()
+        from_button = False
+        try:
+            from_button = e is not None and getattr(e, "control", None) is self.btn_rebuild
+        except Exception:
+            from_button = False
+
+        if from_button:
+            if mode.startswith("append"):
+                if not cur:
+                    self.prompt.value = compiled
+                elif compiled and compiled.strip() not in cur:
+                    self.prompt.value = f"{compiled}\n\n{cur}"
+            else:
+                self.prompt.value = compiled
+        else:
+            # Dropdown / style change — soft only
+            if self._prompt_looks_stock(cur):
+                self.prompt.value = compiled
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _on_enhance(self, e: ft.ControlEvent) -> None:
+        def _extra() -> dict[str, Any]:
+            return {
+                "workspace": "creative_vision",
+                "mode": self._mode,
+                "shot_type": _dd(self.shot_dd),
+                "lens": _dd(self.lens_dd),
+                "motion": _dd(self.motion_dd),
+                "style": _dd(self.style_dd),
+                "guidance": (
+                    "Rewrite for cinematic video generation. "
+                    "Use clear camera language. For bridges: keep architecture "
+                    "consistent between start and end frames. "
+                    "Subject refs are consistency help, not perfect identity lock."
+                ),
+            }
+
+        # Multi-image: enhance uses primary image; pass start or first ref
+        img = self.start_path
+        if not img and self.ref_paths:
+            img = self.ref_paths[0]
+        if not img and self.end_path:
+            img = self.end_path
+
+        await run_prompt_enhance(
+            page=self.page,
+            state=self.state,
+            prompt_field=self.prompt,
+            get_model=lambda: _dd(self.model_dd),
+            get_image=lambda: img,
+            get_scenario=lambda: "creative_vision",
+            get_extra_context=_extra,
+            status_ctrl=self.status,
+            job_progress=self.job_progress,
+            enhance_btn=self.btn_enhance,
+            busy_controls=[self.btn_generate],
+            context_label="vision prompt",
+            allow_empty_with_context=True,
+            busy_scope="vision",
+        )
+        self.apply_key_gates()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    # ----- pickers -----
+
+    def receive_start_frame(self, path: str, *, status: str | None = None) -> bool:
+        """Load a still as I2V / bridge start frame (Send-to from Library/Tools)."""
+        try:
+            p = Path(path)
+            if not p.is_file():
+                self.status.value = f"Start frame missing: {path}"
+                return False
+            resolved = str(p.resolve())
+        except OSError as exc:
+            self.status.value = f"Start frame error: {exc}"
+            return False
+        self.start_path = resolved
+        self.start_preview.src = resolved
+        self.start_preview.visible = True
+        self.start_ph.visible = False
+        # Prefer I2V mode when receiving a still
+        try:
+            if self._mode == "text_to_video":
+                self._on_mode("image_to_video")
+        except Exception:
+            pass
+        self.status.value = status or f"Start: {Path(resolved).name}"
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        return True
+
+    def receive_video(self, path: str, *, status: str | None = None) -> bool:
+        """
+        Receive a video from Send-to. Vision is still-driven; surface the path
+        in status and open Studio Video for full clip workflows if needed.
+        """
+        try:
+            p = Path(path)
+            if not p.is_file():
+                self.status.value = f"Video missing: {path}"
+                return False
+            name = p.name
+        except OSError as exc:
+            self.status.value = f"Video error: {exc}"
+            return False
+        self.status.value = status or (
+            f"Received video {name} — use Send to Studio Video or Tools for "
+            "clip workflows; Vision is primarily still → video."
+        )
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        return True
+
+    async def _pick_start(self, e: ft.ControlEvent) -> None:
+        try:
+            files = await pick_image(self.page, dialog_title="Start frame / I2V still")
+        except Exception as exc:
+            self.status.value = f"Picker error: {exc}"
+            self.page.update()
+            return
+        if not files or not files[0].path:
+            return
+        self.receive_start_frame(files[0].path)
+        self.page.update()
+
+    async def _pick_end(self, e: ft.ControlEvent) -> None:
+        try:
+            files = await pick_image(self.page, dialog_title="End frame (bridge)")
+        except Exception as exc:
+            self.status.value = f"Picker error: {exc}"
+            self.page.update()
+            return
+        if not files or not files[0].path:
+            return
+        self.end_path = str(Path(files[0].path).resolve())
+        self.end_preview.src = self.end_path
+        self.end_preview.visible = True
+        self.end_ph.visible = False
+        self.status.value = f"End: {Path(self.end_path).name}"
+        self.page.update()
+
+    async def _pick_refs(self, e: ft.ControlEvent) -> None:
+        try:
+            files = await pick_image(
+                self.page,
+                dialog_title="Reference pack stills",
+                allow_multiple=True,
+            )
+        except Exception as exc:
+            self.status.value = f"Picker error: {exc}"
+            self.page.update()
+            return
+        if not files:
+            return
+        for f in files:
+            if not f.path:
+                continue
+            p = str(Path(f.path).resolve())
+            if p not in self.ref_paths:
+                self.ref_paths.append(p)
+        self.ref_paths = self.ref_paths[:8]
+        self.refs_label.value = f"{len(self.ref_paths)} ref still(s)"
+        self.status.value = f"Reference pack: {len(self.ref_paths)} still(s)"
+        self.page.update()
+
+    async def _clear_refs(self, e: ft.ControlEvent) -> None:
+        self.ref_paths = []
+        self.refs_label.value = "No reference pack"
+        self.page.update()
+
+    # ----- subjects -----
+
+    def _refresh_subject_dd(self, *, select: str | None = None) -> None:
+        labels = subject_choice_labels(self.state.output_dir)
+        self.subject_dd.options = dropdown_options(labels)
+        self.subject_dd.value = select if select in labels else "(none)"
+
+    async def _on_subject(self, e: ft.ControlEvent) -> None:
+        name = _dd(self.subject_dd)
+        if not name or name == "(none)":
+            return
+        sub = find_subject(name, self.state.output_dir)
+        if not sub:
+            return
+        # Attach subject stills into ref pack (merge)
+        for p in sub.existing_images():
+            if p not in self.ref_paths:
+                self.ref_paths.append(p)
+        self.ref_paths = self.ref_paths[:8]
+        self.refs_label.value = f"{len(self.ref_paths)} ref still(s) (subject: {sub.name})"
+        if sub.notes:
+            self.subject_notes.value = sub.notes
+        self.status.value = (
+            f"Using subject “{sub.name}” — {len(sub.existing_images())} refs "
+            "(consistency help, not a perfect lock)."
+        )
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _save_subject(self, e: ft.ControlEvent) -> None:
+        name = (self.subject_name.value or "").strip()
+        if not name:
+            self.status.value = "Enter a subject name."
+            self.page.update()
+            return
+        paths = list(self.ref_paths)
+        if self.start_path:
+            paths = [self.start_path] + paths
+        # de-dupe
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for p in paths:
+            if p not in seen:
+                seen.add(p)
+                uniq.append(p)
+        if len(uniq) < 1:
+            self.status.value = "Add reference stills (or a start frame) before saving a subject."
+            self.page.update()
+            return
+        try:
+            sub = add_or_update_subject(
+                name=name,
+                image_paths=uniq[:8],
+                notes=self.subject_notes.value or "",
+                output_dir=self.state.output_dir,
+            )
+            self._refresh_subject_dd(select=sub.name)
+            self.status.value = (
+                f"Saved subject “{sub.name}” with {len(sub.image_paths)} still(s). "
+                "Identity is consistency help — not a perfect lock."
+            )
+        except Exception as exc:
+            self.status.value = f"Save subject failed: {exc}"
+        self.page.update()
+
+    async def _delete_subject(self, e: ft.ControlEvent) -> None:
+        name = _dd(self.subject_dd)
+        if not name or name == "(none)":
+            return
+        sub = find_subject(name, self.state.output_dir)
+        if not sub:
+            return
+        delete_subject(sub.id, self.state.output_dir)
+        self._refresh_subject_dd()
+        self.status.value = f"Deleted subject “{name}”."
+        self.page.update()
+
+    # ----- presets -----
+
+    def _refresh_preset_dd(self, *, select: str | None = None) -> None:
+        labels = preset_choice_labels(self.state.output_dir)
+        self.preset_dd.options = dropdown_options(labels)
+        self.preset_dd.value = select if select in labels else "(none)"
+
+    async def _on_load_preset(self, e: ft.ControlEvent) -> None:
+        name = _dd(self.preset_dd)
+        if not name or name == "(none)":
+            return
+        for p in load_presets(self.state.output_dir):
+            if p.name == name:
+                self._apply_preset(p)
+                break
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _apply_preset(self, p: VisionPreset) -> None:
+        if p.mode in ("text_to_video", "image_to_video", "bridge"):
+            self._mode = p.mode  # type: ignore[assignment]
+            try:
+                self._mode_nav.set_selected(p.mode, notify=False)
+            except Exception:
+                pass
+            labels = vision_labels(self._mode)
+            self.model_dd.options = dropdown_options(labels)
+            if p.model_label and p.model_label in labels:
+                self.model_dd.value = p.model_label
+            elif labels:
+                self.model_dd.value = labels[0]
+        if p.shot_type:
+            self.shot_dd.value = p.shot_type
+        if p.lens:
+            self.lens_dd.value = p.lens
+        if p.motion:
+            self.motion_dd.value = p.motion
+        if p.style_preset and p.style_preset in STYLE_PRESETS:
+            self.style_dd.value = p.style_preset
+        if p.prompt:
+            self.prompt.value = p.prompt
+        if p.duration:
+            self.dur_dd.value = p.duration
+        if p.aspect:
+            self.aspect_dd.value = p.aspect
+        if p.resolution:
+            self.res_dd.value = p.resolution
+        if p.ref_paths:
+            self.ref_paths = [x for x in p.ref_paths if Path(x).is_file()][:8]
+            self.refs_label.value = f"{len(self.ref_paths)} ref still(s) (from preset)"
+        self._apply_mode_visibility()
+        self._sync_model_ui()
+        self.status.value = f"Loaded vision preset “{p.name}”."
+
+    async def _save_preset(self, e: ft.ControlEvent) -> None:
+        name = (self.preset_name.value or "").strip()
+        if not name:
+            self.status.value = "Enter a preset name."
+            self.page.update()
+            return
+        sub_id = ""
+        sn = _dd(self.subject_dd)
+        if sn and sn != "(none)":
+            s = find_subject(sn, self.state.output_dir)
+            if s:
+                sub_id = s.id
+        preset = VisionPreset(
+            id="",
+            name=name,
+            prompt=self.prompt.value or "",
+            mode=self._mode,
+            model_label=_dd(self.model_dd) or "",
+            shot_type=_dd(self.shot_dd) or "",
+            lens=_dd(self.lens_dd) or "",
+            motion=_dd(self.motion_dd) or "",
+            style_preset=_dd(self.style_dd) or "",
+            duration=_dd(self.dur_dd) or "8s",
+            aspect=_dd(self.aspect_dd) or "16:9",
+            resolution=_dd(self.res_dd) or "720p",
+            ref_paths=list(self.ref_paths),
+            subject_id=sub_id,
+        )
+        add_vision_preset(preset, self.state.output_dir)
+        self._refresh_preset_dd(select=name)
+        self.status.value = f"Saved vision preset “{name}”."
+        self.page.update()
+
+    async def _delete_preset(self, e: ft.ControlEvent) -> None:
+        name = _dd(self.preset_dd)
+        if not name or name == "(none)":
+            return
+        for p in load_presets(self.state.output_dir):
+            if p.name == name:
+                delete_vision_preset(p.id, self.state.output_dir)
+                break
+        self._refresh_preset_dd()
+        self.status.value = f"Deleted preset “{name}”."
+        self.page.update()
+
+    # ----- generate -----
+
+    async def _run(self, e: ft.ControlEvent) -> None:
+        if self.state.is_busy("vision"):
+            return
+        from media_studio.secrets_store import has_fal_key
+
+        if not has_fal_key():
+            self.status.value = "FAL API key required — open Settings (gear icon)."
+            self.page.update()
+            return
+
+        prompt = (self.prompt.value or "").strip()
+        if not prompt:
+            self.status.value = "Enter a motion / shot prompt."
+            self.page.update()
+            return
+
+        if self._mode == "image_to_video" and not (
+            self.start_path and Path(self.start_path).is_file()
+        ):
+            self.status.value = "Image→Video needs a start still."
+            self.page.update()
+            return
+        if self._mode == "bridge":
+            if not (
+                self.start_path
+                and Path(self.start_path).is_file()
+                and self.end_path
+                and Path(self.end_path).is_file()
+            ):
+                self.status.value = "Bridge needs both start and end stills."
+                self.page.update()
+                return
+
+        # Merge subject refs
+        refs = list(self.ref_paths)
+        sn = _dd(self.subject_dd)
+        if sn and sn != "(none)":
+            s = find_subject(sn, self.state.output_dir)
+            if s:
+                for p in s.existing_images():
+                    if p not in refs:
+                        refs.append(p)
+
+        # Reference model needs refs
+        spec = self._current_spec()
+        if spec.max_refs > 0 and not refs:
+            self.status.value = (
+                f"{spec.label} needs a reference pack — add stills or pick a subject."
+            )
+            self.page.update()
+            return
+
+        # Optional cost guard (Settings — default off)
+        try:
+            from media_studio.flet_dialogs import confirm_cost_if_needed
+            from media_studio.vision_registry import estimate_vision_cost
+
+            est = estimate_vision_cost(
+                spec,
+                duration_token=_dd(self.dur_dd),
+                resolution=_dd(self.res_dd),
+            )
+            ok = await confirm_cost_if_needed(
+                self.page,
+                estimated_usd=est,
+                job_label=f"Creative Vision · {spec.label}",
+            )
+            if not ok:
+                self.status.value = "Generate cancelled (cost guard)."
+                self.page.update()
+                return
+        except Exception:
+            pass
+
+        if not self.state.try_busy("vision"):
+            return
+        self.btn_generate.disabled = True
+        self.player.clear()
+        self.send_host.visible = False
+        self.cost_text.value = self._cost_label()
+        self.job_progress.start("Uploading…", self.page)
+        self.status.value = f"Running {spec.label}… (can take several minutes)"
+        self.page.update()
+
+        def on_progress(msg: str) -> None:
+            self.job_progress.set_message(classify_progress(msg), self.page)
+
+        try:
+            result = await asyncio.to_thread(
+                run_vision,
+                mode=self._mode,
+                prompt=prompt,
+                model_label=_dd(self.model_dd),
+                image_path=self.start_path if self._mode == "image_to_video" else None,
+                first_frame_path=self.start_path if self._mode == "bridge" else None,
+                last_frame_path=(
+                    self.end_path
+                    if self._mode == "bridge"
+                    else (self.end_path if self._mode == "image_to_video" else None)
+                ),
+                ref_paths=refs or None,
+                duration=_dd(self.dur_dd),
+                aspect_ratio=_dd(self.aspect_dd),
+                resolution=_dd(self.res_dd),
+                negative_prompt=self.negative.value,
+                generate_audio=bool(self.gen_audio.value),
+                output_dir=self.state.output_dir,
+                on_progress=on_progress,
+            )
+            self.cost_text.value = result.cost_label or self._cost_label()
+            if result.ok and result.path:
+                self._result_path = result.path
+                done = result.status or "OK"
+                self.job_progress.finish_ok(done, self.page)
+                self.status.value = done
+                self.player.set_result(result.path)
+                self._refresh_send_menu(result.path)
+            else:
+                err = result.status or "Failed."
+                self.job_progress.finish_error(err, self.page)
+                self.status.value = err
+        except Exception as exc:
+            self.job_progress.finish_error(f"Error: {exc}", self.page)
+            self.status.value = f"Error: {exc}"
+            traceback.print_exc()
+        finally:
+            self.state.clear_busy("vision")
+            self.apply_key_gates()
+            self.page.update()
+
+    def _refresh_send_menu(self, path: str) -> None:
+        """Shared destination matrix (Phase C) — includes Video→SFX, FE, Tools."""
+        from media_studio.flet_send_to import (
+            build_send_menu_items,
+            make_send_menu_button,
+        )
+
+        def _st(msg: str) -> None:
+            try:
+                self.status.value = msg
+                self.page.update()
+            except Exception:
+                pass
+
+        items = build_send_menu_items(
+            self.state,
+            video_path=path,
+            status_cb=_st,
+        )
+        btn = make_send_menu_button(items)
+        if btn is None:
+            self.send_host.visible = False
+            return
+        self.send_host.content = btn
+        self.send_host.visible = True
+
+    def _send_video_source(self, path: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            vv = getattr(self.state, "video_view", None)
+            if vv is not None and hasattr(vv, "load_source_video"):
+                vv.load_source_video(
+                    path,
+                    clip_name=Path(path).name,
+                    status=f"Vision → Video: {Path(path).name}",
+                    record=False,
+                )
+            switch = getattr(self.state, "switch_to_video", None)
+            if switch:
+                switch()
+            self.status.value = f"Sent to Video: {Path(path).name}"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click
+
+    def _send_tool(self, tool_id: str, path: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            tv = getattr(self.state, "tools_view", None)
+            if tv is not None and hasattr(tv, "receive_media"):
+                tv.receive_media(tool_id, path, as_video=True)
+            switch = getattr(self.state, "switch_to_tools", None)
+            if switch:
+                switch(tool_id)
+            self.status.value = f"Sent to {tool_id}: {Path(path).name}"
+
+        return _click
+
+    def _send_resolve(self, path: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            from media_studio.resolve_export import send_file_to_resolve
+
+            try:
+                result = await asyncio.to_thread(send_file_to_resolve, path)
+                self.status.value = result.message if hasattr(result, "message") else str(result)
+            except Exception as exc:
+                self.status.value = f"Resolve: {exc}"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click

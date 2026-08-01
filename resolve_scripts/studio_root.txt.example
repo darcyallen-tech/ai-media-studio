@@ -1,0 +1,8 @@
+# Rename this file to studio_root.txt (same folder as Send_to_AI_Media_Studio.py)
+# and put a single line: absolute path to the folder that contains app.py
+#
+# Example (edit to match your machine):
+# C:\Users\YourName\projects\ai-media-studio
+#
+# Prefer: open AI Media Studio once so it registers the path automatically,
+# or set environment variable AI_MEDIA_STUDIO_ROOT.

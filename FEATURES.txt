@@ -1,0 +1,203 @@
+AI MEDIA STUDIO — FEATURES
+Real-estate focused AI image, video, and audio workstation
+Built with Grok 4.5
+
+Setup, keys, Resolve path, and sharing: see README.md (source of truth for install).
+This file lists product capabilities.
+
+==============================================================================
+OVERVIEW
+==============================================================================
+Pay-per-use desktop app for listing videographers. Stage empties, lock camera
+moves, repair stills/video, denoise clips, interpolate / slow-mo, generate
+audio, and run creative shots — then send results to DaVinci Resolve.
+
+Providers:
+  fal.ai   — main generation (Studio, Tools, Vision, Audio; FE 1080p proxy).
+             Admin key needed only to display fal balance.
+  xAI      — Grok Enhance / QC (optional). Grok Imagine on fal uses FAL key.
+  Runware  — Frame Editor / Aleph only (optional).
+
+First run: Quick Start wizard. Reopen via Help (?) anytime.
+
+==============================================================================
+TOP BAR
+==============================================================================
+- Settings (gear) — keys, output folder, retention, clear caches, cost guard
+- Help (?) — Quick Start, open FEATURES.txt / README.md
+- fal balance (Admin key)
+- Runware balance / status (Aleph)
+- xAI billing
+- Import from Resolve
+- Output folder path (persisted) + Open folder
+
+==============================================================================
+SCENARIOS (app-level)
+==============================================================================
+Shared scenario bar configures applicable workspaces:
+  Blank / Custom
+  Furniture Pop-in
+  Furniture Swap
+  Day → Night
+  Twilight Exterior
+  Sky + Mood
+  Lot to Home
+  Dehaze / Clear Air
+  Landscaper
+  Amenity On
+  Season Change
+
+Blank / Custom = freeform, no forced builder.
+Scenario prompts are defaults and stay editable.
+
+==============================================================================
+STUDIO — IMAGE
+==============================================================================
+- Standard edit mode (full-frame prompt)
+- Region edit mode (colored boxes + per-box prompts; Seedream annotation only)
+- Source still upload + Previously used
+- Model list (Flux 2 Pro/Max Edit, MAI-Image, Seedream, etc.)
+- Strength / relevant controls
+- Grok Enhance (vision-aware, model-specific, scenario-aware)
+- Comparison viewer with Overlay / A/B + opacity
+- Versions history
+- Cost estimate, generate, Show in folder, Send to Resolve, Send to ▾
+
+Region edit:
+  - Draw/place colored boxes on the still
+  - Per-box prompts; composite hard-fails if annotation still cannot be built
+  - Model list filtered to Seedream / annotation-capable models
+
+==============================================================================
+STUDIO — VIDEO
+==============================================================================
+Workspaces include Received, Blank Canvas, Camera Lock (and related).
+- Source video + reference still (from Image “use as reference”)
+- Camera-lock style prompts for furniture / day-night / etc.
+- Models: Kling family, Seedance 2.0 I2V/V2V, others on fal
+- Grok Enhance on video prompts
+- Duration / resolution guidance, cost estimate
+- Export: Show in folder, Send to Resolve, Library
+
+==============================================================================
+TOOLS
+==============================================================================
+Split: Image tools | Video tools
+Large result viewer with Overlay / A/B where applicable
+Previously used sources on tools that accept media
+Per-tab busy scopes so long jobs do not freeze every tab
+
+Image tools:
+  Upscale, Object Remove, Sky / Weather, Dehaze, Sharpen / Restore,
+  Blown Out, Mirror / Glass, Amenity On, Season / Curb, Match Look, Re-Aspect
+
+Video tools:
+  Upscale (SeedVR2, Bytedance, Topaz families: Proteus / Artemis / Nyx /
+           Starlight / Gaia, RealESRGAN)
+  Denoise / Clean (Topaz Nyx + Artemis; noise / compression / detail / halo)
+  Slow Mo / Interpolate (RIFE default, FILM for large motion; 2×–5× factor)
+  Object remove, Sky / Weather, Mirror / Glass, Amenity On, Restore, Re-Aspect
+
+Each tool: model select, prompt + Enhance where prompts exist (not pure Topaz
+control jobs), cost estimate, result → play / Show in folder / Resolve / Library.
+
+==============================================================================
+CREATIVE VISION
+==============================================================================
+Cinematic playground (separate from listing camera-lock staging):
+  - Text → Video (e.g. Veo 3.1 / Fast and peers)
+  - Image → Video
+  - Bridge / connect shots (start frame + end frame → in-between)
+  - Reference pack
+  - Camera / shot helpers; Rebuild prompt Replace / Append
+  - Subject Library + Vision presets (collapsible)
+  - Grok Enhance
+  - Optional cost guard (Settings: warn at $2+ / $5+)
+  - Library + Resolve export
+
+==============================================================================
+FRAME EDITOR (Aleph 2.0)
+==============================================================================
+Requires Runware API key — not fal (fal only for optional 1080p proxy).
+
+Keyframe-guided video edit:
+  - Upload source video
+  - Auto-downscale to 1080p-class proxy when needed (fal scale-video)
+  - Filmstrip of sampled frames (JPEG thumbs; LRU-bounded cache)
+  - Up to 5 keyframes (first / last / timestamp)
+  - Send frame to Studio for cleanup gens → pin still back
+  - Prompt + Grok Enhance
+  - Generate via Aleph 2.0
+  - Result → Library, Show in folder, Send to Resolve
+
+==============================================================================
+AUDIO
+==============================================================================
+- Music generator (structured builder)
+- SFX (categories + prompt builder)
+- Ambience (scene builder)
+- Voiceover (tone/emotion; optional character/clone paths)
+- Video → SFX (synced Foley from clip)
+    Models: MMAudio V2, Mirelo, Sonilo, Kling video-to-audio (as registered)
+    Char counter + warning near Kling ~200-char limit (no silent-only truncate)
+    Style / Pace / Emphasis / Exclude chips + Enhance
+- In-app playback where supported
+- Show in folder, Send to Resolve
+- Library Audio filter
+
+==============================================================================
+LIBRARY
+==============================================================================
+- Filters: All | Image | Video | Audio
+- Hide missing media (Settings)
+- Thumbnails + metadata (model, scenario, cost, time)
+- Send to ▾ (Image, Video, tools, Frame Editor, Resolve, etc.)
+- Show in folder
+- History cap; media retention follows Settings policy
+
+==============================================================================
+RESOLVE INTEGRATION
+==============================================================================
+- Import from Resolve (stills / clips via handoff folder)
+- Send to Resolve from Studio, Tools, Frame Editor, Audio, Library
+- Studio path auto-detected (no hardcoded personal path)
+- Prefer graded proxies; Render in Place when needed
+- Handoff auto-purge (~7 days / ~200 files) + Clear handoff cache
+
+==============================================================================
+SETTINGS / DISK SAFETY
+==============================================================================
+- fal / xAI / Runware keys (local app data only)
+- Output folder (persisted across sessions)
+- Library / outputs retention: Never / 7 / 14 / 30 / 90 days
+- Clear caches (app-owned dirs only under output root + handoff)
+- Cost guard for expensive generates (default off)
+- Hide missing Library rows
+
+==============================================================================
+GROK ENHANCE
+==============================================================================
+Available across Studio, Tools, Creative Vision, Frame Editor, Audio:
+  - Rewrites prompts for the selected model
+  - Uses vision when a still/reference is present
+  - Scenario-aware constraints
+  - Does not auto-switch models
+  - Skipped where tools are pure control (e.g. Topaz denoise)
+
+==============================================================================
+PACKAGING
+==============================================================================
+- MIT License
+- README: Windows / macOS / Linux install
+- Launchers: start.bat, start.command, start.sh (skip pip when satisfied)
+- .env.example placeholders only; no personal keys or paths in repo
+- .gitignore: outputs/, handoff, .env, venv, caches
+- Quiet credit: Built with Grok 4.5
+
+==============================================================================
+DESIGN PRINCIPLES
+==============================================================================
+- Real-estate defaults: preserve architecture, camera, identity unless asked
+- Pay only for what you generate
+- Studio = listing workflow; Creative Vision = invention; Frame Editor = fix-a-frame-through-motion
+- Resolve is the timeline; this app is the AI workbench

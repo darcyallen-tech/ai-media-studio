@@ -1,0 +1,63 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg
+dist/
+build/
+
+# Generated media & job receipts (keep folder via .gitkeep)
+outputs/*
+!outputs/.gitkeep
+outputs/**/*
+!outputs/.gitkeep
+
+# Local env / secrets — never commit real keys
+.env
+.env.*
+!.env.example
+
+# Personal voice clones / samples
+data/my_voices.json
+data/voice_samples/
+data/voice_samples/**
+
+# Resolve → Studio handoff (stills + JSON; can grow large)
+data/resolve_handoff/*
+!data/resolve_handoff/.gitkeep
+
+# Local caches / partial downloads
+*.partial
+*.tmp
+*.log
+
+# Personal audit / local notes with machine paths
+AUDIT_REPORT*.txt
+*.local.md
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# macOS
+.AppleDouble
+.LSOverride
+
+# Local studio path markers (machine-specific)
+**/studio_root.txt
+!resolve_scripts/studio_root.txt.example

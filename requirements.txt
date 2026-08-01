@@ -1,0 +1,10 @@
+flet>=0.86.0,<0.87
+# Video: inline preview. Audio: pygame.mixer (in-process; no OS media window).
+flet-video>=0.86.0,<0.87
+pygame-ce>=2.5.0
+Pillow>=10.0.0
+opencv-python-headless>=4.8.0
+openai>=1.40.0
+python-dotenv>=1.0.0
+fal-client>=0.5.0
+httpx>=0.27.0
