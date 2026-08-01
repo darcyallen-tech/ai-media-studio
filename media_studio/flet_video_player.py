@@ -33,12 +33,23 @@ class VideoResultPlayer:
 
     Visible only after ``set_result``; does not open the OS media player.
     Empty state is compact (no full-height grey expand void).
+
+    Video always uses BoxFit.CONTAIN (no crop). Play/pause via built-in controls.
     """
 
-    def __init__(self, page: ft.Page, *, height: float = 360) -> None:
+    def __init__(
+        self,
+        page: ft.Page,
+        *,
+        height: float = 360,
+        embed_actions: bool = True,
+        show_path_row: bool = True,
+    ) -> None:
         self.page = page
         self.path: str | None = None
         self._height = float(height)
+        self._embed_actions = bool(embed_actions)
+        self._show_path_row = bool(show_path_row)
 
         self.path_text = ft.Text(
             "No video result yet.",
@@ -46,6 +57,12 @@ class VideoResultPlayer:
             color=TEXT_MUTED,
             selectable=True,
             max_lines=2,
+        )
+        self._path_row = ft.Row(
+            [self.path_text],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            visible=self._show_path_row,
         )
         self._resolve_status = ft.Text(
             "", size=FONT_SM, color=TEXT_MUTED, visible=False, max_lines=2
@@ -59,11 +76,12 @@ class VideoResultPlayer:
             get_path=lambda: self.path,
             on_status=self._on_resolve_status,
         )
+        self.result_actions_row.visible = False
         # Content-sized empty state — never expand into a grey slab
         self._placeholder = ft.Column(
             [
                 ft.Icon(ft.Icons.MOVIE, size=36, color=TEXT_MUTED),
-                self.path_text,
+                self.path_text if not self._show_path_row else ft.Container(height=0),
                 ft.Text(
                     "Generate a video to preview it here.",
                     size=FONT_SM,
@@ -81,18 +99,29 @@ class VideoResultPlayer:
         self._error = ft.Text("", size=FONT_SM, color="#e57373", visible=False)
 
         if _HAS_VIDEO:
-            self._video = ftv.Video(
+            kwargs: dict[str, Any] = dict(
                 playlist=[],
                 autoplay=False,
                 volume=100,
                 fit=ft.BoxFit.CONTAIN,
                 fill_color="#0a0c10",
-                aspect_ratio=16 / 9,
                 expand=False,
-                height=self._height - 48,
+                height=max(160.0, self._height - 8),
                 visible=False,
                 on_error=self._on_error,
             )
+            # Play/pause + seek — prefer native controls when supported
+            try:
+                kwargs["show_controls"] = True
+            except Exception:
+                pass
+            try:
+                kwargs["filter_quality"] = ft.FilterQuality.MEDIUM
+            except Exception:
+                pass
+            # Leave aspect free so CONTAIN letterboxes inside fixed height
+            # (fixed 16:9 + short height was clipping controls)
+            self._video = ftv.Video(**kwargs)
         else:
             self._error.value = (
                 "flet-video is not installed. Run: pip install flet-video\n"
@@ -103,24 +132,22 @@ class VideoResultPlayer:
         body_controls: list[ft.Control] = [self._placeholder]
         if self._video is not None:
             body_controls.append(self._video)
-        body_controls.extend(
-            [
-                self._error,
-                ft.Row(
-                    [self.path_text],
-                    spacing=8,
-                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                ),
-                self.result_actions_row,
-                self._resolve_status,
-            ]
-        )
+        body_controls.append(self._error)
+        if self._show_path_row:
+            body_controls.append(self._path_row)
+        if self._embed_actions:
+            body_controls.append(self.result_actions_row)
+            body_controls.append(self._resolve_status)
+        else:
+            # Status still available for parent-driven Resolve feedback
+            body_controls.append(self._resolve_status)
 
         # expand=False when empty — parent tabs must not inherit a full-height grey box
+        # No HARD_EDGE on outer shell — it clipped player controls / bottom of frame
         self.control = ft.Container(
             content=ft.Column(
                 body_controls,
-                spacing=8,
+                spacing=6,
                 tight=True,
                 expand=False,
                 alignment=ft.MainAxisAlignment.START,
@@ -131,10 +158,20 @@ class VideoResultPlayer:
             border=ft.Border.all(1, BORDER),
             border_radius=8,
             padding=10,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            clip_behavior=ft.ClipBehavior.NONE,
             alignment=ft.Alignment.TOP_CENTER,
         )
         show_result_actions(self.btn_folder, self.btn_resolve, visible=False)
+
+    def _chrome_h(self) -> float:
+        """Path + actions + padding under the video."""
+        h = 20.0  # padding
+        if self._show_path_row:
+            h += 28.0
+        if self._embed_actions:
+            h += 48.0
+        h += 12.0  # error/status slack
+        return h
 
     def _safe_update(self) -> None:
         try:
@@ -167,11 +204,15 @@ class VideoResultPlayer:
 
     def _set_result_layout(self) -> None:
         """
+        Size the player for full CONTAIN playback (no crop).
+
         When parent sets control.expand=True (Tools/Vision wide pane), drop fixed
-        height so the video CONTAIN-fills the area without cropping.
+        height so the video fills the area. Otherwise use a fixed preview height
+        large enough for the frame + native controls.
         """
         try:
             parent_expands = bool(getattr(self.control, "expand", False))
+            vid_h = max(200.0, self._height - 4)
             if parent_expands:
                 self.control.height = None  # type: ignore[assignment]
                 if self._video is not None:
@@ -183,11 +224,16 @@ class VideoResultPlayer:
                         pass
             else:
                 self.control.expand = False
-                self.control.height = self._height + 56
+                # Video area + chrome (path/actions) so controls are not clipped
+                self.control.height = vid_h + self._chrome_h()
                 if self._video is not None:
                     self._video.fit = ft.BoxFit.CONTAIN
-                    self._video.height = max(160.0, self._height - 48)
+                    self._video.height = vid_h
                     self._video.expand = False
+                    try:
+                        self._video.show_controls = True
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -195,6 +241,11 @@ class VideoResultPlayer:
         self.path = None
         self.path_text.value = "No video result yet."
         show_result_actions(self.btn_folder, self.btn_resolve, visible=False)
+        if self._embed_actions:
+            try:
+                self.result_actions_row.visible = False
+            except Exception:
+                pass
         self._resolve_status.visible = False
         self._placeholder.visible = True
         self._error.visible = not _HAS_VIDEO
@@ -212,8 +263,13 @@ class VideoResultPlayer:
             self.clear()
             return
         self.path = str(Path(path).resolve())
-        self.path_text.value = note or f"Saved: {self.path}"
-        show_result_actions(self.btn_folder, self.btn_resolve, visible=True)
+        self.path_text.value = note or f"Saved: {Path(self.path).name}"
+        if self._embed_actions:
+            show_result_actions(self.btn_folder, self.btn_resolve, visible=True)
+            try:
+                self.result_actions_row.visible = True
+            except Exception:
+                pass
         self._resolve_status.visible = False
         self._placeholder.visible = False
         self._error.visible = False
@@ -232,7 +288,12 @@ class VideoResultPlayer:
             media = ftv.VideoMedia(resource=self.path)
             self._video.playlist = [media]
             self._video.visible = True
-            # Do not autoplay — user presses controls
+            self._video.fit = ft.BoxFit.CONTAIN
+            try:
+                self._video.show_controls = True
+            except Exception:
+                pass
+            # Do not autoplay — user presses play
         except Exception as exc:
             self._error.value = f"Could not load video: {exc}"
             self._error.visible = True

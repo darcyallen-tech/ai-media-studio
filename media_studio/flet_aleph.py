@@ -37,6 +37,7 @@ from media_studio.flet_theme import (
     PANEL_ELEVATED,
     TEXT,
     TEXT_MUTED,
+    PillNav,
     label,
     section_title,
     styled_dropdown,
@@ -68,13 +69,28 @@ _RUNWARE_KEYS_URL = "https://my.runware.ai/"
 _RAIL_W = 460  # align with RAIL_WIDTH — never horizontal-expand in Row
 # Right Preview / filmstrip (fixed sizes — never expand voids)
 _PREVIEW_H = 440
-_FILMSTRIP_H = 90
-_FILMSTRIP_THUMB = 72
+_FILMSTRIP_H = 96
+_FILMSTRIP_THUMB = 68
 _MAX_FILE_MB = 200.0
-# Filmstrip sampling: ~16–24 thumbs, 0.25–0.5s steps
+# Filmstrip: denser on short clips; more samples + horizontal scroll on long
 _STRIP_MIN = 12
-_STRIP_MAX = 24
-_STRIP_TARGET = 20
+_STRIP_MAX = 48
+
+# Edit intent (UI only — maps to first/last/timestamp pins, not invented API fields)
+_INTENT_APPLY = "apply"
+_INTENT_TRANSITION = "transition"
+_INTENT_CUSTOM = "custom"
+
+_PROMPT_APPLY = (
+    "Apply the edited look from the keyframe(s). "
+    "Change only what the keyframe shows; keep motion, framing, "
+    "lighting, and everything else exactly as in the source."
+)
+_PROMPT_TRANSITION = (
+    "Transition the look from the first keyframe to the last keyframe over the clip. "
+    "Interpolate only the guided change (e.g. day to night); keep camera motion, "
+    "framing, architecture, and subject motion locked to the source."
+)
 
 
 @dataclass
@@ -197,16 +213,31 @@ def _ensure_poster(video_path: str, output_dir: str) -> tuple[str | None, str | 
 
 
 def _sample_timestamps(duration_s: float) -> list[float]:
-    """Evenly spaced times across the clip (~16–24 samples)."""
+    """
+    Evenly spaced times across the clip for filmstrip thumbs.
+
+    Short clips get denser samples so the strip is useful (not half-empty).
+    Longer clips get more samples with horizontal scroll (cap ``_STRIP_MAX``).
+    Exact timestamp pin remains available via Extract / Pin frame.
+    """
     dur = max(0.05, float(duration_s or 1.0))
-    # Prefer ~0.35s step for short clips; stretch for longer ones
-    n = int(round(dur / 0.35)) + 1
-    n = max(_STRIP_MIN, min(_STRIP_MAX, n, _STRIP_TARGET if dur < 12 else n))
+    # Target step by length — fill the row usefully, scroll when needed
+    if dur <= 3.5:
+        step = 0.15  # ~3s → ~20 thumbs
+    elif dur <= 8.0:
+        step = 0.22
+    elif dur <= 16.0:
+        step = 0.30
+    else:
+        step = 0.40  # 30s → ~75 raw, clamped to max
+    n = int(round(dur / step)) + 1
+    n = max(_STRIP_MIN, min(_STRIP_MAX, n))
     if n <= 1:
         return [0.0]
-    # Keep endpoints; sample interior
-    times = [i * (dur - 0.04) / (n - 1) for i in range(n)]
-    return [round(max(0.0, min(t, dur - 0.02)), 2) for t in times]
+    # Always include endpoints; evenly space interior
+    end = max(0.04, dur - 0.02)
+    times = [i * end / (n - 1) for i in range(n)]
+    return [round(max(0.0, min(t, end)), 2) for t in times]
 
 
 def sample_filmstrip(
@@ -215,7 +246,7 @@ def sample_filmstrip(
     output_dir: str,
 ) -> tuple[list[_StripFrame], str | None]:
     """
-    Sample ~16–24 frames across the clip into cached JPEG thumbs.
+    Sample thumbs across the clip into cached JPEGs (density scales with duration).
 
     Opens the video once (OpenCV) for speed. Returns (frames, error).
     """
@@ -497,17 +528,31 @@ class FrameEditorView:
         self._rebuild_send_menu()
 
         # ----- Prompt + generate (live in the left ListView stack) -----
+        # Edit intent — UI helper only (Aleph still gets first/last/timestamp + prompt)
+        self._edit_intent = _INTENT_APPLY
+        self.intent_hint = ft.Text(
+            "One keyframe ≈ apply that look through the clip. "
+            "First + last (or two timestamps) ≈ transition between looks.",
+            size=11,
+            color=TEXT_MUTED,
+            max_lines=3,
+        )
+        self.intent_nav = PillNav(
+            [
+                (_INTENT_APPLY, "Apply through clip"),
+                (_INTENT_TRANSITION, "Transition first→last"),
+                (_INTENT_CUSTOM, "Custom timestamps"),
+            ],
+            selected=_INTENT_APPLY,
+            on_change=self._on_edit_intent,
+        )
         self.prompt = ft.TextField(
             label="What to change",
             hint_text="Remove the person in the mirror. Change nothing else.",
-            value=(
-                "Apply the edited look from the keyframe(s). "
-                "Change only what the keyframe shows; keep motion, framing, "
-                "lighting, and everything else exactly as in the source."
-            ),
+            value=_PROMPT_APPLY,
             multiline=True,
             min_lines=2,
-            max_lines=3,
+            max_lines=4,
             dense=True,
             filled=True,
             fill_color=PANEL_ELEVATED,
@@ -584,8 +629,13 @@ class FrameEditorView:
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
             alignment=ft.Alignment.CENTER,
         )
-        # In-app Aleph result player (Creative Vision pattern)
-        self.result_player = VideoResultPlayer(page, height=_PREVIEW_H - 40)
+        # In-app result player — actions live in FE row under player (always reachable)
+        self.result_player = VideoResultPlayer(
+            page,
+            height=_PREVIEW_H - 12,
+            embed_actions=False,
+            show_path_row=True,
+        )
         try:
             from media_studio.flet_theme import EMPTY_PREVIEW_H
 
@@ -596,7 +646,7 @@ class FrameEditorView:
             pass
 
         self.filmstrip_caption = ft.Text(
-            "Filmstrip · click = preview · Pin frame = keyframe slot",
+            "Filmstrip · click = preview · Pin frame = keyframe · scroll when long",
             size=11,
             color=TEXT_MUTED,
             max_lines=1,
@@ -646,6 +696,12 @@ class FrameEditorView:
                 ft.Text(
                     "Select a filmstrip frame or load a source",
                     size=FONT_SM,
+                    color=TEXT_MUTED,
+                    text_align=ft.TextAlign.CENTER,
+                ),
+                ft.Text(
+                    "Day→night: pin day at first, night at last, then Generate",
+                    size=11,
                     color=TEXT_MUTED,
                     text_align=ft.TextAlign.CENTER,
                 ),
@@ -707,6 +763,9 @@ class FrameEditorView:
             self.prev_strip.root,
             self.resolve_strip.root,
             ft.Divider(height=1, color=BORDER),
+            label("Edit intent", muted=True),
+            self.intent_nav.control,
+            self.intent_hint,
             label(f"Keyframes (max {ALEPH_MAX_KEYFRAMES})", muted=True),
             self.kf_host,
             ft.Row([self.extract_time, self.default_pin], spacing=6),
@@ -766,6 +825,7 @@ class FrameEditorView:
             self.result_player.control.height = EMPTY_PREVIEW_H + 40
         except Exception:
             pass
+        # Preview primary → actions under player (reachable) → filmstrip secondary
         right = ft.Container(
             expand=True,
             bgcolor=PANEL,
@@ -779,9 +839,9 @@ class FrameEditorView:
                     self.preview_caption,
                     self.preview_box,
                     self.result_player.control,
+                    self.result_actions_row,
                     self.filmstrip_caption,
                     self.filmstrip_host,
-                    self.result_actions_row,
                     ft.Text(
                         f"{ALEPH_MIN_DURATION_S:.0f}–{ALEPH_MAX_DURATION_S:.0f}s · "
                         f"≤{ALEPH_MAX_KEYFRAMES} keyframes · ~1080p · Aleph 2.0",
@@ -961,10 +1021,12 @@ class FrameEditorView:
         self._preview_mode = mode
 
         if mode == "result" and video_path and Path(video_path).is_file():
-            # In-app video play; poster still as fallback if player unavailable
+            # In-app video play (CONTAIN + controls); poster fallback if unavailable
             poster, _ = _ensure_poster(video_path, self.state.output_dir)
             has_player = False
             try:
+                # Fixed-height CONTAIN layout — never expand into a grey void
+                self.result_player.control.expand = False
                 self.result_player.set_result(
                     video_path,
                     note=caption or f"Result · {Path(video_path).name}",
@@ -977,6 +1039,12 @@ class FrameEditorView:
                     self.result_player.control.visible = False
                 except Exception:
                     pass
+            # FE owns Show in folder / Resolve / Send — keep under player
+            try:
+                show_result_actions(self.btn_folder, self.btn_resolve, visible=True)
+                self.result_actions_row.visible = True
+            except Exception:
+                pass
             if has_player:
                 self.preview_box.visible = False
             elif poster and self._paint_preview_image(poster):
@@ -1047,18 +1115,27 @@ class FrameEditorView:
             ]
             return
 
-        # Timestamps already used as keyframes (for subtle second highlight)
+        # Timestamps already used as keyframes (timestamp pins + first/last endpoints)
         kf_times = {
             round(float(k.timestamp_s), 2)
             for k in self.keyframes
             if k.pin == "timestamp"
         }
+        has_first = any(k.pin == "first" for k in self.keyframes)
+        has_last = any(k.pin == "last" for k in self.keyframes)
+        n_frames = len(self._strip_frames)
+        dur = float(self.video_duration_s or 0.0)
 
         cells: list[ft.Control] = []
         for i, fr in enumerate(self._strip_frames):
             idx = i
             selected = self._selected_strip == i
             is_kf = round(fr.timestamp_s, 2) in kf_times
+            # Highlight first/last strip ends when those pins are used
+            if has_first and i == 0:
+                is_kf = True
+            if has_last and (i == n_frames - 1 or (dur > 0 and fr.timestamp_s >= dur - 0.08)):
+                is_kf = True
             border_c = (
                 ACCENT_BRIGHT
                 if selected
@@ -1080,7 +1157,7 @@ class FrameEditorView:
                             ft.Image(
                                 src=fr.path,
                                 width=_FILMSTRIP_THUMB,
-                                height=_FILMSTRIP_THUMB - 14,
+                                height=_FILMSTRIP_THUMB - 12,
                                 fit=ft.BoxFit.COVER,
                                 border_radius=3,
                                 gapless_playback=False,
@@ -1088,7 +1165,9 @@ class FrameEditorView:
                             ft.Text(
                                 t_label,
                                 size=10,
-                                color=ACCENT_BRIGHT if selected else TEXT_MUTED,
+                                color=ACCENT_BRIGHT if selected else (
+                                    ACCENT if is_kf else TEXT_MUTED
+                                ),
                                 text_align=ft.TextAlign.CENTER,
                             ),
                         ],
@@ -1103,10 +1182,22 @@ class FrameEditorView:
                     bgcolor="#1a1d24" if selected else PANEL_ELEVATED,
                     on_click=make_click(idx),
                     ink=True,
-                    tooltip=f"t={t_label} — click to preview (use Pin frame for keyframe)",
+                    tooltip=(
+                        f"t={t_label} — click to preview"
+                        + (" · keyframe" if is_kf else "")
+                        + " · Pin frame to add slot"
+                    ),
                 )
             )
         self.filmstrip_row.controls = cells
+        n = len(cells)
+        try:
+            self.filmstrip_caption.value = (
+                f"Filmstrip · {n} frames · click = preview · Pin frame = keyframe"
+                + (" · scroll →" if n > 14 else "")
+            )
+        except Exception:
+            pass
 
     async def _on_strip_click(self, index: int) -> None:
         """Preview-only: show strip frame large. Does NOT add a keyframe slot."""
@@ -2405,6 +2496,72 @@ class FrameEditorView:
         except Exception:
             pass
 
+    def _on_edit_intent(self, intent_id: str) -> None:
+        """
+        Edit intent helper — only changes UI defaults / prompt hints.
+
+        Aleph API still receives frameImages with first|last|timestamp + positivePrompt.
+        """
+        if intent_id not in (_INTENT_APPLY, _INTENT_TRANSITION, _INTENT_CUSTOM):
+            intent_id = _INTENT_APPLY
+        self._edit_intent = intent_id
+        cur = (self.prompt.value or "").strip()
+        stock = {
+            _PROMPT_APPLY.strip(),
+            _PROMPT_TRANSITION.strip(),
+            "",
+        }
+
+        if intent_id == _INTENT_TRANSITION:
+            self.intent_hint.value = (
+                "Transition: pin look A at first (or early time) and look B at last "
+                "(or late time). Aleph interpolates between them. "
+                "Day→night: day still @ first, night still @ last."
+            )
+            try:
+                self.default_pin.value = "first"
+            except Exception:
+                pass
+            if cur in stock or "Apply the edited look" in cur:
+                self.prompt.value = _PROMPT_TRANSITION
+            self.status.value = (
+                "Transition mode — add two keyframes (first + last recommended)."
+            )
+            self.status.color = TEXT_MUTED
+        elif intent_id == _INTENT_CUSTOM:
+            self.intent_hint.value = (
+                "Custom timestamps: pin up to 5 stills at exact times "
+                "(filmstrip → Pin frame, or Extract at time). "
+                "Order follows the timeline."
+            )
+            try:
+                self.default_pin.value = "timestamp"
+            except Exception:
+                pass
+        else:
+            self.intent_hint.value = (
+                "One keyframe ≈ apply that look through the whole clip. "
+                "First + last (or two timestamps) ≈ transition between looks."
+            )
+            try:
+                self.default_pin.value = "first"
+            except Exception:
+                pass
+            if cur in stock or "Transition the look" in cur:
+                self.prompt.value = _PROMPT_APPLY
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _pin_label(self, kf: _KeyframeSlot) -> str:
+        """Human position for a keyframe: first / last / 1.61s."""
+        if kf.pin == "last":
+            return "last"
+        if kf.pin == "timestamp":
+            return f"{float(kf.timestamp_s):.2f}s"
+        return "first"
+
     def _on_resolve_media(self, path: str) -> None:
         """
         From Resolve strip: clip → source video (proxy path); still → keyframe pin.
@@ -2500,7 +2657,10 @@ class FrameEditorView:
                         self._set_preview_mode(
                             "keyframe",
                             image_src=k.thumb_src or k.image_path,
-                            caption=f"Keyframe #{ii + 1} · pin={k.pin}",
+                            caption=(
+                                f"Keyframe #{ii + 1} · {self._pin_label(k)} · "
+                                f"{Path(k.image_path).name}"
+                            ),
                         )
                         # Mirror selection onto filmstrip when pin is a timestamp
                         self._selected_strip = None
@@ -2563,15 +2723,29 @@ class FrameEditorView:
             ts_field.on_change = on_ts
 
             thumb_src = kf.thumb_src or kf.image_path
-            pin_note = kf.pin
-            if kf.pin == "timestamp":
-                pin_note = f"t={float(kf.timestamp_s):.2f}s"
+            pin_note = self._pin_label(kf)
+            name = Path(kf.image_path).name
+            if len(name) > 28:
+                name = name[:25] + "…"
+            # Always show position + pinned image name (not only when selected)
             detail = ft.Text(
-                f"#{i + 1} · {pin_note} · {Path(kf.image_path).name}",
+                f"#{i + 1} · {pin_note} · {name}",
                 size=10,
-                color=TEXT_MUTED,
+                color=TEXT if selected else TEXT_MUTED,
                 max_lines=1,
-                visible=selected,
+                overflow=ft.TextOverflow.ELLIPSIS,
+            )
+            pos_badge = ft.Container(
+                content=ft.Text(
+                    pin_note,
+                    size=10,
+                    color=TEXT,
+                    weight=ft.FontWeight.W_700,
+                ),
+                bgcolor=ACCENT if selected else "#2a3140",
+                border_radius=4,
+                padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                tooltip=f"Pinned at {pin_note}",
             )
             rows.append(
                 ft.Container(
@@ -2591,9 +2765,7 @@ class FrameEditorView:
                                         ink=True,
                                         tooltip="Show larger in preview",
                                     ),
-                                    ft.Text(
-                                        f"#{i + 1}", size=FONT_SM, color=TEXT, width=22
-                                    ),
+                                    pos_badge,
                                     pin_dd,
                                     ts_field,
                                     ft.IconButton(
@@ -2624,10 +2796,21 @@ class FrameEditorView:
 
         if not rows:
             rows = [
-                ft.Text(
-                    "No keyframes yet — extract a frame or upload an edited still.",
-                    size=FONT_SM,
-                    color=TEXT_MUTED,
+                ft.Column(
+                    [
+                        ft.Text(
+                            "No keyframes yet — extract a frame, Pin filmstrip, or upload a still.",
+                            size=FONT_SM,
+                            color=TEXT_MUTED,
+                        ),
+                        ft.Text(
+                            "Day→night: pin day at first, night at last, then Generate",
+                            size=11,
+                            color=TEXT_MUTED,
+                        ),
+                    ],
+                    spacing=4,
+                    tight=True,
                 )
             ]
         self.kf_host.controls = rows
@@ -2731,13 +2914,43 @@ class FrameEditorView:
             img = self.keyframes[0].image_path
 
         def _extra() -> dict[str, Any]:
+            pins = [self._pin_label(k) for k in self.keyframes]
+            intent = getattr(self, "_edit_intent", _INTENT_APPLY)
+            body = (self.prompt.value or "").lower()
+            wants_transition = (
+                intent == _INTENT_TRANSITION
+                or "transition" in body
+                or "day to night" in body
+                or "day-to-night" in body
+                or "day→night" in body
+                or "dusk" in body
+                or "nightfall" in body
+            )
+            if wants_transition:
+                guidance = (
+                    "Rewrite for Runway Aleph 2.0 dual-anchor transition. "
+                    "Describe the change from the first keyframe look to the last "
+                    "(e.g. daylight → night / golden hour). "
+                    "State that the look interpolates over time between the two "
+                    "guided frames. "
+                    "Name ONLY what changes (lighting, grade, sky, time of day). "
+                    "Explicitly keep camera motion, framing, architecture, "
+                    "people/object motion, and composition locked to the source. "
+                    "Do not invent API parameters — only positive change language."
+                )
+            else:
+                guidance = (
+                    "Rewrite for Runway Aleph 2.0. Lead with remove/change/replace. "
+                    "Name only what changes; end with keep motion, framing, lighting, "
+                    "architecture, and everything else locked to the source."
+                )
             return {
                 "workspace": "frame_editor",
-                "guidance": (
-                    "Rewrite for Runway Aleph 2.0. Lead with remove/change/replace. "
-                    "Name only what changes; end with keep motion, framing, lighting."
-                ),
+                "edit_intent": intent,
+                "guidance": guidance,
                 "keyframe_count": len(self.keyframes),
+                "keyframe_pins": pins,
+                "transition": wants_transition,
             }
 
         await run_prompt_enhance(
@@ -2792,6 +3005,27 @@ class FrameEditorView:
             )
             for k in self.keyframes
         ]
+
+        # Soft guidance for transition intent (do not invent API fields)
+        if getattr(self, "_edit_intent", _INTENT_APPLY) == _INTENT_TRANSITION:
+            pins = {k.pin for k in self.keyframes}
+            if len(self.keyframes) < 2:
+                self._set_status(
+                    "Transition works best with two keyframes "
+                    "(e.g. day @ first + night @ last). Add another still, or Generate anyway.",
+                    True,
+                )
+                # still allow run — user may continue
+            elif not (
+                ("first" in pins and "last" in pins)
+                or sum(1 for k in self.keyframes if k.pin == "timestamp") >= 2
+                or ("first" in pins and any(k.pin == "timestamp" for k in self.keyframes))
+                or ("last" in pins and any(k.pin == "timestamp" for k in self.keyframes))
+            ):
+                self.status.value = (
+                    "Tip: use first+last (or two timestamps) so Aleph can interpolate."
+                )
+                self.status.color = TEXT_MUTED
 
         if not self.state.try_busy("frame_editor"):
             return
