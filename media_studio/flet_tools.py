@@ -632,7 +632,8 @@ class _RestoreCard:
         )
         self.strength_hint = ft.Text(
             "CodeFormer: higher = closer to original identity. "
-            "Edit models: higher = stronger restore in the prompt.",
+            "NAFNet: whole-frame deblur (strength unused). "
+            "Edit / ref models: higher = stronger restore in the prompt.",
             size=FONT_SM,
             color=TEXT_MUTED,
         )
@@ -686,7 +687,8 @@ class _RestoreCard:
         )
         self.result_actions_row.visible = False
 
-        # Media side-by-side, then full-width form (readable labels — no 3-col crush)
+        # Stack Soft source + Reference still vertically — side-by-side clips
+        # labels/upload at Tools form width (no horizontal overflow, no grey voids).
         self.root = ft.Container(
             bgcolor=PANEL,
             border=ft.Border.all(1, BORDER),
@@ -702,53 +704,36 @@ class _RestoreCard:
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
-                    ft.Row(
+                    label("Soft source", muted=True),
+                    ft.Stack(
                         [
-                            ft.Column(
-                                [
-                                    label("Soft source", muted=True),
-                                    ft.Stack(
-                                        [
-                                            self.src_placeholder,
-                                            self.src_preview,
-                                            ft.Container(
-                                                content=self.src_video_label,
-                                                width=140,
-                                                height=90,
-                                                alignment=ft.Alignment.CENTER,
-                                                padding=6,
-                                            ),
-                                        ],
-                                        width=140,
-                                        height=90,
-                                    ),
-                                    self.btn_upload_src,
-                                    self.prev_strip.root,
-                                    self.resolve_strip.root,
-                                ],
-                                spacing=4,
-                                tight=True,
-                            ),
-                            ft.Column(
-                                [
-                                    label("Reference still", muted=True),
-                                    ft.Stack(
-                                        [self.ref_placeholder, self.ref_preview],
-                                        width=140,
-                                        height=90,
-                                    ),
-                                    ft.Row(
-                                        [self.btn_upload_ref, self.btn_clear_ref],
-                                        spacing=4,
-                                        wrap=True,
-                                    ),
-                                ],
-                                spacing=4,
-                                tight=True,
+                            self.src_placeholder,
+                            self.src_preview,
+                            ft.Container(
+                                content=self.src_video_label,
+                                width=140,
+                                height=90,
+                                alignment=ft.Alignment.CENTER,
+                                padding=6,
                             ),
                         ],
-                        spacing=16,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
+                        width=140,
+                        height=90,
+                    ),
+                    self.btn_upload_src,
+                    self.prev_strip.root,
+                    self.resolve_strip.root,
+                    ft.Divider(height=1, color=BORDER),
+                    label("Reference still", muted=True),
+                    ft.Stack(
+                        [self.ref_placeholder, self.ref_preview],
+                        width=140,
+                        height=90,
+                    ),
+                    ft.Row(
+                        [self.btn_upload_ref, self.btn_clear_ref],
+                        spacing=8,
+                        wrap=True,
                         tight=True,
                     ),
                     ft.Row([self.model_dd], spacing=0),
@@ -879,6 +864,7 @@ class _RestoreCard:
         else:
             self.model_dd.value = labels[0] if labels else None
         self.cost_text.value = self._cost()
+        self._sync_restore_model_ui()
 
     async def _on_mode(self, e: ft.ControlEvent) -> None:
         self._mode = "video" if (_dd_value(self.mode_dd) or "").lower() == "video" else "image"
@@ -913,7 +899,52 @@ class _RestoreCard:
 
     async def _refresh_cost(self, e: ft.ControlEvent) -> None:
         self.cost_text.value = self._cost()
+        self._sync_restore_model_ui()
         self.page.update()
+
+    def _sync_restore_model_ui(self) -> None:
+        """Show/hide strength & prompt notes by model (ref still only when used)."""
+        if self._mode == "video":
+            try:
+                self.strength.visible = True
+                self.strength_hint.visible = True
+                self.prompt.visible = True
+                self.btn_enhance.visible = True
+            except Exception:
+                pass
+            return
+        spec = find_tool(_dd_value(self.model_dd), self._registry())
+        ep = (spec.endpoint if spec else "") or ""
+        is_naf = "nafnet" in ep
+        is_cf = "codeformer" in ep
+        try:
+            # NAFNet: no prompt / fidelity; CodeFormer: fidelity slider, no prompt needed
+            self.strength.visible = not is_naf
+            self.strength_hint.visible = True
+            if is_naf:
+                self.strength_hint.value = (
+                    "NAFNet deblur is whole-frame — no prompt, no ref still. "
+                    f"{(spec.notes or '') if spec else ''}"
+                )
+            elif is_cf:
+                self.strength_hint.value = (
+                    "CodeFormer fidelity: higher = closer to original identity. "
+                    "Reference still is not used by this model."
+                )
+            else:
+                self.strength_hint.value = (
+                    "Edit / ref-identity models: higher strength = stronger restore "
+                    "in the auto-built prompt. Upload a sharp ref still for identity lock."
+                )
+            self.prompt.visible = not is_naf and not is_cf
+            self.btn_enhance.visible = not is_naf and not is_cf
+            if hasattr(self, "prompt_favs") and self.prompt_favs is not None:
+                try:
+                    self.prompt_favs.root.visible = not is_naf and not is_cf
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _on_prev_source(self, path: str) -> None:
         ext = Path(path).suffix.lower()

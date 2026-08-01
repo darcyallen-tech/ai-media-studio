@@ -4,6 +4,10 @@ Built with Grok 4.5
 
 Setup, keys, Resolve path, and sharing: see README.md (source of truth for install).
 This file lists product capabilities.
+What’s new by version: RELEASE_NOTES.md.
+
+HARD RULE: When shipping user-visible changes, update README.md, FEATURES.txt,
+and RELEASE_NOTES.md as needed (see AGENTS.md).
 
 ==============================================================================
 OVERVIEW
@@ -121,7 +125,10 @@ Previously used + From Resolve strips on tools that accept media
 Per-tab busy scopes so long jobs do not freeze every tab
 
 Image tools:
-  Upscale, Object Remove, Sky / Weather, Dehaze, Sharpen / Restore,
+  Upscale, Object Remove, Sky / Weather, Dehaze, Sharpen / Restore
+    (CodeFormer face fidelity, NAFNet whole-frame deblur, prompt restore;
+     with ref still: multi-image identity-lock defaults — Nano Banana / Flux / …;
+     Soft source + Reference still stacked vertically so labels/upload are not clipped),
   Blown Out, Mirror / Glass, Amenity On, Season / Curb, Match Look, Re-Aspect
 
 Video tools:
@@ -264,6 +271,9 @@ LIBRARY
     outputs/jobs/<slug>/<date>/ when they already live under the output root
     (outside-root paths stay put — metadata only). Clear does not reverse-move.
     Grouping / filters refresh immediately after assign
+- Bulk select: checkbox on each card → bulk bar (N selected · Assign to ▾ ·
+  Select all · Clear). Same New / existing / Clear menu as single-card Assign;
+  applies metadata + optional file move to every selected item.
 - Local spend panel (from history costs only):
     Today / This week / This month / All time totals
     Top models + by provider; missing or $0 cost rows skipped

@@ -623,7 +623,8 @@ RELIGHT_MODELS: dict[str, ToolSpec] = {
 }
 
 # --- Sharpen / Restore (face recovery, soft realtor shots) ---
-# Without reference: CodeFormer (fidelity slider). With reference: multi-image edit.
+# Without reference: CodeFormer (fidelity) default; NAFNet whole-frame deblur.
+# With reference: multi-image identity lock default; specialized models still listed.
 RESTORE_IMAGE_NO_REF: dict[str, ToolSpec] = {
     "codeformer": ToolSpec(
         key="codeformer",
@@ -632,10 +633,22 @@ RESTORE_IMAGE_NO_REF: dict[str, ToolSpec] = {
         endpoint="fal-ai/codeformer",
         cost_estimate_usd=0.01,
         notes=(
-            "Default without reference. Face restore with fidelity control "
-            "(higher = keep original identity closer)."
+            "Default without reference. Face-first restore with fidelity control "
+            "(higher = keep original identity closer). ~$0.002/MP on fal."
         ),
         extra_defaults={"fidelity": 0.7, "upscale_factor": 1, "face_upscale": True},
+    ),
+    "nafnet deblur": ToolSpec(
+        key="nafnet deblur",
+        label="NAFNet Deblur (whole frame)",
+        category="restore",
+        endpoint="fal-ai/nafnet/deblur",
+        cost_estimate_usd=0.025,
+        notes=(
+            "Whole-frame soft/defocus/motion blur restore (no prompt, no ref still). "
+            "~$0.0225 per megapixel on fal."
+        ),
+        extra_defaults={},
     ),
     "nano banana 2 restore": ToolSpec(
         key="nano banana 2 restore",
@@ -711,6 +724,31 @@ RESTORE_IMAGE_WITH_REF: dict[str, ToolSpec] = {
         cost_estimate_usd=0.03,
         notes="Flux 2 Pro multi-ref restore — economical.",
         extra_defaults={"image_size": "auto", "output_format": "png"},
+    ),
+    # Specialized (no multi-ref guidance — ref still ignored)
+    "codeformer": ToolSpec(
+        key="codeformer",
+        label="CodeFormer (face restore)",
+        category="restore",
+        endpoint="fal-ai/codeformer",
+        cost_estimate_usd=0.01,
+        notes=(
+            "Face-first restore with fidelity control. Reference still is not used "
+            "by this model — clear ref or use a ref-identity model for guidance."
+        ),
+        extra_defaults={"fidelity": 0.7, "upscale_factor": 1, "face_upscale": True},
+    ),
+    "nafnet deblur": ToolSpec(
+        key="nafnet deblur",
+        label="NAFNet Deblur (whole frame)",
+        category="restore",
+        endpoint="fal-ai/nafnet/deblur",
+        cost_estimate_usd=0.025,
+        notes=(
+            "Whole-frame soft/defocus/motion blur. Reference still is not used. "
+            "~$0.0225/MP on fal."
+        ),
+        extra_defaults={},
     ),
 }
 
@@ -1382,6 +1420,17 @@ def build_codeformer_args(
         "upscale_factor": float(upscale_factor),
         "face_upscale": True,
     }
+
+
+def build_nafnet_deblur_args(image_url: str, *, seed: int | None = None) -> dict[str, Any]:
+    """fal-ai/nafnet/deblur: image_url (+ optional seed). No prompt / ref."""
+    args: dict[str, Any] = {"image_url": image_url}
+    if seed is not None:
+        try:
+            args["seed"] = int(seed)
+        except (TypeError, ValueError):
+            pass
+    return args
 
 
 SKY_PRESETS: dict[str, str] = {

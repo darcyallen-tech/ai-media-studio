@@ -12,7 +12,9 @@ Stage empties, invent stills then bridge them, lock camera moves, clean noisy cl
 | **xAI** | Optional — Grok Enhance / QC |
 | **Runware** | Optional — Frame Editor / Aleph 2.0 only |
 
-Capability list: **[FEATURES.txt](FEATURES.txt)**. This README is the install source of truth.
+Capability list: **[FEATURES.txt](FEATURES.txt)**. What’s new: **[RELEASE_NOTES.md](RELEASE_NOTES.md)**. This README is the install source of truth.
+
+**Hard rule:** Any user-visible change must update **README.md**, **FEATURES.txt**, and **RELEASE_NOTES.md** as needed (see [AGENTS.md](AGENTS.md)).
 
 **License:** [MIT](LICENSE)
 
@@ -221,6 +223,8 @@ Optional field (address, client, shoot date) shared by all generate surfaces. La
 Library can filter or group by job; cards show the job label. Media filters: **All | Image | Video | Audio | From Resolve**. Handoff imports show a **Resolve** chip in All. History JSON stays at the output root. No cloud sync.
 
 **Assign later:** each Library card has **Assign to ▾** (Image / Video / Audio). Pick an existing job, **New Job / Listing…**, or **Clear job (Ungrouped)**. Metadata always updates so filters and grouping work; files under the output folder are moved into `jobs/<slug>/…` when safe. Paths outside the output root stay put.
+
+**Bulk assign:** check multiple cards → bulk bar → **Assign to ▾** (same menu) applies the job to all selected items.
 
 ### Prompt favorites + packs
 

@@ -47,6 +47,7 @@ from media_studio.tools_registry import (
     amenity_prompt,
     blown_out_prompt,
     build_codeformer_args,
+    build_nafnet_deblur_args,
     build_edit_args,
     build_upscale_args,
     build_video_denoise_args,
@@ -1158,12 +1159,21 @@ def run_restore(
     registry = restore_image_registry(has_reference=has_ref)
     spec = find_tool(model_label, registry) or next(iter(registry.values()))
 
-    # CodeFormer: fidelity API (map strength → fidelity)
+    # CodeFormer: fidelity API (map strength → fidelity); no ref still
     if "codeformer" in spec.endpoint:
         return _run_codeformer(
             spec=spec,
             image_path=src,
             fidelity=float(strength),
+            output_dir=output_dir,
+            on_progress=on_progress,
+        )
+
+    # NAFNet whole-frame deblur; no prompt / no ref still
+    if "nafnet" in spec.endpoint:
+        return _run_nafnet_deblur(
+            spec=spec,
+            image_path=src,
             output_dir=output_dir,
             on_progress=on_progress,
         )
@@ -1259,6 +1269,108 @@ def _run_codeformer(
         f"{spec.label} OK. Saved {Path(resolved).name} → {media_dir}. "
         f"{metrics}. Use Show in folder or Send to Resolve."
     )
+    return ToolResult(
+        ok=True,
+        path=resolved,
+        status=status,
+        metrics_line=metrics,
+        cost_label=cost_lbl,
+        notes=[spec.notes] if spec.notes else [],
+    )
+
+
+def _run_nafnet_deblur(
+    *,
+    spec: ToolSpec,
+    image_path: Path,
+    output_dir: str | Path,
+    on_progress: ProgressCallback | None = None,
+) -> ToolResult:
+    """fal-ai/nafnet/deblur — whole-frame soft/defocus restore."""
+
+    def progress(msg: str) -> None:
+        if on_progress:
+            on_progress(msg)
+
+    est = format_tool_cost(spec)
+    progress(f"{spec.label} · {est}")
+    progress(f"Endpoint: {spec.endpoint}")
+
+    try:
+        url = upload_file(image_path, on_progress=progress)
+    except (FalClientError, Exception) as exc:
+        return ToolResult(
+            ok=False,
+            status=friendly_error(exc, context=spec.label),
+            cost_label=est,
+        )
+
+    args = build_nafnet_deblur_args(url)
+    progress("Running NAFNet deblur on fal…")
+    t0 = time.perf_counter()
+    try:
+        result = subscribe(spec.endpoint, args, on_progress=progress)
+    except FalClientError as exc:
+        render_s = time.perf_counter() - t0
+        return ToolResult(
+            ok=False,
+            status=str(exc),
+            metrics_line=format_render_metrics(render_s, None, cost_is_estimate=True),
+            cost_label=est,
+        )
+    render_s = time.perf_counter() - t0
+
+    exact = extract_cost_usd_from_response(result)
+    cost_usd = exact if exact is not None else spec.cost_estimate_usd
+    is_est = exact is None
+    metrics = format_render_metrics(render_s, cost_usd, cost_is_estimate=is_est)
+    cost_lbl = format_cost_label(cost_usd, estimate=is_est)
+
+    out_url = _extract_single_image(result)
+    if not out_url:
+        return ToolResult(
+            ok=False,
+            status=f"{spec.label}: fal returned no image.",
+            metrics_line=metrics,
+            cost_label=cost_lbl,
+        )
+
+    stamp = timestamp_now()
+    media_dir = job_media_dir(output_dir, stamp=stamp)
+    stem = make_output_stem("nafnet-deblur", spec.key, stamp=stamp, kind="restore")
+    dest = unique_path(media_dir, stem, ".png")
+
+    try:
+        download_url(out_url, dest, on_progress=progress)
+    except FalClientError as exc:
+        return ToolResult(
+            ok=False,
+            status=str(exc),
+            metrics_line=metrics,
+            cost_label=cost_lbl,
+        )
+
+    resolved = str(dest.resolve())
+    status = (
+        f"{spec.label} OK. Saved {Path(resolved).name} → {media_dir}. "
+        f"{metrics}. Use Show in folder or Send to Resolve."
+    )
+    try:
+        from media_studio.history import append_history
+
+        append_history(
+            job_kind="image",
+            model=spec.label,
+            prompt="NAFNet deblur",
+            files=[resolved],
+            cost_estimate=cost_lbl,
+            notes=["restore", "nafnet"],
+            output_dir=output_dir,
+            timestamp=stamp,
+            scenario="restore",
+        )
+    except Exception:
+        pass
     return ToolResult(
         ok=True,
         path=resolved,

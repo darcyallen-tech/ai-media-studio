@@ -64,9 +64,9 @@ APP_DESCRIPTION = (
 try:
     from media_studio import __version__ as _pkg_ver
 
-    APP_VERSION = str(_pkg_ver or "0.1.1").strip() or "0.1.1"
+    APP_VERSION = str(_pkg_ver or "0.1.2").strip() or "0.1.2"
 except Exception:
-    APP_VERSION = "0.1.1"
+    APP_VERSION = "0.1.2"
 APP_BUILD_DATE = os.environ.get("AI_MEDIA_STUDIO_BUILD_DATE", "2026-08-01").strip()
 GITHUB_REPO = "darcyallen-tech/ai-media-studio"
 GITHUB_URL = f"https://github.com/{GITHUB_REPO}"

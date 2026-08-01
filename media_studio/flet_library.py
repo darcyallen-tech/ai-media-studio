@@ -113,6 +113,45 @@ class LibraryView:
             compact=True,
             on_status=lambda m: setattr(self._status, "value", m),
         )
+        # Multi-select for bulk Assign to Job / Listing
+        self._selected_ids: set[str] = set()
+        self._visible_ids: list[str] = []
+        self._bulk_count = ft.Text(
+            "0 selected",
+            size=FONT_SM,
+            color=TEXT,
+            weight=ft.FontWeight.W_600,
+        )
+        self.btn_select_all = ft.TextButton(
+            content="Select all",
+            on_click=self._on_select_all_visible,
+            style=ft.ButtonStyle(color=ACCENT_BRIGHT),
+        )
+        self.btn_clear_sel = ft.TextButton(
+            content="Clear",
+            on_click=self._on_clear_selection,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+        )
+        self._bulk_assign_host = ft.Container()  # rebuilt when selection changes
+        self._bulk_bar = ft.Container(
+            content=ft.Row(
+                [
+                    self._bulk_count,
+                    self._bulk_assign_host,
+                    self.btn_select_all,
+                    self.btn_clear_sel,
+                ],
+                spacing=10,
+                wrap=True,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            bgcolor="#1a2230",
+            border=ft.Border.all(1, ACCENT),
+            border_radius=8,
+            padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+            visible=False,
+        )
+        self._rebuild_bulk_assign_menu()
 
     def build(self) -> ft.Control:
         self.refresh()
@@ -132,6 +171,7 @@ class LibraryView:
                 ft.Text(
                     "Successful generations (newest first). "
                     "Send assets back to Image / Video / Tools, or to Resolve. "
+                    "Check cards to bulk Assign to a Job / Listing. "
                     "From Resolve shows handoff stills/clips; they also get a Resolve badge in All. "
                     "Filter by Job / Listing when you used that field on generate. "
                     "Missing media can be hidden in Settings → Storage.",
@@ -147,6 +187,7 @@ class LibraryView:
                     tight=True,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
+                self._bulk_bar,
                 self._status,
             ],
             spacing=8,
@@ -278,6 +319,10 @@ class LibraryView:
             pass
 
         cards: list[ft.Control] = []
+        # Drop selection ids that are no longer visible / in history
+        visible_set = {e.id for e in entries if e.id}
+        self._selected_ids = {i for i in self._selected_ids if i in visible_set}
+        self._visible_ids = [e.id for e in entries if e.id]
         # Optional visual group headers by job when not filtering a single job
         last_job_header: str | None = None
         for entry in entries:
@@ -314,6 +359,7 @@ class LibraryView:
                 )
             ]
         self._list.controls = cards
+        self._sync_bulk_bar()
 
     async def _on_refresh(self, _e: ft.ControlEvent) -> None:
         self.refresh()
@@ -399,7 +445,7 @@ class LibraryView:
 
         actions: list[ft.Control] = []
 
-        # Assign to Job / Listing (all media types)
+        # Assign to Job / Listing (all media types) — single-card (unchanged)
         assign_menu = self._make_assign_menu(entry)
         if assign_menu is not None:
             actions.append(assign_menu)
@@ -489,9 +535,18 @@ class LibraryView:
                 )
             )
 
+        eid = entry.id or ""
+        selected = bool(eid and eid in self._selected_ids)
+        check = ft.Checkbox(
+            value=selected,
+            on_change=self._make_toggle_select(eid) if eid else None,
+            tooltip="Select for bulk Assign to Job / Listing",
+        )
+
         return ft.Container(
             content=ft.Row(
                 [
+                    check,
                     self._thumb_for(entry),
                     ft.Column(
                         [
@@ -524,14 +579,215 @@ class LibraryView:
                         tight=True,
                     ),
                 ],
-                spacing=14,
+                spacing=10,
                 vertical_alignment=ft.CrossAxisAlignment.START,
             ),
-            bgcolor=PANEL_ELEVATED,
-            border=ft.Border.all(1, BORDER),
+            bgcolor="#1a2435" if selected else PANEL_ELEVATED,
+            border=ft.Border.all(2 if selected else 1, ACCENT if selected else BORDER),
             border_radius=8,
             padding=12,
         )
+
+    def _make_toggle_select(self, entry_id: str):
+        def _on_change(e: ft.ControlEvent) -> None:
+            if not entry_id:
+                return
+            checked = bool(getattr(e.control, "value", False))
+            if checked:
+                self._selected_ids.add(entry_id)
+            else:
+                self._selected_ids.discard(entry_id)
+            self._sync_bulk_bar()
+            # Light refresh of card borders without full history reload
+            try:
+                self.refresh()
+                self.page.update()
+            except Exception:
+                pass
+
+        return _on_change
+
+    def _sync_bulk_bar(self) -> None:
+        n = len(self._selected_ids)
+        self._bulk_count.value = f"{n} selected"
+        self._bulk_bar.visible = n > 0
+        self._rebuild_bulk_assign_menu()
+
+    def _rebuild_bulk_assign_menu(self) -> None:
+        """Same menu shape as single-card Assign, applied to all selected ids."""
+        items: list[ft.Control] = [
+            ft.PopupMenuItem(
+                content="New Job / Listing…",
+                on_click=self._on_bulk_new_job_click,
+            ),
+        ]
+        jobs = list_job_names(self.state.output_dir)
+        if jobs:
+            items.append(ft.PopupMenuItem())
+            for name in jobs:
+                items.append(
+                    ft.PopupMenuItem(
+                        content=name,
+                        on_click=self._make_bulk_assign_to(name),
+                    )
+                )
+        items.append(ft.PopupMenuItem())
+        items.append(
+            ft.PopupMenuItem(
+                content="Clear job (Ungrouped)",
+                on_click=self._make_bulk_assign_to(""),
+            )
+        )
+        menu = ft.Container(
+            content=ft.PopupMenuButton(
+                content=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.FOLDER_SPECIAL_OUTLINED, size=16, color=TEXT),
+                        ft.Text("Assign to ▾", size=FONT_SM, color=TEXT),
+                    ],
+                    spacing=6,
+                    tight=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                items=items,
+                tooltip="Assign all selected items to a Job / Listing",
+                menu_position=ft.PopupMenuPosition.UNDER,
+            ),
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+            padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+        )
+        self._bulk_assign_host.content = menu
+
+    def _make_bulk_assign_to(self, job_name: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            await self._assign_jobs_bulk(job_name)
+
+        return _click
+
+    async def _on_bulk_new_job_click(self, _e: ft.ControlEvent) -> None:
+        await self._prompt_new_job_bulk()
+
+    async def _on_select_all_visible(self, _e: ft.ControlEvent) -> None:
+        for eid in self._visible_ids:
+            if eid:
+                self._selected_ids.add(eid)
+        self.refresh()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _on_clear_selection(self, _e: ft.ControlEvent) -> None:
+        self._selected_ids.clear()
+        self.refresh()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _assign_jobs_bulk(self, job_name: str) -> None:
+        ids = [i for i in self._selected_ids if i]
+        if not ids:
+            self._on_action_status("Select one or more Library items first.", True)
+            return
+        ok = 0
+        notes: list[str] = []
+        for eid in ids:
+            try:
+                _entry, msg = assign_entry_job(
+                    eid,
+                    job_name or None,
+                    output_dir=self.state.output_dir,
+                    move_files=True,
+                )
+                if _entry is not None:
+                    ok += 1
+                if msg and "Already" not in msg:
+                    notes.append(msg)
+            except Exception as exc:
+                notes.append(f"{eid}: {exc}")
+        label = (job_name or "").strip()
+        if label:
+            summary = f"Assigned {ok}/{len(ids)} to job “{label}”."
+        else:
+            summary = f"Cleared job on {ok}/{len(ids)} item(s)."
+        if notes and ok < len(ids):
+            summary += " " + "; ".join(notes[:2])
+        self._selected_ids.clear()
+        self._on_action_status(summary, ok == 0)
+        try:
+            show_snack(self.page, summary)
+        except Exception:
+            pass
+        self.refresh()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _prompt_new_job_bulk(self) -> None:
+        n = len(self._selected_ids)
+        if n < 1:
+            self._on_action_status("Select items first.", True)
+            return
+        name_field = ft.TextField(
+            label="Job / Listing name",
+            hint_text="e.g. 123 Oak St · Smith · 2026-08-01",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            autofocus=True,
+        )
+        err = ft.Text("", size=FONT_SM, color="#e57373")
+
+        async def _cancel(_e: ft.ControlEvent) -> None:
+            close_dialog(self.page, dlg)
+
+        async def _ok(_e: ft.ControlEvent) -> None:
+            name = (name_field.value or "").strip()
+            if not name:
+                err.value = "Enter a name."
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+                return
+            close_dialog(self.page, dlg)
+            await self._assign_jobs_bulk(name)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("New Job / Listing", color=TEXT),
+            content=ft.Column(
+                [
+                    ft.Text(
+                        f"Assign {n} selected item(s) to a new job. Media under the "
+                        "output folder moves into jobs/<name>/ when safe.",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                    ),
+                    name_field,
+                    err,
+                ],
+                tight=True,
+                spacing=10,
+                width=400,
+            ),
+            actions=[
+                ft.TextButton(content="Cancel", on_click=_cancel),
+                ft.FilledButton(
+                    content=f"Assign {n}",
+                    on_click=_ok,
+                    style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+                ),
+            ],
+        )
+        show_dialog(self.page, dlg)
 
     def _on_action_status(self, msg: str, is_err: bool = False) -> None:
         self._status.value = msg
