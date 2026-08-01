@@ -1745,7 +1745,10 @@ class CreativeVisionView:
                     self.prev_strip.record_and_refresh(self.start_path)
                 except Exception:
                     pass
-            result = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            result = await to_thread_with_job(
+                self.state,
                 run_vision,
                 mode=self._mode,
                 prompt=prompt,

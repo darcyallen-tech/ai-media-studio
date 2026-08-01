@@ -133,6 +133,12 @@ class StudioState:
         self.audio_selected_id: str = "music"
         # Library media filter: all | image | video | audio
         self.library_filter: str = "all"
+        # Library job filter: "" = all jobs
+        self.library_job_filter: str = ""
+        # Optional Job / Listing (address, client, shoot) — routes outputs under jobs/
+        from media_studio.ui_prefs import get_job_name
+
+        self.job_name: str = get_job_name()
         # Key-gate listeners (views refresh generate button enablement)
         self._key_listeners: list[Callable[[], None]] = []
         # App scenario change listeners: callback(scenario_key)
@@ -180,6 +186,19 @@ class StudioState:
 
     def on_scenario_changed(self, callback: Callable[[str], None]) -> None:
         self._scenario_listeners.append(callback)
+
+    def set_job_name(self, name: str | None, *, persist: bool = True) -> str:
+        """Set Job / Listing label; empty clears. Returns stored value."""
+        val = (name or "").strip()
+        self.job_name = val
+        if persist:
+            try:
+                from media_studio.ui_prefs import set_job_name as _save_job
+
+                _save_job(val)
+            except Exception:
+                pass
+        return val
 
     def set_scenario(self, key_or_label: str, *, notify: bool = True, persist: bool = True) -> str:
         """
@@ -2438,7 +2457,10 @@ class StudioImageView:
             self.job_progress.set_message(classify_progress(msg), self.page)
 
         try:
-            result = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            result = await to_thread_with_job(
+                self.state,
                 generate,
                 prompt=prompt,
                 model_choice=model,
@@ -3137,6 +3159,31 @@ def main(page: ft.Page) -> None:
 
     state.on_scenario_changed(_sync_scenario_bar)
 
+    # Job / Listing — shared across Studio, Vision, Tools, Frame Editor, Audio
+    job_name_field = ft.TextField(
+        label="Job / Listing (optional)",
+        hint_text="e.g. 123 Oak St · Smith · 2026-08-01 — empty = dated folder only",
+        value=state.job_name or "",
+        dense=True,
+        filled=True,
+        fill_color=PANEL_ELEVATED,
+        border_color=BORDER,
+        color=TEXT,
+        text_size=FONT_SM,
+        expand=True,
+    )
+
+    def _sync_job_name_live(_e: ft.ControlEvent | None = None) -> None:
+        # Live for generate; disk only on blur/submit
+        state.job_name = (job_name_field.value or "").strip()
+
+    def _persist_job_name(_e: ft.ControlEvent | None = None) -> None:
+        state.set_job_name(job_name_field.value or "", persist=True)
+
+    job_name_field.on_change = _sync_job_name_live
+    job_name_field.on_blur = _persist_job_name
+    job_name_field.on_submit = _persist_job_name
+
     scenario_bar = ft.Container(
         content=ft.Column(
             [
@@ -3160,6 +3207,18 @@ def main(page: ft.Page) -> None:
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
                 scenario_nav.control,
+                ft.Row(
+                    [
+                        job_name_field,
+                        ft.Text(
+                            "When set, media saves under outputs/jobs/<name>/…",
+                            size=11,
+                            color=TEXT_MUTED,
+                        ),
+                    ],
+                    spacing=10,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
             ],
             spacing=6,
         ),

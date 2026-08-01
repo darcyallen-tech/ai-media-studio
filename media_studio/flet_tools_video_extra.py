@@ -439,7 +439,10 @@ class VideoDenoiseCard(_VideoOnlyCardBase):
 
         dur = float(self._video_duration_s or 8.0)
         try:
-            result = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            result = await to_thread_with_job(
+                self.state,
                 run_video_denoise,
                 video_path=self.source_path,
                 model_label=_dd(self.model_dd),
@@ -606,7 +609,10 @@ class VideoInterpolateCard(_VideoOnlyCardBase):
 
         dur = float(self._video_duration_s or 8.0)
         try:
-            result = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            result = await to_thread_with_job(
+                self.state,
                 run_video_interpolate,
                 video_path=self.source_path,
                 model_label=_dd(self.model_dd),

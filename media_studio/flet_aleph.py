@@ -2736,7 +2736,10 @@ class FrameEditorView:
             self.job_progress.set_message(classify_progress(msg), self.page)
 
         try:
-            result = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            result = await to_thread_with_job(
+                self.state,
                 run_aleph_keyframe_edit,
                 video_path=self.video_path,
                 prompt=self.prompt.value,

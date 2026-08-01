@@ -33,6 +33,20 @@ TOP BAR
 - Output folder path (persisted) + Open folder
 
 ==============================================================================
+JOB / LISTING (app-level)
+==============================================================================
+Optional “Job / Listing” field on the scenario bar (shared by Studio, Creative
+Vision, Tools, Frame Editor, Audio):
+  - e.g. address, client, shoot date
+  - Last-used value is persisted across sessions
+  - When set, final media is saved under:
+        <output_root>/jobs/<safe-job-name>/<YYYY-MM-DD>/
+  - Empty = current flat dated layout:
+        <output_root>/<YYYY-MM-DD>/
+  - History / Library metadata store the job label; no cloud sync
+  - Caches (_region, previews, Aleph proxies) stay under the output root
+
+==============================================================================
 SCENARIOS (app-level)
 ==============================================================================
 Shared scenario bar configures applicable workspaces:
@@ -209,8 +223,11 @@ AUDIO
 LIBRARY
 ==============================================================================
 - Filters: All | Image | Video | Audio
+- Job / Listing dropdown: All jobs or a specific label from history
+- Visual group headers by job when viewing All jobs
+- Job label shown on cards when set
 - Hide missing media (Settings)
-- Thumbnails + metadata (model, scenario, cost, time)
+- Thumbnails + metadata (model, job, scenario, cost, time)
 - Send to ▾ (Image, Video, tools, Frame Editor, Resolve, etc.)
 - Show in folder
 - History cap; media retention follows Settings policy

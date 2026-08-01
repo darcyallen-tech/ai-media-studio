@@ -211,16 +211,66 @@ def date_bucket(stamp: str | None = None) -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
-def job_media_dir(output_dir: str | Path, *, stamp: str | None = None) -> Path:
+def job_name_slug(name: str | None, max_len: int = 48) -> str:
     """
-    Media files land in a dated subfolder for easier Explorer browsing:
+    Filesystem-safe job / listing folder name.
+
+    Empty / None → \"\" (caller uses flat dated layout).
+    """
+    text = (name or "").strip().lower()
+    if not text:
+        return ""
+    text = _WIN_BAD.sub(" ", text)
+    text = re.sub(r"[^a-z0-9\s\-_.]+", " ", text)
+    slug = "-".join(text.split())
+    slug = _MULTI_DASH.sub("-", slug).strip("-._")
+    if len(slug) > max_len:
+        slug = slug[:max_len].rstrip("-._")
+    if not slug:
+        return ""
+    if slug.lower() in _WIN_RESERVED:
+        slug = f"job-{slug}"
+    return slug
+
+
+def resolve_job_name(explicit: str | None = None) -> str:
+    """Explicit arg wins; else active job_context name."""
+    raw = (explicit or "").strip()
+    if raw:
+        return raw
+    try:
+        from media_studio.job_context import current_job_name
+
+        return current_job_name()
+    except Exception:
+        return ""
+
+
+def job_media_dir(
+    output_dir: str | Path,
+    *,
+    stamp: str | None = None,
+    job_name: str | None = None,
+) -> Path:
+    """
+    Media files land in a dated subfolder for easier Explorer browsing.
+
+    Empty job name (default)::
 
         outputs/2026-07-26/...
 
-    History / prompt JSON stay at the output root.
+    With Job / Listing set::
+
+        outputs/jobs/<safe-job-name>/2026-07-26/...
+
+    History / prompt JSON stay at the output root (not under jobs/).
     """
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
+    jslug = job_name_slug(resolve_job_name(job_name))
+    if jslug:
+        root = root / "jobs" / jslug
+        root.mkdir(parents=True, exist_ok=True)
     day = root / date_bucket(stamp)
     day.mkdir(parents=True, exist_ok=True)
     return day

@@ -428,7 +428,9 @@ class _ToolCard:
             kwargs["strength"] = float(self.strength.value or 0.75)
         kwargs.update(self.get_extra_kwargs())
         try:
-            result = await asyncio.to_thread(self.run_fn, **kwargs)
+            from media_studio.job_context import to_thread_with_job
+
+            result = await to_thread_with_job(self.state, self.run_fn, **kwargs)
             if result.ok and result.path:
                 self._result_path = result.path
                 show_result_actions(self.btn_folder, self.btn_resolve, visible=True)
@@ -444,6 +446,8 @@ class _ToolCard:
         except TypeError:
             # Adapt kwargs for upscale which doesn't take prompt
             try:
+                from media_studio.job_context import to_thread_with_job
+
                 clean = {
                     "image_path": self.image_path,
                     "model_label": _dd_value(self.model_dd),
@@ -451,7 +455,7 @@ class _ToolCard:
                     "on_progress": on_progress,
                     **self.get_extra_kwargs(),
                 }
-                result = await asyncio.to_thread(self.run_fn, **clean)
+                result = await to_thread_with_job(self.state, self.run_fn, **clean)
                 if result.ok and result.path:
                     self._result_path = result.path
                     show_result_actions(self.btn_folder, self.btn_resolve, visible=True)
@@ -1035,7 +1039,10 @@ class _RestoreCard:
             self.job_progress.set_message(classify_progress(msg), self.page)
 
         try:
-            result = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            result = await to_thread_with_job(
+                self.state,
                 run_restore,
                 mode=self._mode,
                 source_path=self.source_path,
@@ -1482,7 +1489,10 @@ class _ReAspectCard:
             self.job_progress.set_message(classify_progress(msg), self.page)
 
         try:
-            result = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            result = await to_thread_with_job(
+                self.state,
                 run_reaspect,
                 mode=self._mode,
                 source_path=self.source_path,
@@ -1949,7 +1959,10 @@ class _UpscaleCard:
                             dur = self._video_duration_s
                     except Exception:
                         pass
-                result = await asyncio.to_thread(
+                from media_studio.job_context import to_thread_with_job
+
+                result = await to_thread_with_job(
+                    self.state,
                     run_video_upscale,
                     video_path=self.source_path,
                     model_label=_dd_value(self.model_dd),
@@ -1959,7 +1972,10 @@ class _UpscaleCard:
                     on_progress=on_progress,
                 )
             else:
-                result = await asyncio.to_thread(
+                from media_studio.job_context import to_thread_with_job
+
+                result = await to_thread_with_job(
+                    self.state,
                     run_upscale,
                     image_path=self.source_path,
                     model_label=_dd_value(self.model_dd),

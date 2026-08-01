@@ -1153,7 +1153,10 @@ class StudioVideoView:
             self.job_progress.set_message(classify_progress(msg), self.page)
 
         try:
-            result = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            result = await to_thread_with_job(
+                self.state,
                 generate,
                 prompt=prompt,
                 model_choice=model,

@@ -20,8 +20,10 @@ from media_studio.flet_theme import (
     TEXT,
     TEXT_MUTED,
     PillNav,
+    dropdown_options,
     panel,
     section_title,
+    styled_dropdown,
 )
 from media_studio.history import (
     HistoryEntry,
@@ -30,6 +32,7 @@ from media_studio.history import (
     first_video_path,
     format_timestamp,
     library_entries,
+    list_job_names,
 )
 from media_studio.media import video_poster_path
 
@@ -42,6 +45,7 @@ _FILTER_ALL = "all"
 _FILTER_IMAGE = "image"
 _FILTER_VIDEO = "video"
 _FILTER_AUDIO = "audio"
+_JOB_ALL = "(All jobs)"
 
 
 class LibraryView:
@@ -75,6 +79,16 @@ class LibraryView:
             selected=self._filter,
             on_change=self._on_filter_change,
         )
+        # Job / Listing filter (All jobs + known labels from history)
+        self._job_filter = getattr(state, "library_job_filter", None) or ""
+        state.library_job_filter = self._job_filter
+        self.job_dd = styled_dropdown(
+            label_text="Job / Listing",
+            options=[_JOB_ALL],
+            value=_JOB_ALL,
+            on_select=self._on_job_filter,
+            expand=True,
+        )
         # Optional open-large dialog host
         self._lightbox_src = ft.Image(src="", fit=ft.BoxFit.CONTAIN, expand=True)
 
@@ -95,11 +109,13 @@ class LibraryView:
                     ft.Text(
                         "Successful generations (newest first). "
                         "Send assets back to Image / Video / Tools, or to Resolve. "
+                        "Filter by Job / Listing when you used that field on generate. "
                         "Missing media can be hidden in Settings → Storage.",
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
                     self._filter_nav.control,
+                    self.job_dd,
                     self._status,
                     ft.Container(content=self._list, expand=True),
                 ],
@@ -124,7 +140,28 @@ class LibraryView:
         except Exception:
             pass
 
+    def _on_job_filter(self, e: ft.ControlEvent | None = None) -> None:
+        raw = str(self.job_dd.value or _JOB_ALL).strip()
+        self._job_filter = "" if raw in ("", _JOB_ALL) else raw
+        self.state.library_job_filter = self._job_filter
+        self.refresh()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _sync_job_dropdown(self, job_names: list[str]) -> None:
+        opts = [_JOB_ALL] + list(job_names)
+        self.job_dd.options = dropdown_options(opts)
+        cur = self._job_filter if self._job_filter in job_names else ""
+        self.job_dd.value = cur if cur else _JOB_ALL
+        self._job_filter = cur
+        self.state.library_job_filter = cur
+
     def _matches_filter(self, entry: HistoryEntry) -> bool:
+        if self._job_filter:
+            if (entry.job or "").strip() != self._job_filter:
+                return False
         if self._filter == _FILTER_ALL:
             return True
         media = entry.media_type  # "Image" | "Video" | "Audio"
@@ -155,11 +192,15 @@ class LibraryView:
         all_entries = library_entries(
             self.state.output_dir, existing_only=hide_missing
         )
+        try:
+            self._sync_job_dropdown(list_job_names(self.state.output_dir))
+        except Exception:
+            pass
         entries = [e for e in all_entries if self._matches_filter(e)]
         n = len(entries)
         total = len(all_entries)
         hidden = max(0, raw_total - total) if hide_missing else 0
-        if self._filter == _FILTER_ALL:
+        if self._filter == _FILTER_ALL and not self._job_filter:
             self._count.value = f"{n} item{'s' if n != 1 else ''}"
         else:
             label = {
@@ -167,14 +208,29 @@ class LibraryView:
                 _FILTER_VIDEO: "video",
                 _FILTER_AUDIO: "audio",
             }.get(self._filter, "item")
-            self._count.value = (
-                f"{n} {label}{'s' if n != 1 else ''}"
-                + (f" · {total} total" if total != n else "")
-            )
+            bits = [f"{n} {label}{'s' if n != 1 else ''}"]
+            if total != n:
+                bits.append(f"{total} total")
+            if self._job_filter:
+                bits.append(f"job “{self._job_filter}”")
+            self._count.value = " · ".join(bits)
         if hidden:
             self._count.value += f" · {hidden} missing hidden"
         cards: list[ft.Control] = []
+        # Optional visual group headers by job when not filtering a single job
+        last_job_header: str | None = None
         for entry in entries:
+            j = (entry.job or "").strip() or "(No job)"
+            if not self._job_filter and j != last_job_header:
+                last_job_header = j
+                cards.append(
+                    ft.Text(
+                        j if j != "(No job)" else "Ungrouped (no Job / Listing)",
+                        size=FONT_SM,
+                        color=ACCENT_BRIGHT,
+                        weight=ft.FontWeight.W_700,
+                    )
+                )
             cards.append(self._card_for(entry))
         if not cards:
             cards = [
@@ -254,6 +310,9 @@ class LibraryView:
         else:
             badge_color = "#2e7d6f"
         meta_bits = [media, model]
+        job = (entry.job or "").strip()
+        if job:
+            meta_bits.append(f"Job: {job}")
         if scenario:
             meta_bits.append(scenario)
         if ts:

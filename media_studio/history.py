@@ -33,6 +33,8 @@ class HistoryEntry:
     notes: list[str] = field(default_factory=list)
     label: str = ""
     scenario: str = ""
+    # Optional Job / Listing label (address, client, shoot) — empty = ungrouped
+    job: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -50,6 +52,7 @@ class HistoryEntry:
             notes=list(data.get("notes") or []),
             label=str(data.get("label") or ""),
             scenario=str(data.get("scenario") or ""),
+            job=str(data.get("job") or data.get("listing") or ""),
         )
 
     @property
@@ -135,7 +138,8 @@ def make_label(entry: HistoryEntry) -> str:
     kind = (entry.job_kind or "?").upper()
     model = entry.model or "model"
     cost = f" · {entry.cost_estimate}" if entry.cost_estimate else ""
-    return f"{ts} · {kind} · {model} · {_short_prompt(entry.prompt)}{cost}"
+    job = f" · [{entry.job}]" if (entry.job or "").strip() else ""
+    return f"{ts} · {kind} · {model}{job} · {_short_prompt(entry.prompt)}{cost}"
 
 
 def load_history(output_dir: str | Path | None = None) -> list[HistoryEntry]:
@@ -178,6 +182,7 @@ def append_history(
     output_dir: str | Path | None = None,
     timestamp: str | None = None,
     scenario: str | None = None,
+    job: str | None = None,
 ) -> HistoryEntry:
     """Prepend a successful generation to history.json."""
     stamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -190,6 +195,15 @@ def append_history(
         except OSError:
             continue
 
+    job_label = (job or "").strip()
+    if not job_label:
+        try:
+            from media_studio.job_context import current_job_name
+
+            job_label = current_job_name()
+        except Exception:
+            job_label = ""
+
     entry = HistoryEntry(
         id=stamp,
         timestamp=stamp,
@@ -200,6 +214,7 @@ def append_history(
         cost_estimate=cost_estimate,
         notes=list(notes or []),
         scenario=str(scenario or ""),
+        job=job_label,
     )
     entry.label = make_label(entry)
 
@@ -210,6 +225,18 @@ def append_history(
         items = items[:HISTORY_MAX]
         save_history(items, output_dir)
     return entry
+
+
+def list_job_names(output_dir: str | Path | None = None) -> list[str]:
+    """Distinct non-empty job labels from history (newest-first order preserved)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for e in load_history(output_dir):
+        j = (e.job or "").strip()
+        if j and j not in seen:
+            seen.add(j)
+            out.append(j)
+    return out
 
 
 def history_dropdown_choices(output_dir: str | Path | None = None) -> list[str]:

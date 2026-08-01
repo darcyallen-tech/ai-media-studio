@@ -192,8 +192,19 @@ Long jobs use **per-tab busy** scopes so one generate does not lock the whole ap
 ## Layout (quick)
 
 - Top: Settings, **Help (?)**, fal / Runware / xAI chips, Import from Resolve, output folder  
-- App-level **scenario** bar  
+- App-level **scenario** bar + optional **Job / Listing** field  
 - Main tabs: Studio · Tools · Creative Vision · Frame Editor · Audio · Library  
+
+### Job / Listing folders
+
+Optional field (address, client, shoot date) shared by all generate surfaces. Last value is remembered.
+
+| Job name | Where media lands |
+|----------|-------------------|
+| Empty | `outputs/YYYY-MM-DD/…` (default) |
+| Set | `outputs/jobs/<safe-name>/YYYY-MM-DD/…` |
+
+Library can filter or group by job; cards show the job label. History JSON stays at the output root. No cloud sync.
 
 Storage prefs (output path, retention, clear caches, cost guard) live in **Settings**.
 

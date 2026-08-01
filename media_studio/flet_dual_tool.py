@@ -589,7 +589,9 @@ class DualMediaToolCard:
             kwargs["image_path"] = self.source_path
         kwargs.update(self.get_extra_kwargs())
         try:
-            result = await asyncio.to_thread(self.run_fn, **kwargs)
+            from media_studio.job_context import to_thread_with_job
+
+            result = await to_thread_with_job(self.state, self.run_fn, **kwargs)
             if result.ok and result.path:
                 self._result_path = result.path
                 show_result_actions(self.btn_folder, self.btn_resolve, visible=True)

@@ -674,7 +674,10 @@ class AudioView:
             self.mu_progress.set_message(classify_progress(msg), self.page)
 
         try:
-            r = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            r = await to_thread_with_job(
+                self.state,
                 run_music,
                 prompt=self.mu_prompt.value,
                 model_label=_dd_value(self.mu_model),
@@ -1065,7 +1068,10 @@ class AudioView:
                 self.sfx_progress.set_message(f"Generating… {i + 1}/{n}", self.page)
                 self.page.update()
                 seed = base_seed + i * 9973
-                r = await asyncio.to_thread(
+                from media_studio.job_context import to_thread_with_job
+
+                r = await to_thread_with_job(
+                    self.state,
                     run_sfx,
                     prompt=self.sfx_prompt.value,
                     model_label=_dd_value(self.sfx_model),
@@ -1357,7 +1363,10 @@ class AudioView:
             except Exception:
                 pass
         try:
-            r = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            r = await to_thread_with_job(
+                self.state,
                 run_video_sfx,
                 video_path=self.vs_video_path,
                 model_label=_dd_value(self.vs_model),
@@ -1647,7 +1656,10 @@ class AudioView:
             self.amb_progress.set_message(classify_progress(msg), self.page)
 
         try:
-            r = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            r = await to_thread_with_job(
+                self.state,
                 run_ambience,
                 prompt=self.amb_prompt.value,
                 model_label=_dd_value(self.amb_model),
@@ -1868,7 +1880,10 @@ class AudioView:
             self.vo_progress.set_message(classify_progress(msg), self.page)
 
         try:
-            r = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            r = await to_thread_with_job(
+                self.state,
                 run_voiceover,
                 text=self.vo_script.value,
                 model_label=_dd_value(self.vo_model),
@@ -2039,7 +2054,10 @@ class AudioView:
             self.cl_progress.set_message(classify_progress(msg), self.page)
 
         try:
-            r = await asyncio.to_thread(
+            from media_studio.job_context import to_thread_with_job
+
+            r = await to_thread_with_job(
+                self.state,
                 run_voice_clone,
                 audio_path=self.cl_sample_path,
                 voice_name=self.cl_name.value,
