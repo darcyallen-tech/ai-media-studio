@@ -313,7 +313,10 @@ def send_to_resolve(
         try:
             from media_studio.resolve_export import send_file_to_resolve
 
-            result = await asyncio.to_thread(send_file_to_resolve, path)
+            job = getattr(state, "job_name", None) if state is not None else None
+            result = await asyncio.to_thread(
+                send_file_to_resolve, path, job_name=job
+            )
             msg = getattr(result, "message", None) or str(result)
             ok = bool(getattr(result, "ok", True))
             if status_cb:

@@ -76,7 +76,7 @@ _STEPS: list[tuple[str, str]] = [
     ),
     (
         "Resolve (optional)",
-        "Studio → Resolve: Send to Resolve on results (Media Pool bin for the day; "
+        "Studio → Resolve: Send to Resolve on results (bin AI Media Studio / Job or date; "
         "External scripting = Local).\n\n"
         "Resolve → Studio: install resolve_scripts/Send_to_AI_Media_Studio.py, "
         "open this app once so the studio path is registered, then "

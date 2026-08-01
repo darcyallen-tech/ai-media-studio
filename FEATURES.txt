@@ -272,8 +272,12 @@ LIBRARY
     (outside-root paths stay put — metadata only). Clear does not reverse-move.
     Grouping / filters refresh immediately after assign
 - Bulk select: checkbox on each card → bulk bar (N selected · Assign to ▾ ·
-  Select all · Clear). Same New / existing / Clear menu as single-card Assign;
-  applies metadata + optional file move to every selected item.
+  Send to Resolve · Select all · Clear).
+    Assign: same New / existing / Clear menu as single-card; metadata + optional
+    file move for every selected item.
+    Send to Resolve: Tier A per item (bin AI Media Studio / job or date; optional
+    V2/playhead + marker); images + videos mixed OK; continues on per-item failure;
+    snack summary “N sent, M skipped (…)”. Single-card Send to menu unchanged.
 - Local spend panel (from history costs only):
     Today / This week / This month / All time totals
     Top models + by provider; missing or $0 cost rows skipped
@@ -289,14 +293,19 @@ LIBRARY
 RESOLVE INTEGRATION
 ==============================================================================
 - Import from Resolve (stills / clips via handoff folder) + auto-watch handoff
-- Send to Resolve from Studio, Tools, Frame Editor, Audio, Library
-    (DaVinci Resolve logo asset on Send buttons)
+- Send to Resolve (Tier A smarter send) from Studio, Tools, Frame Editor, Audio, Library
+    (DaVinci Resolve logo asset on Send buttons):
+    - Media Pool bin: AI Media Studio / <Job name or today’s date>
+    - Optional place on video track (default V2) at playhead when scripting allows
+    - Optional timeline/clip marker note (model · scenario · cost when known)
+    - Soft fail: Resolve closed / scripting off → reveal file folder; never crash
+    - Does not render-in-place, build compounds, auto transitions, or bake grade
 - From Resolve strips wherever media can load:
     Studio Image / Video, Tools image + video forms, Creative Vision
     (I2I / start frames), Frame Editor (stills → pin, clips → source)
 - Handoff import records Library rows with origin=resolve
 - Studio path auto-detected (no hardcoded personal path)
-- Prefer graded proxies; Render in Place when needed
+- Prefer graded proxies; Render in Place when needed (manual in Resolve)
 - Handoff auto-purge (~7 days / ~200 files) + Clear handoff cache
 - Single-instance: Resolve Send reuses the open Studio window (no second UI)
 

@@ -155,8 +155,14 @@ Full tool and model lists: **FEATURES.txt**.
 
 ### Studio → Resolve
 
-**Send to Resolve** on results (Media Pool bin for the day; DaVinci Resolve logo on the button).  
-Requires Resolve Studio with **External scripting = Local**.
+**Send to Resolve** on results (DaVinci Resolve logo on the button). With Resolve Studio open and a project loaded (**External scripting = Local**):
+
+1. Import into Media Pool bin **`AI Media Studio / <Job name or today’s date>`**
+2. Optionally place on **video track V2** (preference; default 2) at the **playhead** when the API allows
+3. Optional **timeline/clip marker** with a short note (model, scenario, cost when known from history)
+
+If Resolve is closed or scripting fails: the file stays on disk and its folder is revealed — the app does not crash.  
+Does **not** render-in-place, create compounds, auto-transitions, or bake grade.
 
 ### Resolve → Studio
 
@@ -224,7 +230,7 @@ Library can filter or group by job; cards show the job label. Media filters: **A
 
 **Assign later:** each Library card has **Assign to ▾** (Image / Video / Audio). Pick an existing job, **New Job / Listing…**, or **Clear job (Ungrouped)**. Metadata always updates so filters and grouping work; files under the output folder are moved into `jobs/<slug>/…` when safe. Paths outside the output root stay put.
 
-**Bulk assign:** check multiple cards → bulk bar → **Assign to ▾** (same menu) applies the job to all selected items.
+**Bulk actions:** check multiple cards → bulk bar → **Assign to ▾** (same menu) and/or **Send to Resolve** (Tier A per item; mixed types OK; continues on failures with a summary snack). Single-card menus stay unchanged.
 
 ### Prompt favorites + packs
 

@@ -14,6 +14,7 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 ### Library
 - **Bulk Assign to Job / Listing** — multi-select cards (checkbox), bulk bar with Assign to ▾ (New / existing jobs / Clear); same metadata + optional move under `jobs/<name>/` as single-card Assign
+- **Bulk Send to Resolve** — same bulk bar; each selected item uses Tier A send (bin / optional track+marker); mixed image+video OK; continues on failures; snack “N sent, M skipped”
 - **From Resolve** filter chip (All | Image | Video | Audio | From Resolve)
 - **Resolve** badge on handoff-origin cards in All (and other filters)
 - History stores `origin=resolve` on Import / plugin send
@@ -22,6 +23,7 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - **From Resolve** strips wherever media loads: Studio Image / Video, Tools image + video, Creative Vision (I2I / start), Frame Editor (stills → pin, clips → source)
 - DaVinci Resolve logo asset on Send to Resolve
 - Single-instance: Resolve Send focuses the open Studio window
+- **Tier A smarter Send**: Media Pool `AI Media Studio / <Job|date>`; optional place on V2 at playhead; marker with model/scenario/cost; soft-fail opens folder if Resolve is closed
 
 ### Frame Editor (Aleph 2.0)
 - **Edit intent**: Apply through clip | Transition first→last | Custom timestamps

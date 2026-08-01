@@ -33,6 +33,10 @@ ONBOARDING_DONE = "onboarding_done"
 JOB_NAME = "job_name"
 # Quiet GitHub update check on startup (default ON)
 CHECK_UPDATES = "check_updates"
+# Resolve Tier A send preferences (sensible defaults)
+RESOLVE_VIDEO_TRACK = "resolve_video_track"  # 1-based video track, default 2
+RESOLVE_PLACE_ON_TIMELINE = "resolve_place_on_timeline"  # default True
+RESOLVE_ADD_MARKER = "resolve_add_marker"  # default True
 
 RETENTION_CHOICES = ("never", "7", "14", "30", "90")
 COST_CONFIRM_CHOICES = ("off", "2", "5")
@@ -281,4 +285,46 @@ def get_check_updates() -> bool:
 
 def set_check_updates(enabled: bool) -> None:
     save_prefs({CHECK_UPDATES: bool(enabled)})
+
+
+def get_resolve_video_track() -> int:
+    """1-based video track for optional Send-to-Resolve timeline place (default 2)."""
+    raw = load_prefs().get(RESOLVE_VIDEO_TRACK, 2)
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = 2
+    return max(1, min(16, n))
+
+
+def set_resolve_video_track(track: int) -> None:
+    try:
+        n = int(track)
+    except (TypeError, ValueError):
+        n = 2
+    save_prefs({RESOLVE_VIDEO_TRACK: max(1, min(16, n))})
+
+
+def get_resolve_place_on_timeline() -> bool:
+    """When True, smarter Send tries to append clip at playhead on V-track."""
+    raw = load_prefs().get(RESOLVE_PLACE_ON_TIMELINE, True)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in ("0", "false", "no", "off")
+
+
+def set_resolve_place_on_timeline(enabled: bool) -> None:
+    save_prefs({RESOLVE_PLACE_ON_TIMELINE: bool(enabled)})
+
+
+def get_resolve_add_marker() -> bool:
+    """When True, smarter Send adds a short timeline/clip marker note."""
+    raw = load_prefs().get(RESOLVE_ADD_MARKER, True)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in ("0", "false", "no", "off")
+
+
+def set_resolve_add_marker(enabled: bool) -> None:
+    save_prefs({RESOLVE_ADD_MARKER: bool(enabled)})
 

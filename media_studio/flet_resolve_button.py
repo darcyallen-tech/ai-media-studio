@@ -46,7 +46,25 @@ def make_send_to_resolve_button(
 
         import asyncio
 
-        result = await asyncio.to_thread(send_file_to_resolve, path)
+        def _send():
+            # Job label from prefs / context for bin AI Media Studio / <job|date>
+            job = None
+            try:
+                from media_studio.job_context import current_job_name
+
+                job = current_job_name() or None
+            except Exception:
+                job = None
+            if not job:
+                try:
+                    from media_studio.ui_prefs import get_job_name
+
+                    job = get_job_name() or None
+                except Exception:
+                    job = None
+            return send_file_to_resolve(path, job_name=job)
+
+        result = await asyncio.to_thread(_send)
         btn.disabled = False
         if on_status:
             on_status(result.message, not result.ok)
@@ -59,6 +77,12 @@ def make_send_to_resolve_button(
         except Exception:
             pass
 
+    tip = (
+        "Import into Resolve Media Pool → AI Media Studio / Job or date; "
+        "optional place on V2 at playhead + marker. "
+        "Resolve Studio must be open with a project (External scripting = Local). "
+        "If Resolve is closed, the file folder opens instead."
+    )
     # Prefer image icon if available; else a simple play-mark style icon
     if icon_path:
         content = ft.Row(
@@ -74,7 +98,7 @@ def make_send_to_resolve_button(
             content=content,
             on_click=_click,
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
-            tooltip="Import into DaVinci Resolve Media Pool (Resolve must be open)",
+            tooltip=tip,
             visible=False,
         )
     else:
@@ -83,7 +107,7 @@ def make_send_to_resolve_button(
             icon=ft.Icons.MOVIE_FILTER,
             on_click=_click,
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
-            tooltip="Import into DaVinci Resolve Media Pool (Resolve must be open)",
+            tooltip=tip,
             visible=False,
         )
     return btn

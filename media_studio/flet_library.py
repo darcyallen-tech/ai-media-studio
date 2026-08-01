@@ -28,6 +28,7 @@ from media_studio.flet_theme import (
 from media_studio.history import (
     HistoryEntry,
     assign_entry_job,
+    find_by_id,
     first_audio_path,
     first_image_path,
     first_video_path,
@@ -132,12 +133,43 @@ class LibraryView:
             on_click=self._on_clear_selection,
             style=ft.ButtonStyle(color=TEXT_MUTED),
         )
+        self.btn_bulk_resolve = ft.OutlinedButton(
+            content="Send to Resolve",
+            icon=ft.Icons.SEND,
+            on_click=self._on_bulk_send_resolve,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            tooltip=(
+                "Send each selected item to Resolve (Tier A: "
+                "AI Media Studio / Job or date, optional V2 + marker)"
+            ),
+        )
+        # Prefer Resolve logo when bundled
+        try:
+            from media_studio.resolve_export import resolve_icon_path
+
+            icon_p = resolve_icon_path()
+            if icon_p:
+                self.btn_bulk_resolve.content = ft.Row(
+                    [
+                        ft.Image(
+                            src=icon_p, width=16, height=16, fit=ft.BoxFit.CONTAIN
+                        ),
+                        ft.Text("Send to Resolve", size=FONT_SM, color=TEXT),
+                    ],
+                    spacing=6,
+                    tight=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+                self.btn_bulk_resolve.icon = None
+        except Exception:
+            pass
         self._bulk_assign_host = ft.Container()  # rebuilt when selection changes
         self._bulk_bar = ft.Container(
             content=ft.Row(
                 [
                     self._bulk_count,
                     self._bulk_assign_host,
+                    self.btn_bulk_resolve,
                     self.btn_select_all,
                     self.btn_clear_sel,
                 ],
@@ -171,7 +203,7 @@ class LibraryView:
                 ft.Text(
                     "Successful generations (newest first). "
                     "Send assets back to Image / Video / Tools, or to Resolve. "
-                    "Check cards to bulk Assign to a Job / Listing. "
+                    "Check cards to bulk Assign to a Job / Listing or Send to Resolve. "
                     "From Resolve shows handoff stills/clips; they also get a Resolve badge in All. "
                     "Filter by Job / Listing when you used that field on generate. "
                     "Missing media can be hidden in Settings → Storage.",
@@ -540,7 +572,7 @@ class LibraryView:
         check = ft.Checkbox(
             value=selected,
             on_change=self._make_toggle_select(eid) if eid else None,
-            tooltip="Select for bulk Assign to Job / Listing",
+            tooltip="Select for bulk Assign or Send to Resolve",
         )
 
         return ft.Container(
@@ -681,6 +713,126 @@ class LibraryView:
 
     async def _on_clear_selection(self, _e: ft.ControlEvent) -> None:
         self._selected_ids.clear()
+        self.refresh()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _on_bulk_send_resolve(self, _e: ft.ControlEvent) -> None:
+        """Send each selected Library item to Resolve (Tier A); continue on failures."""
+        ids = [i for i in self._selected_ids if i]
+        if not ids:
+            self._on_action_status("Select one or more Library items first.", True)
+            return
+
+        # Disable while running
+        try:
+            self.btn_bulk_resolve.disabled = True
+            self.page.update()
+        except Exception:
+            pass
+
+        sent = 0
+        skipped = 0
+        skip_reasons: list[str] = []
+
+        job = getattr(self.state, "job_name", None) or None
+        try:
+            from media_studio.ui_prefs import get_job_name
+
+            if not job:
+                job = get_job_name() or None
+        except Exception:
+            pass
+
+        def _send_one(entry: HistoryEntry) -> tuple[bool, str]:
+            from media_studio.resolve_export import send_file_to_resolve
+
+            path = entry.primary_path()
+            if not path:
+                # Prefer any existing file on the entry
+                for f in entry.files or []:
+                    try:
+                        if f and Path(f).is_file():
+                            path = f
+                            break
+                    except OSError:
+                        continue
+            if not path or not Path(path).is_file():
+                return False, "missing file"
+            # Prefer entry job for bin leaf when set; else app job
+            entry_job = (entry.job or "").strip() or job
+            result = send_file_to_resolve(
+                path,
+                job_name=entry_job,
+                model=entry.model or None,
+                scenario=entry.scenario or None,
+                cost=entry.cost_estimate or None,
+                output_dir=self.state.output_dir,
+            )
+            if result.ok:
+                return True, result.message
+            # Soft fail — still count as skipped for summary
+            reason = result.message or "Resolve import failed"
+            # Keep reason short for snack
+            if "not running" in reason.lower() or "scripting" in reason.lower():
+                short = "Resolve unavailable"
+            elif "no project" in reason.lower():
+                short = "no project open"
+            elif "missing" in reason.lower() or "not found" in reason.lower():
+                short = "file missing"
+            else:
+                short = reason.split(".")[0][:48]
+            return False, short
+
+        try:
+            for eid in ids:
+                entry = find_by_id(eid, self.state.output_dir)
+                if entry is None:
+                    skipped += 1
+                    skip_reasons.append("not found")
+                    continue
+                try:
+                    ok, detail = await asyncio.to_thread(_send_one, entry)
+                except Exception as exc:
+                    ok = False
+                    detail = str(exc)[:48]
+                if ok:
+                    sent += 1
+                else:
+                    skipped += 1
+                    if detail and detail not in skip_reasons:
+                        skip_reasons.append(detail)
+        finally:
+            try:
+                self.btn_bulk_resolve.disabled = False
+            except Exception:
+                pass
+
+        total = len(ids)
+        if sent and not skipped:
+            summary = f"Sent {sent} item{'s' if sent != 1 else ''} to Resolve."
+        elif sent and skipped:
+            reason = skip_reasons[0] if skip_reasons else "error"
+            summary = (
+                f"{sent} sent to Resolve, {skipped} skipped"
+                f" ({reason}"
+                + (f" +{len(skip_reasons) - 1} more" if len(skip_reasons) > 1 else "")
+                + ")."
+            )
+        else:
+            reason = skip_reasons[0] if skip_reasons else "no media"
+            summary = f"0 sent, {skipped}/{total} skipped ({reason})."
+
+        self._on_action_status(summary, sent == 0)
+        try:
+            show_snack(self.page, summary)
+        except Exception:
+            pass
+        # Keep selection so user can retry skipped items; clear only on full success
+        if skipped == 0 and sent > 0:
+            self._selected_ids.clear()
         self.refresh()
         try:
             self.page.update()
@@ -1144,7 +1296,13 @@ class LibraryView:
             try:
                 from media_studio.resolve_export import send_file_to_resolve
 
-                result = await asyncio.to_thread(send_file_to_resolve, path)
+                job = getattr(self.state, "job_name", None) or None
+                result = await asyncio.to_thread(
+                    send_file_to_resolve,
+                    path,
+                    job_name=job,
+                    output_dir=self.state.output_dir,
+                )
                 msg = getattr(result, "message", None) or str(result)
                 ok = bool(getattr(result, "ok", True))
                 self._on_action_status(msg, not ok)
