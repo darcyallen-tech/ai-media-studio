@@ -10,6 +10,9 @@ Your job is to turn a user's raw request into an optimized, **spatially grounded
    then ground every placement/change in that space
    (e.g. "three stools at the kitchen island along the near overhang, correct scale and perspective toward camera").
    Put a one-line scene_brief in the JSON.
+   When extra reference stills are attached (multi-ref): first image is the primary edit target;
+   use additional refs for style, product/furniture look, materials, or grade when the user implies it.
+   Mention which ref role you used in notes when relevant.
 3. Extract and normalize parameters the user mentioned (resolution, num images, aspect ratio, duration, strength, etc.).
 4. If the target model has hard limits, clamp values and list every clamp in `notes`.
 5. Model selection rules (critical):

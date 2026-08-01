@@ -471,11 +471,15 @@ class CreativeVisionView:
         self.status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=5)
         self.job_progress = JobProgress()
         self.player = VideoResultPlayer(page, height=320)
-        # Still preview for Text→Image results
+        try:
+            self.player.control.expand = False
+        except Exception:
+            pass
+        # Still preview for Text→Image results (content-sized when empty)
         self.result_image = ft.Image(
             src="",
             fit=ft.BoxFit.CONTAIN,
-            height=320,
+            height=280,
             visible=False,
             gapless_playback=True,
         )
@@ -489,152 +493,165 @@ class CreativeVisionView:
     # ----- layout -----
 
     def build(self) -> ft.Control:
-        left = ft.Container(
-            width=520,
-            content=ft.Column(
+        from media_studio.flet_layout import make_split_workspace
+        from media_studio.flet_theme import RAIL_WIDTH
+
+        left_controls: list[ft.Control] = [
+            section_title("Creative Vision"),
+            ft.Text(
+                "Cinematic invention — text→image, image→image (creative still "
+                "edit / Aleph plates), text/image→video, and bridge shots. "
+                "Not listing camera-lock staging (use Studio for that). "
+                "Video models are expensive — check Est. cost before Generate.",
+                size=FONT_SM,
+                color=TEXT_MUTED,
+            ),
+            self._mode_nav.control,
+            ft.Divider(height=1, color=BORDER),
+            ft.Row([self.model_dd], spacing=0),
+            self.model_notes,
+            ft.Row(
+                [self.dur_dd, self.aspect_dd, self.res_dd, self.num_dd],
+                spacing=8,
+            ),
+            self.strength_label,
+            self.strength,
+            self.gen_audio,
+            _cost_box(self.cost_text),
+            ft.Divider(height=1, color=BORDER),
+            self.helpers_title,
+            ft.Row([self.shot_dd, self.lens_dd], spacing=8),
+            ft.Row([self.motion_dd, self.lighting_dd, self.style_dd], spacing=8),
+            ft.Row([self.rebuild_mode, self.btn_rebuild], spacing=8),
+            self.prompt,
+            self.prompt_favs.root,
+            self.creative_direction,
+            self.creative_direction_hint,
+            self.negative,
+            # Generate/Enhance above frames / libraries
+            ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
+            self.job_progress.control,
+            self.status,
+            ft.Divider(height=1, color=BORDER),
+            label("Frames & reference pack", muted=True),
+            ft.Row(
                 [
-                    section_title("Creative Vision"),
-                    ft.Text(
-                        "Cinematic invention — text→image, image→image (creative still "
-                        "edit / Aleph plates), text/image→video, and bridge shots. "
-                        "Not listing camera-lock staging (use Studio for that). "
-                        "Video models are expensive — check Est. cost before Generate.",
-                        size=FONT_SM,
-                        color=TEXT_MUTED,
+                    ft.Column(
+                        [self.start_ph, self.start_preview, self.btn_start],
+                        spacing=4,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        tight=True,
                     ),
-                    self._mode_nav.control,
-                    ft.Divider(height=1, color=BORDER),
-                    self.model_dd,
-                    self.model_notes,
-                    ft.Row(
-                        [self.dur_dd, self.aspect_dd, self.res_dd, self.num_dd],
-                        spacing=8,
+                    ft.Column(
+                        [self.end_ph, self.end_preview, self.btn_end],
+                        spacing=4,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        tight=True,
                     ),
-                    self.strength_label,
-                    self.strength,
-                    self.gen_audio,
-                    _cost_box(self.cost_text),
-                    ft.Divider(height=1, color=BORDER),
-                    self.helpers_title,
-                    ft.Row([self.shot_dd, self.lens_dd], spacing=8),
-                    ft.Row([self.motion_dd, self.lighting_dd, self.style_dd], spacing=8),
-                    ft.Row([self.rebuild_mode, self.btn_rebuild], spacing=8),
-                    self.prompt,
-                    self.prompt_favs.root,
-                    self.creative_direction,
-                    self.creative_direction_hint,
-                    self.negative,
-                    ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
-                    self.job_progress.control,
-                    self.status,
-                    ft.Divider(height=1, color=BORDER),
-                    label("Frames & reference pack", muted=True),
-                    ft.Row(
+                ],
+                spacing=16,
+                tight=True,
+            ),
+            ft.Row([self.btn_refs, self.btn_clear_refs, self.refs_label], spacing=8),
+            self.prev_strip.root,
+            ft.Divider(height=1, color=BORDER),
+            ft.ExpansionTile(
+                title=ft.Text(
+                    "Subject library",
+                    size=FONT_SM,
+                    color=TEXT,
+                    weight=ft.FontWeight.W_600,
+                ),
+                subtitle=ft.Text(
+                    "Optional — person/pet/car refs (not identity lock)",
+                    size=FONT_SM,
+                    color=TEXT_MUTED,
+                ),
+                expanded=False,
+                affinity=ft.TileAffinity.LEADING,
+                controls=[
+                    ft.Column(
                         [
-                            ft.Column(
-                                [self.start_ph, self.start_preview, self.btn_start],
-                                spacing=4,
-                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            ft.Text(
+                                "Save 3–8 stills of a person/pet/car. “Use subject” attaches refs. "
+                                "Consistency help — not a perfect identity lock.",
+                                size=FONT_SM,
+                                color=TEXT_MUTED,
                             ),
-                            ft.Column(
-                                [self.end_ph, self.end_preview, self.btn_end],
-                                spacing=4,
-                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            ft.Row([self.subject_dd], spacing=0),
+                            ft.Row([self.subject_name, self.subject_notes], spacing=8),
+                            ft.Row(
+                                [self.btn_save_subject, self.btn_del_subject],
+                                spacing=8,
                             ),
                         ],
-                        spacing=16,
-                    ),
-                    ft.Row([self.btn_refs, self.btn_clear_refs, self.refs_label], spacing=8),
-                    self.prev_strip.root,
-                    ft.Divider(height=1, color=BORDER),
-                    # Collapsed by default to reduce left-column density (Phase F)
-                    ft.ExpansionTile(
-                        title=ft.Text("Subject library", size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600),
-                        subtitle=ft.Text(
-                            "Optional — person/pet/car refs (not identity lock)",
-                            size=FONT_SM,
-                            color=TEXT_MUTED,
-                        ),
-                        expanded=False,
-                        affinity=ft.TileAffinity.LEADING,
-                        controls=[
-                            ft.Column(
+                        spacing=8,
+                        tight=True,
+                    )
+                ],
+            ),
+            ft.ExpansionTile(
+                title=ft.Text(
+                    "Vision presets",
+                    size=FONT_SM,
+                    color=TEXT,
+                    weight=ft.FontWeight.W_600,
+                ),
+                subtitle=ft.Text(
+                    "Save / load full helper + prompt setups",
+                    size=FONT_SM,
+                    color=TEXT_MUTED,
+                ),
+                expanded=False,
+                affinity=ft.TileAffinity.LEADING,
+                controls=[
+                    ft.Column(
+                        [
+                            ft.Row([self.preset_dd], spacing=0),
+                            ft.Row(
                                 [
-                                    ft.Text(
-                                        "Save 3–8 stills of a person/pet/car. “Use subject” attaches refs. "
-                                        "Consistency help — not a perfect identity lock.",
-                                        size=FONT_SM,
-                                        color=TEXT_MUTED,
-                                    ),
-                                    self.subject_dd,
-                                    ft.Row([self.subject_name, self.subject_notes], spacing=8),
-                                    ft.Row([self.btn_save_subject, self.btn_del_subject], spacing=8),
+                                    self.preset_name,
+                                    self.btn_save_preset,
+                                    self.btn_del_preset,
                                 ],
                                 spacing=8,
-                                tight=True,
-                            )
+                            ),
                         ],
-                    ),
-                    ft.ExpansionTile(
-                        title=ft.Text("Vision presets", size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600),
-                        subtitle=ft.Text(
-                            "Save / load full helper + prompt setups",
-                            size=FONT_SM,
-                            color=TEXT_MUTED,
-                        ),
-                        expanded=False,
-                        affinity=ft.TileAffinity.LEADING,
-                        controls=[
-                            ft.Column(
-                                [
-                                    self.preset_dd,
-                                    ft.Row(
-                                        [self.preset_name, self.btn_save_preset, self.btn_del_preset],
-                                        spacing=8,
-                                    ),
-                                ],
-                                spacing=8,
-                                tight=True,
-                            )
-                        ],
-                    ),
+                        spacing=8,
+                        tight=True,
+                    )
                 ],
-                spacing=8,
-                scroll=ft.ScrollMode.AUTO,
-                expand=True,
             ),
-            bgcolor=PANEL,
-            border=ft.Border.all(1, BORDER),
-            border_radius=8,
-            padding=12,
+        ]
+        try:
+            self.player.control.expand = False
+        except Exception:
+            pass
+        # CapRightEmpty — tight until a still/video is shown
+        self._right_col = ft.Column(
+            [
+                section_title("Result"),
+                ft.Text(
+                    "Still preview or video playback. "
+                    "T2I / I2I: Send to Frame Editor keyframe, Start / End, or I2V. "
+                    "Show in folder · Send to Resolve · Send to ▾",
+                    size=FONT_SM,
+                    color=TEXT_MUTED,
+                ),
+                self.result_image,
+                self.player.control,
+                self.variant_host,
+                self.send_host,
+            ],
+            spacing=8,
+            tight=True,
+            expand=False,
+            alignment=ft.MainAxisAlignment.START,
         )
-
-        right = panel(
-            ft.Column(
-                [
-                    section_title("Result"),
-                    ft.Text(
-                        "Still preview or video playback. "
-                        "T2I / I2I: Send to Frame Editor keyframe, Start / End, or I2V. "
-                        "Show in folder · Send to Resolve · Send to ▾",
-                        size=FONT_SM,
-                        color=TEXT_MUTED,
-                    ),
-                    self.result_image,
-                    self.player.control,
-                    self.variant_host,
-                    self.send_host,
-                ],
-                spacing=8,
-                expand=True,
-            ),
-        )
-
-        return ft.Row(
-            [left, ft.Container(content=right, expand=True)],
-            spacing=12,
-            expand=True,
-            vertical_alignment=ft.CrossAxisAlignment.START,
+        return make_split_workspace(
+            left_controls,
+            self._right_col,
+            left_width=max(RAIL_WIDTH, 480),
         )
 
     # ----- key gates / cost -----
@@ -1830,6 +1847,11 @@ class CreativeVisionView:
         """Show still or video result in the right pane."""
         ext = Path(path).suffix.lower()
         is_img = ext in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+        try:
+            self._right_col.expand = True
+            self._right_col.tight = False
+        except Exception:
+            pass
         if is_img:
             try:
                 self.player.clear()

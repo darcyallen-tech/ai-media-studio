@@ -66,11 +66,13 @@ class PromptFavoritesBar:
         self.on_status = on_status
         self._none = "(Favorites)"
 
+        # expand=False on Dropdown: inside ListView rails, expand=True was taken as
+        # vertical flex and painted a tall empty PANEL_ELEVATED slab under ★ Star.
         self.fav_dd = styled_dropdown(
             label_text="Favorites",
             options=[self._none],
             value=self._none,
-            expand=True,
+            expand=False,
         )
         self.btn_star = ft.OutlinedButton(
             content="★ Star",
@@ -109,25 +111,31 @@ class PromptFavoritesBar:
             self.btn_export = None
             self.btn_import = None
 
+        # Horizontal fill only: Container.expand in a Row; height-capped so it
+        # cannot become a tall elevated void under Star.
+        fav_slot = ft.Container(
+            content=self.fav_dd,
+            expand=True,
+            height=40,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            alignment=ft.Alignment.CENTER_LEFT,
+        )
         self.root = ft.Container(
-            content=ft.Column(
+            content=ft.Row(
                 [
-                    ft.Row(
-                        [
-                            self.btn_star,
-                            self.fav_dd,
-                            self.btn_apply,
-                            *pack_btns,
-                        ],
-                        spacing=6,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                        wrap=True,
-                    ),
+                    self.btn_star,
+                    fav_slot,
+                    self.btn_apply,
+                    *pack_btns,
                 ],
-                spacing=2,
+                spacing=6,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                wrap=False,
                 tight=True,
             ),
             padding=ft.Padding.only(top=2, bottom=2),
+            expand=False,
+            # No bgcolor — never an empty PANEL_ELEVATED spacer under Star
         )
         self.refresh()
 

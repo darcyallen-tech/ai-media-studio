@@ -27,7 +27,11 @@ FONT_MD = 13
 FONT_LG = 15
 FONT_XL = 18
 
-RAIL_WIDTH = 420
+# Controls rails — fixed widths so empty result panes never starve the left side
+RAIL_WIDTH = 460
+TOOLS_FORM_WIDTH = 560
+# Compact empty preview / result placeholders (not full-column stretch)
+EMPTY_PREVIEW_H = 96
 
 
 def page_theme() -> ft.Theme:

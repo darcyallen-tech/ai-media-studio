@@ -270,6 +270,41 @@ class StudioImageView:
 
         self.prev_row = ft.Row(spacing=6, scroll=ft.ScrollMode.AUTO, height=56)
 
+        # Optional multi-reference stills (primary is source_path; extras when model allows)
+        self._extra_ref_paths: list[str] = []
+        self.refs_hint = ft.Text(
+            "",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=2,
+        )
+        self.refs_chips = ft.Column(spacing=4, tight=True)
+        self.btn_add_ref = ft.OutlinedButton(
+            content="Add reference",
+            icon=ft.Icons.ADD_PHOTO_ALTERNATE_OUTLINED,
+            on_click=self._on_pick_extra_ref,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            tooltip="Add another reference still (style / product / look). Model max applies.",
+        )
+        self.refs_panel = ft.Column(
+            [
+                ft.Row(
+                    [
+                        section_title("Reference stills"),
+                        ft.Container(expand=True),
+                        self.btn_add_ref,
+                    ],
+                    spacing=6,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                self.refs_hint,
+                self.refs_chips,
+            ],
+            spacing=4,
+            tight=True,
+            visible=False,
+        )
+
         # Scenario is app-level (top bar). Image reacts via apply_app_scenario.
         sc0 = get_scenario(self.state.scenario_key) or default_scenario()
         self._workspace_id = sc0.key
@@ -840,10 +875,11 @@ class StudioImageView:
             border=ft.Border.all(1, BORDER),
             visible=True,
         )
-        # Fills remaining right-pane height under compact controls
+        # Fills remaining right-pane height only when a comparison exists
+        # (expand=False while empty — avoids a full-window grey void)
         self.overlay_stage = ft.Container(
             content=self.overlay_stack,
-            expand=True,
+            expand=False,
             bgcolor="#111318",
             border_radius=8,
             border=ft.Border.all(1, BORDER),
@@ -884,94 +920,75 @@ class StudioImageView:
 
         self._refresh_previous()
         self._apply_scenario_ui(self._workspace_id)
+        self._sync_refs_panel()
 
     # ----- public root control -----
 
     def build(self) -> ft.Control:
-        left = ft.Container(
-            width=RAIL_WIDTH,
-            bgcolor=PANEL,
-            border=ft.Border.all(1, BORDER),
-            border_radius=8,
-            padding=10,
-            content=ft.Column(
-                [
-                    section_title("Image workspace"),
-                    ft.Row(
-                        [self._scenario_badge, ft.Container(expand=True)],
-                        spacing=8,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    self._workspace_desc,
-                    ft.Row(
-                        [
-                            label("Edit mode", muted=True),
-                            self._mode_nav.control,
-                        ],
-                        spacing=8,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    ft.Divider(height=1, color=BORDER),
-                    ft.Row(
-                        [
-                            section_title("Source still"),
-                            self.btn_pick,
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Stack(
-                        [
-                            self.source_placeholder,
-                            self.source_preview,
-                            self.region_source_overlay.root,
-                        ],
-                        height=120,
-                        width=RAIL_WIDTH - 40,
-                    ),
-                    label("Previously used", muted=True),
-                    self.prev_row,
-                    self.suggest_banner,
-                    self.furniture_builder,
-                    self.simple_builder,
-                    self.region_panel.root,
-                    ft.Row(
-                        [
-                            self.btn_reset_scenario,
-                        ],
-                        spacing=4,
-                    ),
-                    self.prompt_field,
-                    self.prompt_favs.root,
-                    ft.Row(
-                        [self.local_edit_field, self.btn_local_edit],
-                        spacing=8,
-                        vertical_alignment=ft.CrossAxisAlignment.END,
-                    ),
-                    self.model_dd,
-                    self.advisor_text,
-                    ft.Row([self.res_dd, self.num_dd], spacing=8),
-                    label("Strength (edit / denoise)", muted=True),
-                    self.strength,
-                    self.job_text,
-                    ft.Container(expand=True),  # spacer
-                    ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
-                    self.job_progress.control,
-                    self.cost_box,
-                    self.btn_send_video,
-                    self.btn_send_aleph,
-                    self.result_actions_row,
-                    self.qc_row,
-                    self.status_text,
-                    self.job_log.control,
-                ],
-                spacing=8,
-                expand=True,
-                scroll=ft.ScrollMode.AUTO,
-            ),
-        )
+        """FixedRail + CapRightEmpty (LAYOUT_AUDIT_2026-08-01)."""
+        from media_studio.flet_layout import make_split_workspace
 
-        # Comparison: left vertical versions + large smooth overlay workspace
-        compare_rail = ft.Container(
+        left_controls: list[ft.Control] = [
+            section_title("Image workspace"),
+            ft.Row(
+                [self._scenario_badge, ft.Container(expand=True)],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            self._workspace_desc,
+            ft.Row(
+                [label("Edit mode", muted=True), self._mode_nav.control],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            ft.Divider(height=1, color=BORDER),
+            ft.Row(
+                [section_title("Source still"), self.btn_pick],
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
+            ft.Stack(
+                [
+                    self.source_placeholder,
+                    self.source_preview,
+                    self.region_source_overlay.root,
+                ],
+                height=120,
+                width=RAIL_WIDTH - 40,
+            ),
+            self.refs_panel,
+            label("Previously used", muted=True),
+            self.prev_row,
+            self.suggest_banner,
+            self.furniture_builder,
+            self.simple_builder,
+            self.region_panel.root,
+            ft.Row([self.btn_reset_scenario], spacing=4),
+            self.prompt_field,
+            self.prompt_favs.root,
+            ft.Row(
+                [self.local_edit_field, self.btn_local_edit],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.END,
+            ),
+            ft.Row([self.model_dd], spacing=0),
+            self.advisor_text,
+            ft.Row([self.res_dd, self.num_dd], spacing=8),
+            label("Strength (edit / denoise)", muted=True),
+            self.strength,
+            self.job_text,
+            ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
+            self.job_progress.control,
+            self.cost_box,
+            self.btn_send_video,
+            self.btn_send_aleph,
+            self.result_actions_row,
+            self.qc_row,
+            self.status_text,
+            self.job_log.control,
+        ]
+
+        # Compare rail — fixed width; only shown when there is media
+        self._compare_rail = ft.Container(
             width=196,
             content=ft.Column(
                 [
@@ -981,12 +998,14 @@ class StudioImageView:
                     self._versions_col,
                 ],
                 spacing=8,
-                expand=True,
+                tight=True,
+                expand=False,
             ),
             padding=ft.Padding.only(right=4),
+            visible=False,
         )
+        self._versions_col.expand = False
 
-        # Compact controls above the stage (no expand spacers that steal height)
         workspace_header = ft.Column(
             [
                 ft.Row(
@@ -1018,62 +1037,60 @@ class StudioImageView:
             spacing=4,
             tight=True,
         )
-
-        workspace = ft.Column(
+        # Tight when empty; stage expand toggled in _apply_overlay_visuals
+        self._workspace_col = ft.Column(
             [
                 workspace_header,
-                self.overlay_placeholder,  # compact when empty
-                self.overlay_stage,  # expand=True — fills rest when images exist
+                self.overlay_placeholder,
+                self.overlay_stage,
             ],
             spacing=8,
-            expand=True,
+            tight=True,
+            expand=False,
+            alignment=ft.MainAxisAlignment.START,
         )
-
-        right = panel(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            section_title("Comparison"),
-                            self.compare_label,
-                            self.live_metrics,
-                            ft.IconButton(
-                                icon=ft.Icons.CHEVRON_LEFT,
-                                icon_color=TEXT,
-                                tooltip="Previous version",
-                                on_click=lambda e: self._step_compare(-1),
-                            ),
-                            ft.IconButton(
-                                icon=ft.Icons.CHEVRON_RIGHT,
-                                icon_color=TEXT,
-                                tooltip="Next version",
-                                on_click=lambda e: self._step_compare(1),
-                            ),
-                            ft.TextButton("Clear", on_click=self._clear_compare),
-                        ],
-                        alignment=ft.MainAxisAlignment.START,
-                        spacing=4,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    ft.Row(
-                        [compare_rail, workspace],
-                        expand=True,
-                        spacing=12,
-                        vertical_alignment=ft.CrossAxisAlignment.STRETCH,
-                    ),
-                ],
-                spacing=6,
-                expand=True,
-            ),
-            expand=True,
-            padding=10,
-        )
-
-        return ft.Row(
-            [left, right],
-            expand=True,
+        self._compare_body_row = ft.Row(
+            [self._compare_rail, self._workspace_col],
             spacing=12,
-            vertical_alignment=ft.CrossAxisAlignment.STRETCH,
+            expand=False,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        )
+        self._right_col = ft.Column(
+            [
+                ft.Row(
+                    [
+                        section_title("Comparison"),
+                        self.compare_label,
+                        self.live_metrics,
+                        ft.IconButton(
+                            icon=ft.Icons.CHEVRON_LEFT,
+                            icon_color=TEXT,
+                            tooltip="Previous version",
+                            on_click=lambda e: self._step_compare(-1),
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.CHEVRON_RIGHT,
+                            icon_color=TEXT,
+                            tooltip="Next version",
+                            on_click=lambda e: self._step_compare(1),
+                        ),
+                        ft.TextButton("Clear", on_click=self._clear_compare),
+                    ],
+                    alignment=ft.MainAxisAlignment.START,
+                    spacing=4,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                self._compare_body_row,
+            ],
+            spacing=6,
+            tight=True,
+            expand=False,
+            alignment=ft.MainAxisAlignment.START,
+        )
+        return make_split_workspace(
+            left_controls,
+            self._right_col,
+            left_width=RAIL_WIDTH,
         )
 
     # ----- estimates / params -----
@@ -1314,6 +1331,7 @@ class StudioImageView:
                 "Colored boxes on the large image; L/T/W/H for precision. "
                 "Generate composites boxes onto the still (fails hard if composite fails)."
             )
+            self._sync_refs_panel()
         else:
             # Restore full model list + previous selection
             self._restore_standard_models()
@@ -1321,6 +1339,7 @@ class StudioImageView:
             blank = is_blank_canvas(sc.key)
             self.furniture_builder.visible = bool(sc.show_furniture_builder) and not blank
             self.simple_builder.visible = bool(sc.show_simple_builder) and not blank
+            self._sync_refs_panel()
             self.prompt_field.label = (
                 "Image prompt (freeform)" if blank else "Image prompt"
             )
@@ -1665,6 +1684,12 @@ class StudioImageView:
             record_source(self.state.source_path, self.state.output_dir)
         except Exception:
             pass
+        # Drop any extra ref that matches the new primary
+        self._extra_ref_paths = [
+            r
+            for r in self._extra_ref_paths
+            if Path(r).resolve() != Path(self.state.source_path).resolve()
+        ]
         self._refresh_previous()
         self.source_preview.src = self.state.source_path
         self.source_preview.visible = True
@@ -1677,10 +1702,153 @@ class StudioImageView:
                 self._refresh_region_overlays()
         except Exception:
             pass
+        self._sync_refs_panel()
         self._refresh_cost_job()
         self._update_compare_pane()
         self._set_status(status or f"Source still: {p.name}")
         return True
+
+    def _model_max_refs(self) -> int:
+        from media_studio.fal.models import max_ref_images_for_choice
+
+        model = _dd_value(self.model_dd) or DEFAULT_IMAGE_MODEL
+        return max_ref_images_for_choice(model)
+
+    def _trim_extra_refs_to_model(self) -> None:
+        """Keep extras within model max (primary counts as 1)."""
+        max_refs = self._model_max_refs()
+        extra_cap = max(0, max_refs - 1)
+        if len(self._extra_ref_paths) > extra_cap:
+            self._extra_ref_paths = self._extra_ref_paths[:extra_cap]
+
+    def _sync_refs_panel(self) -> None:
+        """Show/hide multi-ref UI; rebuild chips. Hidden in Region mode."""
+        max_refs = self._model_max_refs()
+        is_region = getattr(self, "_edit_mode", "standard") == "region"
+        show = (not is_region) and max_refs > 1
+        self.refs_panel.visible = show
+        if not show:
+            return
+        self._trim_extra_refs_to_model()
+        extra_cap = max(0, max_refs - 1)
+        n = len(self._extra_ref_paths)
+        self.refs_hint.value = (
+            f"Primary source + up to {extra_cap} extra ref"
+            f"{'s' if extra_cap != 1 else ''} "
+            f"(model max {max_refs}). {n}/{extra_cap} used."
+        )
+        self.btn_add_ref.disabled = n >= extra_cap
+        chips: list[ft.Control] = []
+        for i, path in enumerate(list(self._extra_ref_paths)):
+            name = Path(path).name
+            chips.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Image(
+                                src=path if Path(path).is_file() else "",
+                                width=40,
+                                height=40,
+                                fit=ft.BoxFit.COVER,
+                                border_radius=4,
+                                visible=Path(path).is_file(),
+                            ),
+                            ft.Text(
+                                name,
+                                size=FONT_SM,
+                                color=TEXT,
+                                expand=True,
+                                max_lines=1,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                            ),
+                            ft.IconButton(
+                                icon=ft.Icons.CLOSE,
+                                icon_size=16,
+                                icon_color=TEXT_MUTED,
+                                tooltip="Remove reference",
+                                on_click=self._make_remove_extra_ref(i),
+                            ),
+                        ],
+                        spacing=6,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    bgcolor=PANEL_ELEVATED,
+                    border=ft.Border.all(1, BORDER),
+                    border_radius=6,
+                    padding=ft.Padding.symmetric(horizontal=6, vertical=4),
+                )
+            )
+        self.refs_chips.controls = chips
+
+    def _make_remove_extra_ref(self, index: int):
+        async def _click(_e: ft.ControlEvent) -> None:
+            if 0 <= index < len(self._extra_ref_paths):
+                removed = self._extra_ref_paths.pop(index)
+                self._set_status(f"Removed ref: {Path(removed).name}")
+            self._sync_refs_panel()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click
+
+    async def _on_pick_extra_ref(self, e: ft.ControlEvent) -> None:
+        max_refs = self._model_max_refs()
+        extra_cap = max(0, max_refs - 1)
+        if len(self._extra_ref_paths) >= extra_cap:
+            self._set_status(f"Model allows at most {max_refs} stills (including primary).")
+            return
+        try:
+            files = await pick_image(
+                self.page,
+                dialog_title="Choose reference still",
+                allow_multiple=True,
+            )
+        except Exception as exc:
+            self._set_status(f"File picker error: {exc}")
+            return
+        if not files:
+            return
+        primary = None
+        if self.state.source_path:
+            try:
+                primary = Path(self.state.source_path).resolve()
+            except OSError:
+                primary = None
+        added = 0
+        for f in files:
+            if len(self._extra_ref_paths) >= extra_cap:
+                break
+            path = f.path
+            if not path:
+                continue
+            p = Path(path)
+            if not p.is_file():
+                continue
+            try:
+                resolved = str(p.resolve())
+            except OSError:
+                resolved = str(p)
+            if primary and Path(resolved).resolve() == primary:
+                continue
+            if resolved in self._extra_ref_paths:
+                continue
+            self._extra_ref_paths.append(resolved)
+            try:
+                record_source(resolved, self.state.output_dir)
+            except Exception:
+                pass
+            added += 1
+        self._sync_refs_panel()
+        if added:
+            self._set_status(f"Added {added} reference still(s).")
+        else:
+            self._set_status("No new reference stills added.")
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     async def _on_pick_source(self, e: ft.ControlEvent) -> None:
         try:
@@ -1894,6 +2062,8 @@ class StudioImageView:
             ]
             self.num_dd.value = opts["num_images_value"]
             self.strength.value = float(opts.get("strength_value") or 0.6)
+            self._trim_extra_refs_to_model()
+            self._sync_refs_panel()
         self._refresh_cost_job()
         self.page.update()
 
@@ -1947,10 +2117,24 @@ class StudioImageView:
         if not has_src and not has_gen:
             self.overlay_placeholder.visible = True
             self.overlay_stage.visible = False
+            try:
+                self.overlay_stage.expand = False
+            except Exception:
+                pass
             self.overlay_base.visible = False
             self.overlay_gen_layer.visible = False
             try:
                 self.region_stage_overlay.set_visible(False)
+            except Exception:
+                pass
+            # CapRightEmpty — no expand chain when empty
+            try:
+                self._workspace_col.expand = False
+                self._workspace_col.tight = True
+                self._compare_body_row.expand = False
+                self._right_col.expand = False
+                self._right_col.tight = True
+                self._compare_rail.visible = False
             except Exception:
                 pass
             self._sync_overlay_labels()
@@ -1959,6 +2143,16 @@ class StudioImageView:
         # Real comparison fills the right pane under the compact header
         self.overlay_placeholder.visible = False
         self.overlay_stage.visible = True
+        try:
+            self.overlay_stage.expand = True
+            self._workspace_col.expand = True
+            self._workspace_col.tight = False
+            self._compare_body_row.expand = True
+            self._right_col.expand = True
+            self._right_col.tight = False
+            self._compare_rail.visible = True
+        except Exception:
+            pass
 
         # Always CONTAIN — never stretch house photos
         try:
@@ -2363,9 +2557,15 @@ class StudioImageView:
         self.btn_enhance.disabled = True
         self.btn_generate.disabled = True
         self.job_progress.start("Enhancing prompt…", self.page)
+        extra_refs = (
+            []
+            if self._edit_mode == "region"
+            else list(getattr(self, "_extra_ref_paths", None) or [])
+        )
         self._set_status(
             "Enhancing with Grok · vision"
             + (" · region" if self._edit_mode == "region" else "")
+            + (f" · {len(extra_refs)} ref(s)" if extra_refs else "")
             + "…"
         )
         model = _dd_value(self.model_dd) or DEFAULT_IMAGE_MODEL
@@ -2380,6 +2580,7 @@ class StudioImageView:
                 output_dir=self.state.output_dir,
                 scenario=self.state.scenario_key or self.state.scenario_label,
                 extra_context=extra,
+                extra_image_files=extra_refs or None,
             )
             if result.ok and result.optimized_prompt:
                 self.prompt_field.value = result.optimized_prompt
@@ -2495,6 +2696,13 @@ class StudioImageView:
             self.job_log.append(msg, self.page)
             self.job_progress.set_message(classify_progress(msg), self.page)
 
+        # Multi-ref only in Standard mode; Region ships the annotated primary alone
+        extra_refs = (
+            []
+            if self._edit_mode == "region"
+            else list(getattr(self, "_extra_ref_paths", None) or [])
+        )
+
         try:
             from media_studio.job_context import to_thread_with_job
 
@@ -2509,6 +2717,7 @@ class StudioImageView:
                 parameters_json=params_json,
                 on_progress=on_progress,
                 scenario=scenario_key,
+                extra_image_files=extra_refs or None,
             )
             if result.ok and result.image_paths:
                 for p in result.image_paths:
@@ -3278,27 +3487,20 @@ def main(page: ft.Page) -> None:
     _studio_mode = get_studio_mode()
     _studio_idx = 1 if _studio_mode == "video" else 0
 
+    def _tab_body(control: ft.Control) -> ft.Control:
+        """One expand layer into the tab body (no nested expand wrappers)."""
+        return ft.Container(
+            content=control,
+            expand=True,
+            padding=ft.Padding.only(top=8),
+        )
+
     # Flet 0.86: TabBar + TabBarView inside Tabs.content
+    # Studio sub-tabs: body already expands; single wrapper only
     studio_tabs = build_tabs(
         [
-            (
-                "Image",
-                ft.Icons.IMAGE,
-                ft.Container(
-                    content=studio_image.build(),
-                    expand=True,
-                    padding=ft.Padding.only(top=8),
-                ),
-            ),
-            (
-                "Video",
-                ft.Icons.MOVIE,
-                ft.Container(
-                    content=studio_video.build(),
-                    expand=True,
-                    padding=ft.Padding.only(top=8),
-                ),
-            ),
+            ("Image", ft.Icons.IMAGE, _tab_body(studio_image.build())),
+            ("Video", ft.Icons.MOVIE, _tab_body(studio_video.build())),
         ],
         selected_index=_studio_idx,
     )
@@ -3307,51 +3509,19 @@ def main(page: ft.Page) -> None:
     main_tabs = build_tabs(
         [
             ("Studio", ft.Icons.DASHBOARD, studio_tabs),
-            (
-                "Tools",
-                ft.Icons.HANDYMAN,
-                ft.Container(
-                    content=tools_view.build(),
-                    expand=True,
-                    padding=ft.Padding.only(top=8),
-                ),
-            ),
+            ("Tools", ft.Icons.HANDYMAN, _tab_body(tools_view.build())),
             (
                 "Creative Vision",
                 ft.Icons.AUTO_AWESOME,
-                ft.Container(
-                    content=vision_view.build(),
-                    expand=True,
-                    padding=ft.Padding.only(top=8),
-                ),
+                _tab_body(vision_view.build()),
             ),
             (
                 "Frame Editor",
                 ft.Icons.MOVIE_FILTER,
-                ft.Container(
-                    content=frame_editor_view.build(),
-                    expand=True,
-                    padding=ft.Padding.only(top=8),
-                ),
+                _tab_body(frame_editor_view.build()),
             ),
-            (
-                "Audio",
-                ft.Icons.GRAPHIC_EQ,
-                ft.Container(
-                    content=audio_view.build(),
-                    expand=True,
-                    padding=ft.Padding.only(top=8),
-                ),
-            ),
-            (
-                "Library",
-                ft.Icons.PHOTO_LIBRARY,
-                ft.Container(
-                    content=library_view.build(),
-                    expand=True,
-                    padding=ft.Padding.only(top=8),
-                ),
-            ),
+            ("Audio", ft.Icons.GRAPHIC_EQ, _tab_body(audio_view.build())),
+            ("Library", ft.Icons.PHOTO_LIBRARY, _tab_body(library_view.build())),
         ]
     )
 

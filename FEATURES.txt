@@ -72,12 +72,18 @@ STUDIO — IMAGE
 - Standard edit mode (full-frame prompt)
 - Region edit mode (colored boxes + per-box prompts; Seedream annotation only)
 - Source still upload + Previously used
+- Multi-reference stills (Standard mode, when model allows):
+    Primary source + optional “Add reference” slots up to model max
+    Nano Banana family / Seedream / Flux multi-ref / Grok Imagine: multi-ref
+    Single-image models (e.g. Flux Kontext, MAI): primary only — ref UI hidden
+    Region mode: annotated primary only (no extra refs)
 - Model list (Flux 2 Pro/Max Edit, MAI-Image, Seedream, etc.)
 - # Images 1–4 multi-variant (when model multi-outputs in one call, or sequential
   singles if the API is one-at-a-time). Cost estimate = per-image × count.
   Each still is a separate Library item (Send to ▾ per variant). Per-tab busy only.
 - Strength / relevant controls
-- Grok Enhance (vision-aware, model-specific, scenario-aware)
+- Grok Enhance (vision-aware, model-specific, scenario-aware; can attach/mention
+  extra refs when multi-ref is set)
 - Comparison viewer with Overlay / A/B + opacity
 - Versions history
 - Cost estimate (job total), generate, Show in folder, Send to Resolve, Send to ▾

@@ -313,89 +313,72 @@ class StudioVideoView:
         self._apply_workspace_ui(self._workspace_id, rebuild_prompt=True)
 
     def build(self) -> ft.Control:
-        left = ft.Container(
-            width=RAIL_WIDTH,
-            bgcolor=PANEL,
-            border=ft.Border.all(1, BORDER),
-            border_radius=8,
-            padding=10,
-            content=ft.Column(
-                [
-                    section_title("Video workspace"),
-                    self._workspace_nav.control,
-                    self._workspace_title,
-                    self._workspace_desc,
-                    ft.Divider(height=1, color=BORDER),
-                    ft.Row(
-                        [
-                            ft.Column(
-                                [
-                                    label("Reference still", muted=True),
-                                    ft.Stack([self.ref_placeholder, self.ref_preview]),
-                                    self.btn_pick_ref,
-                                ],
-                                spacing=4,
-                            ),
-                            ft.Column(
-                                [
-                                    label("Source video", muted=True),
-                                    ft.Stack(
-                                        [
-                                            self.video_placeholder,
-                                            self.video_preview,
-                                        ]
-                                    ),
-                                    self.btn_pick_vid,
-                                ],
-                                spacing=4,
-                            ),
-                        ],
-                        spacing=12,
-                    ),
-                    label("Recently from Resolve", muted=True),
-                    self.resolve_recent_row,
-                    self.prompt_field,
-                    self.btn_reset_scenario,
-                    self.model_dd,
-                    ft.Row(
-                        [self.dur_dd, self.res_dd, self.aspect_dd, self.start_time],
-                        spacing=8,
-                    ),
-                    self.keep_audio,
-                    self.gen_audio,
-                    self.job_text,
-                    ft.Container(expand=True),
-                    ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
-                    self.job_progress.control,
-                    self.cost_box,
-                    self.status_text,
-                    self.job_log.control,
-                ],
-                spacing=8,
-                expand=True,
-                scroll=ft.ScrollMode.AUTO,
-            ),
-        )
+        from media_studio.flet_layout import make_split_workspace
 
-        right = panel(
-            ft.Column(
+        left_controls: list[ft.Control] = [
+            section_title("Video workspace"),
+            self._workspace_nav.control,
+            self._workspace_title,
+            self._workspace_desc,
+            ft.Divider(height=1, color=BORDER),
+            ft.Row(
                 [
-                    section_title("Result preview"),
-                    self.video_player.control,
-                    self.btn_send_vsfx,
+                    ft.Column(
+                        [
+                            label("Reference still", muted=True),
+                            ft.Stack([self.ref_placeholder, self.ref_preview]),
+                            self.btn_pick_ref,
+                        ],
+                        spacing=4,
+                        tight=True,
+                    ),
+                    ft.Column(
+                        [
+                            label("Source video", muted=True),
+                            ft.Stack([self.video_placeholder, self.video_preview]),
+                            self.btn_pick_vid,
+                        ],
+                        spacing=4,
+                        tight=True,
+                    ),
                 ],
-                expand=True,
+                spacing=12,
+            ),
+            label("Recently from Resolve", muted=True),
+            self.resolve_recent_row,
+            self.prompt_field,
+            self.btn_reset_scenario,
+            ft.Row([self.model_dd], spacing=0),
+            ft.Row(
+                [self.dur_dd, self.res_dd, self.aspect_dd, self.start_time],
                 spacing=8,
             ),
-            expand=True,
-            padding=12,
+            self.keep_audio,
+            self.gen_audio,
+            self.job_text,
+            ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
+            self.job_progress.control,
+            self.cost_box,
+            self.status_text,
+            self.job_log.control,
+        ]
+        # CapRightEmpty — player is non-expand when empty
+        try:
+            self.video_player.control.expand = False
+        except Exception:
+            pass
+        right = ft.Column(
+            [
+                section_title("Result preview"),
+                self.video_player.control,
+                self.btn_send_vsfx,
+            ],
+            spacing=8,
+            tight=True,
+            expand=False,
+            alignment=ft.MainAxisAlignment.START,
         )
-        return ft.Row(
-            [left, right],
-            expand=True,
-            spacing=12,
-            vertical_alignment=ft.CrossAxisAlignment.STRETCH,
-        )
+        return make_split_workspace(left_controls, right, left_width=RAIL_WIDTH)
 
     # ----- workspaces -----
 

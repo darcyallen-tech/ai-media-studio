@@ -122,7 +122,7 @@ Dashboards:
 ### Creative Vision highlights
 
 - **Text → Image** — invent stills (no source). Still-only helpers (framing / lens / lighting / style); **no camera motion** on rebuild or Enhance. T2I models include Flux family, **Nano Banana** / 2 / Pro, **Seedream** 4.5 / 5 Lite / 5 Pro, Recraft (see FEATURES.txt). **# Images 1–4** multi-variant; cost × count; separate Library rows; sequential if the API is one-at-a-time (per-tab busy only).
-- **Studio Image** — same 1–4 multi-variant pattern when generating edits.
+- **Studio Image** — same 1–4 multi-variant pattern when generating edits. Multi-reference stills when the model allows (primary + optional refs: Nano Banana, Seedream, Flux multi-ref, Grok Imagine); single-image models stay one still. Region edit uses the annotated primary only.
 - **Image → Image** — creative plate edits (Aleph round-trip); same still helpers.
 - T2I / still results: **Send to ▾ → Start frame / End frame** (bridge handoff) without re-exporting from disk.
 - Every helper that feeds Rebuild/Enhance has **(None)** — omit that dimension. Same pattern in Studio scene builders and Audio builders where helpers inject text.

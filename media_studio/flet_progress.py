@@ -36,7 +36,7 @@ class JobProgress:
             bgcolor="#2a2f3a",
             height=4,
             visible=False,
-            expand=True,
+            expand=True,  # horizontal only — lives inside a Row
         )
         self.message = ft.Text(
             "",
@@ -45,6 +45,7 @@ class JobProgress:
             visible=False,
             max_lines=2,
         )
+        # Bar in a Row so expand is horizontal only (not a tall slab in ListView)
         self.control = ft.Column(
             [
                 ft.Row(
@@ -52,10 +53,12 @@ class JobProgress:
                     spacing=10,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                self.bar,
+                ft.Row([self.bar], spacing=0),
             ],
             spacing=6,
             visible=True,
+            tight=True,
+            expand=False,
             width=width,
         )
         self._active = False

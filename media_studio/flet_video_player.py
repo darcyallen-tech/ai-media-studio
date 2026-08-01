@@ -9,7 +9,14 @@ import flet as ft
 
 from media_studio.folder_util import show_in_folder
 from media_studio.flet_result_actions import make_result_action_row, show_result_actions
-from media_studio.flet_theme import BORDER, FONT_SM, PANEL_ELEVATED, TEXT, TEXT_MUTED
+from media_studio.flet_theme import (
+    BORDER,
+    EMPTY_PREVIEW_H,
+    FONT_SM,
+    PANEL_ELEVATED,
+    TEXT,
+    TEXT_MUTED,
+)
 
 try:
     import flet_video as ftv
@@ -25,12 +32,13 @@ class VideoResultPlayer:
     Inline flet-video player for a successful generation.
 
     Visible only after ``set_result``; does not open the OS media player.
+    Empty state is compact (no full-height grey expand void).
     """
 
     def __init__(self, page: ft.Page, *, height: float = 360) -> None:
         self.page = page
         self.path: str | None = None
-        self._height = height
+        self._height = float(height)
 
         self.path_text = ft.Text(
             "No video result yet.",
@@ -39,7 +47,9 @@ class VideoResultPlayer:
             selectable=True,
             max_lines=2,
         )
-        self._resolve_status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, visible=False, max_lines=2)
+        self._resolve_status = ft.Text(
+            "", size=FONT_SM, color=TEXT_MUTED, visible=False, max_lines=2
+        )
         (
             self.result_actions_row,
             self.btn_folder,
@@ -49,22 +59,22 @@ class VideoResultPlayer:
             get_path=lambda: self.path,
             on_status=self._on_resolve_status,
         )
+        # Content-sized empty state — never expand into a grey slab
         self._placeholder = ft.Column(
             [
-                ft.Icon(ft.Icons.MOVIE, size=48, color=TEXT_MUTED),
+                ft.Icon(ft.Icons.MOVIE, size=36, color=TEXT_MUTED),
                 self.path_text,
                 ft.Text(
-                    "Generate a video to preview it here.\n"
-                    "Source: Upload or Import from Resolve.",
+                    "Generate a video to preview it here.",
                     size=FONT_SM,
                     color=TEXT_MUTED,
                     text_align=ft.TextAlign.CENTER,
                 ),
             ],
-            spacing=10,
+            spacing=6,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            alignment=ft.MainAxisAlignment.CENTER,
-            expand=True,
+            tight=True,
+            expand=False,
         )
 
         self._video: Any = None
@@ -78,7 +88,8 @@ class VideoResultPlayer:
                 fit=ft.BoxFit.CONTAIN,
                 fill_color="#0a0c10",
                 aspect_ratio=16 / 9,
-                expand=True,
+                expand=False,
+                height=self._height - 48,
                 visible=False,
                 on_error=self._on_error,
             )
@@ -105,15 +116,25 @@ class VideoResultPlayer:
             ]
         )
 
+        # expand=False when empty — parent tabs must not inherit a full-height grey box
         self.control = ft.Container(
-            content=ft.Column(body_controls, spacing=8, expand=True),
-            expand=True,
+            content=ft.Column(
+                body_controls,
+                spacing=8,
+                tight=True,
+                expand=False,
+                alignment=ft.MainAxisAlignment.START,
+            ),
+            expand=False,
+            height=EMPTY_PREVIEW_H + 40,
             bgcolor=PANEL_ELEVATED,
             border=ft.Border.all(1, BORDER),
             border_radius=8,
             padding=10,
             clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            alignment=ft.Alignment.TOP_CENTER,
         )
+        show_result_actions(self.btn_folder, self.btn_resolve, visible=False)
 
     def _safe_update(self) -> None:
         try:
@@ -137,6 +158,23 @@ class VideoResultPlayer:
         self._resolve_status.color = "#e57373" if is_error else TEXT_MUTED
         self._safe_update()
 
+    def _set_empty_layout(self) -> None:
+        try:
+            self.control.expand = False
+            self.control.height = EMPTY_PREVIEW_H + 40
+        except Exception:
+            pass
+
+    def _set_result_layout(self) -> None:
+        try:
+            self.control.expand = False
+            self.control.height = self._height + 56
+            if self._video is not None:
+                self._video.height = max(160.0, self._height - 48)
+                self._video.expand = False
+        except Exception:
+            pass
+
     def clear(self) -> None:
         self.path = None
         self.path_text.value = "No video result yet."
@@ -150,6 +188,7 @@ class VideoResultPlayer:
                 self._video.visible = False
             except Exception:
                 pass
+        self._set_empty_layout()
         self._safe_update()
 
     def set_result(self, path: str | None, *, note: str | None = None) -> None:
@@ -162,6 +201,7 @@ class VideoResultPlayer:
         self._resolve_status.visible = False
         self._placeholder.visible = False
         self._error.visible = False
+        self._set_result_layout()
 
         if self._video is None:
             self._error.value = (
@@ -176,10 +216,7 @@ class VideoResultPlayer:
             media = ftv.VideoMedia(resource=self.path)
             self._video.playlist = [media]
             self._video.visible = True
-            # Jump to first item if API provides it
-            play = getattr(self._video, "play", None)
             # Do not autoplay — user presses controls
-            _ = play
         except Exception as exc:
             self._error.value = f"Could not load video: {exc}"
             self._error.visible = True

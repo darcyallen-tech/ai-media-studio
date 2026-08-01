@@ -234,6 +234,8 @@ class ImageEditModelSpec:
     endpoint: str
     image_field: str = "image_urls"
     multi_image: bool = True
+    # Max input stills (primary + optional refs). 1 = single-ref UI/path.
+    max_ref_images: int = 1
     num_images_param: str = "num_images"
     max_num_images: int = 4
     aspect_ratio_param: str | None = "aspect_ratio"
@@ -258,6 +260,17 @@ class ImageEditModelSpec:
         if n is None or n < 1:
             return 1
         return min(int(n), self.max_num_images)
+
+    def clamp_ref_images(self, n: int | None) -> int:
+        """How many input stills this model accepts (primary + optional refs)."""
+        if not self.multi_image or self.image_field == "image_url":
+            return 1
+        cap = int(self.max_ref_images or 1)
+        if cap < 1:
+            return 1
+        if n is None or n < 1:
+            return 1
+        return min(int(n), cap)
 
     def clamp_resolution(self, value: str | None) -> str | None:
         if not self.resolution_param and not self.image_size_param:
@@ -475,6 +488,7 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModelSpec] = {
         endpoint="fal-ai/flux-2-pro/edit",
         image_field="image_urls",
         multi_image=True,
+        max_ref_images=4,
         max_num_images=1,
         resolution_param=None,
         image_size_param="image_size",
@@ -491,6 +505,7 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModelSpec] = {
         endpoint="fal-ai/flux-2-max/edit",
         image_field="image_urls",
         multi_image=True,
+        max_ref_images=4,
         max_num_images=1,
         resolution_param=None,
         image_size_param="image_size",
@@ -510,6 +525,7 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModelSpec] = {
         endpoint="microsoft/mai-image-2.5-pro/edit",
         image_field="image_urls",
         multi_image=True,
+        max_ref_images=1,
         max_num_images=1,
         resolution_param=None,
         image_size_param=None,
@@ -529,6 +545,7 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModelSpec] = {
         endpoint="microsoft/mai-image-2.5/edit",
         image_field="image_urls",
         multi_image=True,
+        max_ref_images=1,
         max_num_images=1,
         resolution_param=None,
         image_size_param=None,
@@ -546,24 +563,28 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModelSpec] = {
         key="nano banana pro",
         label="Image · Nano Banana Pro (edit)",
         endpoint="fal-ai/nano-banana-pro/edit",
+        multi_image=True,
+        max_ref_images=4,
         max_num_images=4,
         max_resolution="2K",
         allowed_resolutions=("1K", "2K", "4K"),
         cost_per_image=0.15,
         resolution_cost_mult={"1K": 1.0, "2K": 1.0, "4K": 2.0},
-        notes="Google Gemini image edit on fal — excellent prompt adherence.",
+        notes="Google Gemini image edit on fal — excellent prompt adherence. Up to 4 refs.",
     ),
     "nano banana 2": ImageEditModelSpec(
         key="nano banana 2",
         label="Image · Nano Banana 2 (edit)",
         endpoint="fal-ai/nano-banana-2/edit",
+        multi_image=True,
+        max_ref_images=4,
         max_num_images=4,
         max_resolution="2K",
         allowed_resolutions=("0.5K", "1K", "2K", "4K"),
         default_resolution="1K",
         cost_per_image=0.08,
         resolution_cost_mult={"0.5K": 0.75, "1K": 1.0, "2K": 1.5, "4K": 2.0},
-        notes="Faster Nano Banana 2 edit — good cost/quality balance.",
+        notes="Faster Nano Banana 2 edit — good cost/quality balance. Up to 4 refs.",
     ),
     "seedream 5 pro": ImageEditModelSpec(
         key="seedream 5 pro",
@@ -572,6 +593,7 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModelSpec] = {
         endpoint="bytedance/seedream/v5/pro/edit",
         image_field="image_urls",
         multi_image=True,
+        max_ref_images=10,
         max_num_images=10,
         resolution_param=None,
         image_size_param="image_size",
@@ -582,7 +604,8 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModelSpec] = {
         cost_per_image=0.0675,
         notes=(
             "ByteDance Seedream 5.0 Pro edit — grounded region-precise edits "
-            "(colored-box / annotation workflows). Est. ~$0.0675/image @≤1536."
+            "(colored-box / annotation workflows). Multi-ref up to 10. "
+            "Est. ~$0.0675/image @≤1536."
         ),
         extra_defaults={"num_images": 1, "enable_safety_checker": True},
     ),
@@ -593,6 +616,7 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModelSpec] = {
         endpoint="fal-ai/flux-2-flex/edit",
         image_field="image_urls",
         multi_image=True,
+        max_ref_images=4,
         max_num_images=1,
         resolution_param=None,
         image_size_param="image_size",
@@ -609,6 +633,7 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModelSpec] = {
         endpoint="fal-ai/flux-pro/kontext",
         image_field="image_url",
         multi_image=False,
+        max_ref_images=1,
         max_num_images=1,
         resolution_param=None,
         aspect_ratio_param="aspect_ratio",
@@ -625,6 +650,7 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModelSpec] = {
         endpoint="xai/grok-imagine-image/edit",
         image_field="image_urls",
         multi_image=True,
+        max_ref_images=3,
         max_num_images=3,
         aspect_ratio_param="aspect_ratio",
         allowed_aspect_ratios=(
@@ -662,6 +688,7 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModelSpec] = {
         endpoint="xai/grok-imagine-image/quality/edit",
         image_field="image_urls",
         multi_image=True,
+        max_ref_images=3,
         max_num_images=3,
         aspect_ratio_param="aspect_ratio",
         allowed_aspect_ratios=(
@@ -699,11 +726,13 @@ IMAGE_EDIT_MODELS: dict[str, ImageEditModelSpec] = {
         key="nano banana",
         label="Image · Nano Banana (edit)",
         endpoint="fal-ai/nano-banana/edit",
+        multi_image=True,
+        max_ref_images=4,
         max_num_images=4,
         max_resolution="1K",
         allowed_resolutions=("1K",),
         cost_per_image=0.039,
-        notes="Original Nano Banana edit (legacy).",
+        notes="Original Nano Banana edit (legacy). Up to 4 refs.",
     ),
 }
 
@@ -1370,6 +1399,18 @@ def resolve_image_edit_model(choice: str | None) -> ImageEditModelSpec | None:
     return None
 
 
+def max_ref_images_for_choice(choice: str | None) -> int:
+    """
+    How many input stills (primary + optional refs) the selected image model accepts.
+
+    Auto / unknown → 1 (safe single-ref). Region / single-image models stay at 1.
+    """
+    spec = resolve_image_edit_model(choice)
+    if spec is None:
+        return 1
+    return spec.clamp_ref_images(spec.max_ref_images or 1)
+
+
 def resolve_video_model(choice: str | None) -> VideoModelSpec | None:
     if not choice:
         return None
@@ -1512,12 +1553,23 @@ def build_edit_arguments(
 
     if not image_urls:
         raise ValueError("image_urls is required for image editing.")
+    max_refs = spec.clamp_ref_images(len(image_urls))
+    if len(image_urls) > max_refs:
+        notes.append(
+            f"Reference images truncated to {max_refs} "
+            f"(model max_ref_images={spec.max_ref_images})."
+        )
+    urls = list(image_urls[:max_refs])
     if spec.image_field == "image_url":
-        args["image_url"] = image_urls[0]
+        args["image_url"] = urls[0]
         if len(image_urls) > 1:
             notes.append("Model accepts a single image; using the first upload only.")
+    elif spec.multi_image:
+        args[spec.image_field] = urls
     else:
-        args[spec.image_field] = image_urls if spec.multi_image else [image_urls[0]]
+        args[spec.image_field] = [urls[0]]
+        if len(image_urls) > 1:
+            notes.append("Model accepts a single image; using the first upload only.")
 
     if spec.num_images_param and spec.max_num_images > 1:
         args[spec.num_images_param] = num

@@ -351,11 +351,19 @@ class AudioView:
             panel.visible = True
         except Exception:
             pass
-        self._audio_host.content = ft.Column(
-            [panel],
-            spacing=0,
-            scroll=ft.ScrollMode.AUTO,
+        # Single scroll: ListView host only (no nested form scroll)
+        self._audio_host.content = ft.ListView(
+            controls=[
+                ft.Container(
+                    content=panel,
+                    padding=ft.Padding.only(right=8, bottom=16),
+                    # Cap card width on ultra-wide so empty margin isn't a grey slab
+                    width=900,
+                )
+            ],
             expand=True,
+            spacing=0,
+            padding=ft.Padding.only(bottom=8),
         )
 
     def build(self) -> ft.Control:
@@ -371,10 +379,11 @@ class AudioView:
                 ),
                 self._pill_nav.control,
                 ft.Divider(height=1, color=BORDER),
-                self._audio_host,
+                self._audio_host,  # sole ListView scroll region
             ],
             spacing=10,
             expand=True,
+            alignment=ft.MainAxisAlignment.START,
         )
 
     # ----- Music -----
@@ -451,7 +460,7 @@ class AudioView:
             focused_border_color=ACCENT,
             color=TEXT,
             text_size=FONT_SM,
-            expand=True,
+            # no expand — content-sized height (avoid grey slab under prompt/star)
             on_change=self._music_rebuild,
         )
         # Persistent free-text fields — never overwritten by structured rebuild
@@ -471,7 +480,6 @@ class AudioView:
             focused_border_color=ACCENT,
             color=TEXT,
             text_size=FONT_SM,
-            expand=True,
             on_change=self._music_rebuild,
         )
         self.mu_notes_label = ft.Text(
@@ -492,7 +500,6 @@ class AudioView:
             focused_border_color=ACCENT,
             color=TEXT,
             text_size=FONT_SM,
-            expand=True,
             on_change=self._music_rebuild,
         )
         self.mu_prompt_label = ft.Text(
@@ -513,7 +520,6 @@ class AudioView:
             focused_border_color=ACCENT,
             color=TEXT,
             text_size=FONT_SM,
-            expand=True,
         )
         self.mu_prompt_favs = make_prompt_favorites_bar(
             self.page,
@@ -587,6 +593,7 @@ class AudioView:
                     self.mu_player.control,
                 ],
                 spacing=8,
+                tight=True,
             ),
         )
 
@@ -975,7 +982,7 @@ class AudioView:
                     self.sfx_results_host,
                 ],
                 spacing=8,
-                scroll=ft.ScrollMode.AUTO,
+                tight=True,
             ),
         )
 
@@ -1011,6 +1018,7 @@ class AudioView:
                     self.vs_player.control,
                 ],
                 spacing=8,
+                tight=True,
             ),
         )
 
@@ -1528,7 +1536,6 @@ class AudioView:
             focused_border_color=ACCENT,
             color=TEXT,
             text_size=FONT_SM,
-            expand=True,
             on_change=self._ambience_rebuild,
         )
         self.amb_prompt_label = ft.Text(
@@ -1558,7 +1565,6 @@ class AudioView:
             focused_border_color=ACCENT,
             color=TEXT,
             text_size=FONT_SM,
-            expand=True,
             on_change=self._ambience_cost_refresh,
         )
         self.amb_prompt_favs = make_prompt_favorites_bar(
@@ -1603,7 +1609,7 @@ class AudioView:
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
-                    self.amb_location,
+                    ft.Row([self.amb_location], spacing=0),
                     self.amb_custom_loc,
                     ft.Row([self.amb_time, self.amb_weather, self.amb_density, self.amb_duration], spacing=8),
                     label("Layers (Off / Light / Medium)", muted=True),
@@ -1621,6 +1627,7 @@ class AudioView:
                     self.amb_player.control,
                 ],
                 spacing=8,
+                tight=True,
             ),
         )
 
@@ -1879,6 +1886,7 @@ class AudioView:
                     self.vo_player.control,
                 ],
                 spacing=8,
+                tight=True,
             ),
         )
 
@@ -2057,7 +2065,7 @@ class AudioView:
                     self.cl_name,
                     self.cl_preview_text,
                     self.cl_noise,
-                    self.cl_model,
+                    ft.Row([self.cl_model], spacing=0),
                     _cost_box(self.cl_cost),
                     ft.Row([self.cl_enhance, self.cl_btn], spacing=8),
                     self.cl_progress.control,
@@ -2066,6 +2074,7 @@ class AudioView:
                     ft.Row([self.cl_delete_dd, self.cl_del_btn], spacing=8),
                 ],
                 spacing=8,
+                tight=True,
             ),
         )
 

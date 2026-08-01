@@ -65,7 +65,7 @@ if TYPE_CHECKING:
     from media_studio.flet_app import StudioState
 
 _RUNWARE_KEYS_URL = "https://my.runware.ai/"
-_RAIL_W = 360
+_RAIL_W = 460  # align with RAIL_WIDTH — never horizontal-expand in Row
 # Right Preview / filmstrip (fixed sizes — never expand voids)
 _PREVIEW_H = 440
 _FILMSTRIP_H = 90
@@ -581,8 +581,10 @@ class FrameEditorView:
         # In-app Aleph result player (Creative Vision pattern)
         self.result_player = VideoResultPlayer(page, height=_PREVIEW_H - 40)
         try:
+            from media_studio.flet_theme import EMPTY_PREVIEW_H
+
             self.result_player.control.visible = False
-            self.result_player.control.height = _PREVIEW_H
+            self.result_player.control.height = EMPTY_PREVIEW_H + 40
             self.result_player.control.expand = False
         except Exception:
             pass
@@ -671,12 +673,10 @@ class FrameEditorView:
         RIGHT (flex, top-aligned):
           Preview (fixed height) + filmstrip
         """
-        # ---- LEFT: each control is a ListView child (no nested expand card) ----
-        left_items: list[ft.Control] = [
+        # ---- LEFT: scrollable main + sticky Generate footer ----
+        left_scroll_items: list[ft.Control] = [
             section_title("Frame Editor"),
-            # 1 · Aleph / Runware
             self.key_banner,
-            # 2 · Source
             label("Source video", muted=True),
             ft.Row(
                 [
@@ -695,67 +695,70 @@ class FrameEditorView:
                 spacing=8,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            # 3 · Auto-downscale
             self.auto_downscale,
             self.proxy_line,
             self.dual_key_banner,
-            # 4 · Previously used
             self.prev_strip.root,
             ft.Divider(height=1, color=BORDER),
-            # 5 · Keyframes (compact list only — no detail void under it)
             label(f"Keyframes (max {ALEPH_MAX_KEYFRAMES})", muted=True),
             self.kf_host,
-            # 6 · Extract / Pin / Upload / Send to Studio
+            ft.Row([self.extract_time, self.default_pin], spacing=6),
             ft.Row(
-                [
-                    self.extract_time,
-                    self.default_pin,
-                ],
-                spacing=6,
-            ),
-            ft.Row(
-                [
-                    self.btn_pin_strip,
-                    self.btn_extract,
-                    self.btn_upload_kf,
-                ],
+                [self.btn_pin_strip, self.btn_extract, self.btn_upload_kf],
                 spacing=6,
                 wrap=True,
             ),
             self.send_host,
             ft.Divider(height=1, color=BORDER),
-            # 7–8 · Prompt + Enhance
             label("Prompt", muted=True),
             self.prompt,
             self.prompt_favs.root,
             self.btn_enhance,
-            ft.Divider(height=1, color=BORDER),
-            # 9–10 · Cost + Generate
-            label("Est. cost", muted=True),
-            self.cost_text,
-            self.btn_generate,
-            self.job_progress.control,
-            self.status,
-            # Bottom padding so Generate isn't flush against the scroll edge
-            ft.Container(height=8),
         ]
-
+        # Sticky footer — Generate reachable without extreme scroll
+        left_footer = ft.Column(
+            [
+                ft.Divider(height=1, color=BORDER),
+                label("Est. cost", muted=True),
+                self.cost_text,
+                self.btn_generate,
+                self.job_progress.control,
+                self.status,
+            ],
+            spacing=6,
+            tight=True,
+            expand=False,
+        )
         left = ft.Container(
             width=_RAIL_W,
-            # Bound height for ListView scroll; page BG shows through (not PANEL).
-            expand=True,
+            expand=False,
             bgcolor=BG,
             border=ft.Border.only(right=ft.BorderSide(1, BORDER)),
             padding=ft.Padding.only(right=10, top=4, bottom=4),
-            content=ft.ListView(
-                controls=left_items,
+            content=ft.Column(
+                [
+                    ft.ListView(
+                        controls=left_scroll_items,
+                        expand=True,
+                        spacing=6,
+                        padding=ft.Padding.only(right=4, bottom=8),
+                    ),
+                    left_footer,
+                ],
+                spacing=4,
                 expand=True,
-                spacing=6,
-                padding=ft.Padding.only(right=4, bottom=16),
             ),
         )
 
-        # ---- RIGHT: Preview + filmstrip only ----
+        # result_player only when there is a result (not forced full preview height)
+        try:
+            self.result_player.control.expand = False
+            self.result_player.control.visible = False
+            from media_studio.flet_theme import EMPTY_PREVIEW_H
+
+            self.result_player.control.height = EMPTY_PREVIEW_H + 40
+        except Exception:
+            pass
         right = ft.Container(
             expand=True,
             bgcolor=PANEL,
@@ -782,7 +785,7 @@ class FrameEditorView:
                 spacing=8,
                 tight=True,
                 expand=False,
-                scroll=ft.ScrollMode.AUTO,
+                alignment=ft.MainAxisAlignment.START,
             ),
         )
 

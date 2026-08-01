@@ -235,7 +235,7 @@ class ToolsResultPane:
         self.video_player = VideoResultPlayer(page, height=360)
         try:
             self.video_player.control.visible = False
-            self.video_player.control.expand = True
+            self.video_player.control.expand = False
         except Exception:
             pass
         self.overlay_stack = ft.Stack(
@@ -250,6 +250,7 @@ class ToolsResultPane:
             fit=ft.StackFit.EXPAND,
             alignment=ft.Alignment.CENTER,
         )
+        # Compact empty state — never a full-window grey band
         self.placeholder = ft.Container(
             content=ft.Text(
                 "Generate a result to preview full-size",
@@ -257,16 +258,17 @@ class ToolsResultPane:
                 color=TEXT_MUTED,
                 text_align=ft.TextAlign.CENTER,
             ),
-            height=120,
+            height=96,
             alignment=ft.Alignment.CENTER,
             bgcolor=PANEL_ELEVATED,
             border_radius=8,
             border=ft.Border.all(1, BORDER),
             visible=True,
         )
+        # expand only when a result is showing (see _apply_visuals)
         self.stage = ft.Container(
             content=self.overlay_stack,
-            expand=True,
+            expand=False,
             bgcolor="#111318",
             border_radius=8,
             border=ft.Border.all(1, BORDER),
@@ -382,12 +384,13 @@ class ToolsResultPane:
                     self.result_meta,
                 ],
                 spacing=8,
-                expand=True,
+                tight=True,
             ),
             padding=ft.Padding.only(right=4),
         )
 
-        workspace = ft.Column(
+        # CapRightEmpty: tight when empty; expand only with a result (_apply_visuals)
+        self._workspace = ft.Column(
             [
                 self.overlay_controls,
                 self.placeholder,
@@ -395,34 +398,37 @@ class ToolsResultPane:
                 self.video_player.control,
             ],
             spacing=8,
-            expand=True,
+            tight=True,
+            expand=False,
+            alignment=ft.MainAxisAlignment.START,
         )
-
-        self.root = panel(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            self.title,
-                            self.subtitle,
-                            ft.Container(expand=True),
-                            ft.TextButton("Clear", on_click=self._clear),
-                        ],
-                        spacing=8,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    ft.Row(
-                        [rail, workspace],
-                        spacing=10,
-                        expand=True,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
-                    ),
-                    self.actions_wrap,
-                ],
-                spacing=8,
-                expand=True,
-            ),
+        self._body_row = ft.Row(
+            [rail, self._workspace],
+            spacing=10,
+            expand=False,
+            vertical_alignment=ft.CrossAxisAlignment.START,
         )
+        self._root_col = ft.Column(
+            [
+                ft.Row(
+                    [
+                        self.title,
+                        self.subtitle,
+                        ft.Container(expand=True),
+                        ft.TextButton("Clear", on_click=self._clear),
+                    ],
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                self._body_row,
+                self.actions_wrap,
+            ],
+            spacing=8,
+            tight=True,
+            expand=False,
+            alignment=ft.MainAxisAlignment.START,
+        )
+        self.root = panel(self._root_col, expand=True, padding=10)
 
     def _status(self, msg: str, is_error: bool = False) -> None:
         if self.on_status:
@@ -561,13 +567,26 @@ class ToolsResultPane:
         if not res:
             self.placeholder.visible = True
             self.stage.visible = False
+            try:
+                self.stage.expand = False
+            except Exception:
+                pass
             self.overlay_controls.visible = False
             try:
                 self.video_player.clear()
                 self.video_player.control.visible = False
+                self.video_player.control.expand = False
             except Exception:
                 pass
             self.result_meta.value = "Run a tool to preview the result here"
+            try:
+                self._workspace.expand = False
+                self._workspace.tight = True
+                self._body_row.expand = False
+                self._root_col.expand = False
+                self._root_col.tight = True
+            except Exception:
+                pass
             self._set_src_rail()
             self._sync_labels()
             return
@@ -576,6 +595,14 @@ class ToolsResultPane:
         name = Path(res).name
         self.result_meta.value = name
         self.title.value = "Result"
+        try:
+            self._workspace.expand = True
+            self._workspace.tight = False
+            self._body_row.expand = True
+            self._root_col.expand = True
+            self._root_col.tight = False
+        except Exception:
+            pass
         self._set_src_rail()
 
         # Hide all stage layers first
@@ -586,12 +613,17 @@ class ToolsResultPane:
         self.video_badge.visible = False
         try:
             self.video_player.control.visible = False
+            self.video_player.control.expand = False
         except Exception:
             pass
 
         both_images = _is_image(src) and _is_image(res)
         if both_images:
             self.stage.visible = True
+            try:
+                self.stage.expand = True
+            except Exception:
+                pass
             self.overlay_controls.visible = True
             op = self._effective_opacity()
             self.overlay_base.src = src or ""
@@ -605,6 +637,10 @@ class ToolsResultPane:
         self.overlay_controls.visible = False
         if _is_image(res):
             self.stage.visible = True
+            try:
+                self.stage.expand = True
+            except Exception:
+                pass
             self.single_result.src = res
             self.single_result.visible = True
         elif _is_video(res):
@@ -613,13 +649,22 @@ class ToolsResultPane:
             try:
                 self.video_player.set_result(res, note=f"Tools · {name}")
                 self.video_player.control.visible = True
+                self.video_player.control.expand = False
                 has_player = getattr(self.video_player, "_video", None) is not None
             except Exception:
                 has_player = False
             if has_player:
                 self.stage.visible = False
+                try:
+                    self.stage.expand = False
+                except Exception:
+                    pass
             else:
                 self.stage.visible = True
+                try:
+                    self.stage.expand = True
+                except Exception:
+                    pass
                 try:
                     self.video_player.control.visible = False
                 except Exception:
@@ -642,6 +687,10 @@ class ToolsResultPane:
                 self.video_badge.visible = True
         else:
             self.stage.visible = True
+            try:
+                self.stage.expand = True
+            except Exception:
+                pass
             self.single_result.src = res
             self.single_result.visible = True
         self._sync_labels()

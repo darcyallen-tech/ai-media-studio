@@ -81,8 +81,17 @@ def _build_enhance_user_message(
     scenario: str | None = None,
     has_vision: bool = False,
     extra_context: dict[str, Any] | None = None,
+    extra_image_files: list[str] | None = None,
 ) -> str:
     media = media_context_for_enhance(image_file, video_file)
+    ref_names: list[str] = []
+    for p in extra_image_files or []:
+        sp = safe_path_str(p)
+        if sp and Path(sp).is_file():
+            ref_names.append(Path(sp).name)
+    if ref_names:
+        media["extra_reference_stills"] = ref_names
+        media["extra_reference_count"] = len(ref_names)
     # Resolve scenario rules for architecture lock / allowed changes
     scenario_label = scenario
     scenario_rules = None
@@ -116,6 +125,13 @@ def _build_enhance_user_message(
             " A source still is attached — use vision: layout, main objects, empty surfaces, "
             "lighting, camera feel; ground every placement in the optimized_prompt. "
             "Fill scene_brief with one short line of what you see."
+        )
+    if ref_names:
+        instructions += (
+            f" Additional reference still(s) are attached ({len(ref_names)}): "
+            f"{', '.join(ref_names)}. Treat the first image as the primary edit target; "
+            "use extra refs for style, materials, furniture product, or look reference "
+            "when the user/prompt implies it (multi-ref edit models)."
         )
     if scenario_key and scenario_key != "blank_canvas":
         instructions += (
@@ -204,17 +220,27 @@ def enhance_prompt(
     output_dir: str | Path | None = None,
     scenario: str | None = None,
     extra_context: dict[str, Any] | None = None,
+    extra_image_files: list[str] | None = None,
 ) -> EnhanceResult:
     """
     Call Grok 4.5 to optimize the user prompt for the target generation model.
 
     When a source still is present, uses **vision** so the rewrite is spatially
-    grounded. When the user has a non-Auto model selected, that model is locked.
-    Does **not** change the caller's model dropdown — only returns text.
+    grounded. Optional extra reference stills (multi-ref models) are mentioned
+    and attached to vision when available. When the user has a non-Auto model
+    selected, that model is locked. Does **not** change the caller's model
+    dropdown — only returns text.
     """
     original = (prompt or "").strip()
     image_file = safe_path_str(image_file)
     video_file = safe_path_str(video_file)
+    extra_refs: list[str] = []
+    for p in extra_image_files or []:
+        sp = safe_path_str(p)
+        if sp and Path(sp).is_file() and sp not in extra_refs:
+            if image_file and Path(sp).resolve() == Path(image_file).resolve():
+                continue
+            extra_refs.append(sp)
     preference = model_choice or ""
     locked = not is_auto_model(preference)
     resolved_id = model_id_from_choice(preference) if locked else ""
@@ -277,12 +303,17 @@ def enhance_prompt(
             scenario=scenario,
             has_vision=has_vision,
             extra_context=extra,
+            extra_image_files=extra_refs,
         )
         if has_vision:
+            vision_paths: list[str] = [vision_path]  # type: ignore[list-item]
+            for rp in extra_refs:
+                if rp not in vision_paths:
+                    vision_paths.append(rp)
             raw = chat_json_vision(
                 system=system,
                 user_text=user_msg,
-                image_paths=[vision_path],  # type: ignore[list-item]
+                image_paths=vision_paths[:3],  # xAI vision cap in client
                 model=XAI_DEFAULT_MODEL,
             )
         else:
@@ -498,6 +529,7 @@ def generate(
     parameters_json: str | None = None,
     on_progress: Any | None = None,
     scenario: str | None = None,
+    extra_image_files: list[str] | None = None,
 ) -> GenerateResult:
     """
     Run generation / edit via fal.ai.
@@ -507,6 +539,8 @@ def generate(
 
     on_progress: optional callable(str) for status updates during the job.
     scenario: optional scenario key/label for output naming.
+    extra_image_files: optional additional reference stills for multi-ref
+    image models (primary remains ``image_file``).
     """
     from media_studio.fal.image_edit import run_image_edit
     from media_studio.fal.image_to_video import run_image_to_video
@@ -518,6 +552,19 @@ def generate(
     model = model_id_from_choice(model_choice)
     image_file = safe_path_str(image_file)
     video_file = safe_path_str(video_file)
+    extra_refs: list[str] = []
+    for p in extra_image_files or []:
+        sp = safe_path_str(p)
+        if not sp or not Path(sp).is_file():
+            continue
+        if image_file:
+            try:
+                if Path(sp).resolve() == Path(image_file).resolve():
+                    continue
+            except OSError:
+                pass
+        if sp not in extra_refs:
+            extra_refs.append(sp)
     out = ensure_output_dir(Path(output_dir) if output_dir else None)
     params = _parse_parameters_json(parameters_json)
     # Defense-in-depth: clamp resolution/num_images/duration to the selected model
@@ -727,6 +774,27 @@ def generate(
     last_cost = ""
     ok_any = False
 
+    # Primary + optional multi-ref stills (clamped inside build_edit_arguments)
+    edit_paths: list[str] = [edit_image]
+    max_refs = max(1, int(getattr(edit_spec, "max_ref_images", 1) or 1))
+    if not getattr(edit_spec, "multi_image", False) or getattr(
+        edit_spec, "image_field", ""
+    ) == "image_url":
+        max_refs = 1
+    if max_refs > 1 and extra_refs:
+        for rp in extra_refs:
+            if len(edit_paths) >= max_refs:
+                break
+            if rp not in edit_paths:
+                edit_paths.append(rp)
+        if len(edit_paths) > 1:
+            progress(
+                f"Multi-ref: primary + {len(edit_paths) - 1} reference still(s) "
+                f"(model max {max_refs})."
+            )
+    elif extra_refs and max_refs <= 1:
+        progress("Model is single-image — extra reference stills ignored.")
+
     def _run_one(n_images: int, label: str):
         nonlocal last_status, last_endpoint, last_model_key, last_metrics, last_cost, ok_any
         p = dict(params)
@@ -734,7 +802,7 @@ def generate(
         progress(label)
         r = run_image_edit(
             prompt=prompt,
-            image_paths=[edit_image],
+            image_paths=edit_paths,
             model_choice=model_choice or model,
             parameters=p,
             output_dir=out,

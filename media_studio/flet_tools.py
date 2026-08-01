@@ -281,41 +281,35 @@ class _ToolCard:
                 [
                     section_title(title),
                     ft.Text(description, size=FONT_SM, color=TEXT_MUTED),
-                    ft.Row(
+                    ft.Column(
                         [
-                            ft.Column(
-                                [
-                                    ft.Stack([self.placeholder, self.preview]),
-                                    self.btn_upload,
-                                    self.prev_strip.root,
-                                ],
-                                spacing=4,
+                            ft.Stack(
+                                [self.placeholder, self.preview],
+                                width=160,
+                                height=100,
                             ),
-                            ft.Column(
-                                [
-                                    self.model_dd,
-                                    self.prompt,
-                                    *(
-                                        [self.prompt_favs.root]
-                                        if self.prompt_favs is not None
-                                        else []
-                                    ),
-                                    *self.extra,
-                                    self.strength if show_strength else ft.Container(),
-                                    self.cost_text,
-                                    action_row,
-                                    self.job_progress.control,
-                                    self.status,
-                                ],
-                                expand=True,
-                                spacing=6,
-                            ),
+                            self.btn_upload,
+                            self.prev_strip.root,
                         ],
-                        spacing=12,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
+                        spacing=4,
+                        tight=True,
                     ),
+                    ft.Row([self.model_dd], spacing=0),
+                    self.prompt,
+                    *(
+                        [self.prompt_favs.root]
+                        if self.prompt_favs is not None
+                        else []
+                    ),
+                    *[ft.Row([ctrl], spacing=0) for ctrl in self.extra],
+                    self.strength if show_strength else ft.Container(height=0),
+                    self.cost_text,
+                    action_row,
+                    self.job_progress.control,
+                    self.status,
                 ],
                 spacing=8,
+                tight=True,
             ),
         )
 
@@ -681,6 +675,7 @@ class _RestoreCard:
         )
         self.result_actions_row.visible = False
 
+        # Media side-by-side, then full-width form (readable labels — no 3-col crush)
         self.root = ft.Container(
             bgcolor=PANEL,
             border=ft.Border.all(1, BORDER),
@@ -712,45 +707,50 @@ class _RestoreCard:
                                                 alignment=ft.Alignment.CENTER,
                                                 padding=6,
                                             ),
-                                        ]
+                                        ],
+                                        width=140,
+                                        height=90,
                                     ),
                                     self.btn_upload_src,
                                     self.prev_strip.root,
                                 ],
                                 spacing=4,
+                                tight=True,
                             ),
                             ft.Column(
                                 [
                                     label("Reference still", muted=True),
-                                    ft.Stack([self.ref_placeholder, self.ref_preview]),
+                                    ft.Stack(
+                                        [self.ref_placeholder, self.ref_preview],
+                                        width=140,
+                                        height=90,
+                                    ),
                                     ft.Row(
                                         [self.btn_upload_ref, self.btn_clear_ref],
                                         spacing=4,
+                                        wrap=True,
                                     ),
                                 ],
                                 spacing=4,
-                            ),
-                            ft.Column(
-                                [
-                                    self.model_dd,
-                                    self.prompt,
-                                    self.prompt_favs.root,
-                                    self.strength,
-                                    self.strength_hint,
-                                    self.cost_text,
-                                    ft.Row([self.btn_enhance, self.btn], spacing=8),
-                                    self.job_progress.control,
-                                    self.status,
-                                ],
-                                expand=True,
-                                spacing=6,
+                                tight=True,
                             ),
                         ],
-                        spacing=12,
+                        spacing=16,
                         vertical_alignment=ft.CrossAxisAlignment.START,
+                        tight=True,
                     ),
+                    ft.Row([self.model_dd], spacing=0),
+                    self.prompt,
+                    self.prompt_favs.root,
+                    self.strength,
+                    self.strength_hint,
+                    self.cost_text,
+                    ft.Row([self.btn_enhance, self.btn], spacing=8, wrap=True),
+                    self.job_progress.control,
+                    self.status,
                 ],
                 spacing=8,
+                tight=True,
             ),
         )
 
@@ -1252,49 +1252,41 @@ class _ReAspectCard:
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
-                    ft.Row(
+                    ft.Column(
                         [
-                            ft.Column(
+                            label("Source", muted=True),
+                            ft.Stack(
                                 [
-                                    label("Source", muted=True),
-                                    ft.Stack(
-                                        [
-                                            self.src_placeholder,
-                                            self.src_preview,
-                                            ft.Container(
-                                                content=self.src_video_label,
-                                                width=140,
-                                                height=90,
-                                                alignment=ft.Alignment.CENTER,
-                                                padding=6,
-                                            ),
-                                        ]
+                                    self.src_placeholder,
+                                    self.src_preview,
+                                    ft.Container(
+                                        content=self.src_video_label,
+                                        width=140,
+                                        height=90,
+                                        alignment=ft.Alignment.CENTER,
+                                        padding=6,
                                     ),
-                                    self.btn_upload,
-                                    self.prev_strip.root,
                                 ],
-                                spacing=4,
+                                width=140,
+                                height=90,
                             ),
-                            ft.Column(
-                                [
-                                    self.aspect_dd,
-                                    self.model_dd,
-                                    self.prompt,
-                                    self.prompt_favs.root,
-                                    self.cost_text,
-                                    ft.Row([self.btn_enhance, self.btn], spacing=8),
-                                    self.job_progress.control,
-                                    self.status,
-                                ],
-                                expand=True,
-                                spacing=6,
-                            ),
+                            self.btn_upload,
+                            self.prev_strip.root,
                         ],
-                        spacing=12,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
+                        spacing=4,
+                        tight=True,
                     ),
+                    ft.Row([self.aspect_dd], spacing=0),
+                    ft.Row([self.model_dd], spacing=0),
+                    self.prompt,
+                    self.prompt_favs.root,
+                    self.cost_text,
+                    ft.Row([self.btn_enhance, self.btn], spacing=8, wrap=True),
+                    self.job_progress.control,
+                    self.status,
                 ],
                 spacing=8,
+                tight=True,
             ),
         )
 
@@ -1698,39 +1690,29 @@ class _UpscaleCard:
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
-                    ft.Row(
+                    ft.Column(
                         [
-                            ft.Column(
-                                [
-                                    self.src_preview,
-                                    self.src_placeholder,
-                                    self.src_video_label,
-                                    self.btn_upload,
-                                    self.prev_strip.root,
-                                ],
-                                spacing=6,
-                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
-                            ft.Column(
-                                [
-                                    self.model_dd,
-                                    self.model_notes,
-                                    self.up_factor,
-                                    self.target_dd,
-                                    self.cost_text,
-                                    self.btn,
-                                    self.job_progress.control,
-                                    self.status,
-                                ],
-                                expand=True,
-                                spacing=6,
-                            ),
+                            self.src_preview,
+                            self.src_placeholder,
+                            self.src_video_label,
+                            self.btn_upload,
+                            self.prev_strip.root,
                         ],
-                        spacing=12,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
+                        spacing=6,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        tight=True,
                     ),
+                    ft.Row([self.model_dd], spacing=0),
+                    self.model_notes,
+                    ft.Row([self.up_factor], spacing=0),
+                    ft.Row([self.target_dd], spacing=0),
+                    self.cost_text,
+                    self.btn,
+                    self.job_progress.control,
+                    self.status,
                 ],
                 spacing=8,
+                tight=True,
             ),
         )
 
@@ -2811,28 +2793,35 @@ class ToolsView:
             form.visible = True
         except Exception:
             pass
-        # Left: scrollable tool form; right: large result (shared)
-        left = ft.Container(
-            content=ft.Column(
-                [form],
-                spacing=0,
-                scroll=ft.ScrollMode.AUTO,
-                expand=True,
-            ),
-            width=480,
-            expand=False,
+        # ONE scroll: ListView on left only — form roots must not also scroll
+        from media_studio.flet_layout import make_left_rail, make_right_pane
+        from media_studio.flet_theme import TOOLS_FORM_WIDTH
+
+        try:
+            # Strip nested form scroll if present
+            inner = getattr(form, "content", None)
+            if isinstance(inner, ft.Column):
+                inner.scroll = None
+                inner.expand = False
+                inner.tight = True
+        except Exception:
+            pass
+        left = make_left_rail(
+            [form],
+            width=TOOLS_FORM_WIDTH,
+            padding=0,
+            spacing=0,
+            border=False,
+            bgcolor=None,
+        )
+        right = make_right_pane(
+            self.result_pane.root, padding=0, border=False, bgcolor=None
         )
         self._tool_host.content = ft.Row(
-            [
-                left,
-                ft.Container(
-                    content=self.result_pane.root,
-                    expand=True,
-                ),
-            ],
+            [left, right],
             spacing=12,
             expand=True,
-            vertical_alignment=ft.CrossAxisAlignment.START,
+            vertical_alignment=ft.CrossAxisAlignment.STRETCH,
         )
 
     def build(self) -> ft.Control:
@@ -2858,8 +2847,9 @@ class ToolsView:
                 self._pill_host,
                 self.tools_status,
                 ft.Divider(height=1, color=BORDER),
-                self._tool_host,
+                self._tool_host,  # sole vertical flex (form ListView + result)
             ],
             spacing=10,
             expand=True,
+            alignment=ft.MainAxisAlignment.START,
         )

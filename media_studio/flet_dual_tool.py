@@ -222,6 +222,8 @@ class DualMediaToolCard:
         self.state.on_keys_changed(self.apply_key_gates)
         self.apply_key_gates()
 
+        # Media thumbs side-by-side (fixed), then full-width controls below —
+        # never 3-column crush of labels into a thin vertical strip.
         primary_col = ft.Column(
             [
                 self.primary_caption,
@@ -253,29 +255,24 @@ class DualMediaToolCard:
                     section_title(title),
                     ft.Text(description, size=FONT_SM, color=TEXT_MUTED),
                     ft.Row(
-                        [
-                            primary_col,
-                            grade_col,
-                            ft.Column(
-                                [
-                                    self.model_dd,
-                                    *self.extra,
-                                    self.prompt,
-                                    self.prompt_favs.root,
-                                    self.cost_text,
-                                    ft.Row([self.btn_enhance, self.btn], spacing=8),
-                                    self.job_progress.control,
-                                    self.status,
-                                ],
-                                expand=True,
-                                spacing=6,
-                            ),
-                        ],
-                        spacing=12,
+                        [primary_col, grade_col],
+                        spacing=16,
                         vertical_alignment=ft.CrossAxisAlignment.START,
+                        tight=True,
                     ),
+                    ft.Row([self.model_dd], spacing=0),
+                    # Extra dropdowns: horizontal expand only (never vertical grey slabs)
+                    *[ft.Row([ctrl], spacing=0) for ctrl in self.extra],
+                    self.prompt,
+                    self.prompt_favs.root,
+                    self.cost_text,
+                    ft.Row([self.btn_enhance, self.btn], spacing=8, wrap=True),
+                    self.job_progress.control,
+                    self.status,
                 ],
                 spacing=8,
+                tight=True,
+                # No form scroll — Tools host ListView is the only scroll
             ),
         )
 
