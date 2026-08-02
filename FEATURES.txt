@@ -73,14 +73,19 @@ Scenario prompts are defaults and stay editable.
 ==============================================================================
 STUDIO — IMAGE
 ==============================================================================
-- Standard edit mode (full-frame prompt)
-- Region edit mode (colored boxes + per-box prompts; Seedream annotation only)
+Same-row modality sub-tabs (to the right of Image | Video):
+  I2I | T2I | R2I | Region  (default I2I; model list filtered by sub-tab)
+- I2I — single source still; image-edit models only
+- T2I — no source required; text-to-image models only
+- R2I — primary + multi-ref stills; only models with max_refs > 1
+- Region — colored boxes + per-box prompts (Seedream annotation); was Standard/Region toggle
 - Source still upload + Previously used + From Resolve (handoff stills)
-- Multi-reference stills (Standard mode, when model allows):
+- Multi-reference stills (R2I only):
     Primary source + optional “Add reference” slots up to model max
     Nano Banana family / Seedream / Flux multi-ref / Grok Imagine: multi-ref
-    Single-image models (e.g. Flux Kontext, MAI): primary only — ref UI hidden
+    Single-image models (e.g. Flux Kontext, MAI): not listed under R2I
     Region mode: annotated primary only (no extra refs)
+- Leaving Region clears box overlays so they do not appear on I2I
 - Model list (Flux 2 Pro/Max Edit, MAI-Image, Seedream, etc.)
 - # Images 1–4 multi-variant (when model multi-outputs in one call, or sequential
   singles if the API is one-at-a-time — e.g. Flux 2 Pro max 1 per call).
@@ -111,14 +116,17 @@ Region edit:
 ==============================================================================
 STUDIO — VIDEO
 ==============================================================================
-Workspaces include Received, Blank Canvas, Camera Lock (and related).
+Same-row modality sub-tabs (to the right of Image | Video):
+  I2V | T2V | V2V | R2V  (default I2V)
+  Model dropdown filtered strictly by sub-tab; MiniMax H3 Omni under R2V
+Secondary workspaces: Received, Blank Canvas, Camera Lock (map → I2V / V2V)
 - Source video + reference still (from Image “use as reference”)
 - Recently from Resolve (clips / stills from handoff history)
 - Camera-lock style prompts for furniture / day-night / etc.
 - Models: Kling family, Seedance 2.0 I2V/V2V/reference, MiniMax H3 I2V + Omni
   Reference (still + optional motion plate as Video 1), others on fal
 - MiniMax H3: 5–15s · 2K · ~$0.26/s; native stereo on output
-- Grok Enhance on video prompts
+- Grok Enhance on video prompts (modality-aware citations for R2V / first–last I2V)
 - Duration / resolution guidance, cost estimate (job total)
 - Export: Show in folder, Send to Resolve, Library
 

@@ -57,19 +57,22 @@ def _dd_value(dd: ft.Dropdown) -> str | None:
     return dd.value
 
 
-def _video_models() -> list[str]:
-    vids = [m for m in MODEL_LABELS if m.startswith("Video ·")]
-    if DEFAULT_VIDEO_EDIT_MODEL not in vids:
-        vids = [DEFAULT_VIDEO_EDIT_MODEL] + vids
+def _video_models(modality: str = "i2v") -> list[str]:
+    from media_studio.studio_modality import models_for_video_modality
+
+    vids = models_for_video_modality(modality)
+    if not vids:
+        vids = [m for m in MODEL_LABELS if m.startswith("Video ·")]
     return vids or [DEFAULT_VIDEO_EDIT_MODEL]
 
 
 class StudioVideoView:
-    """Reference still + source clip → Kling video edit."""
+    """Studio Video — modalities I2V | T2V | V2V | R2V."""
 
     def __init__(self, page: ft.Page, state: StudioState) -> None:
         self.page = page
         self.state = state
+        self._modality = "i2v"  # i2v | t2v | v2v | r2v
 
         self.ref_preview = ft.Image(
             src="", fit=ft.BoxFit.CONTAIN, width=180, height=120, visible=False
@@ -177,11 +180,16 @@ class StudioVideoView:
         )
         state.on_scenario_changed(self.apply_app_scenario)
 
-        models = _video_models()
+        from media_studio.studio_modality import default_model_for_modality
+
+        models = _video_models("i2v")
+        _init_vid = default_model_for_modality("i2v")
+        if _init_vid not in models and models:
+            _init_vid = models[0]
         self.model_dd = styled_dropdown(
             label_text="Video model",
             options=models,
-            value=DEFAULT_VIDEO_EDIT_MODEL if DEFAULT_VIDEO_EDIT_MODEL in models else models[0],
+            value=_init_vid,
             on_select=self._on_params_change,
             expand=True,
         )
@@ -192,6 +200,43 @@ class StudioVideoView:
             self.model_best_for, self.model_dd.value, dropdown=self.model_dd
         )
         opts = control_options(self.model_dd.value)
+        # Optional last frame for I2V (MiniMax H3 first→last)
+        self.end_path: str | None = None
+        self.end_preview = ft.Image(
+            src="", fit=ft.BoxFit.CONTAIN, width=90, height=60, visible=False
+        )
+        self.end_placeholder = ft.Container(
+            content=ft.Text("End frame", size=FONT_SM, color=TEXT_MUTED),
+            width=90,
+            height=60,
+            alignment=ft.Alignment.CENTER,
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+        )
+        self.btn_pick_end = ft.OutlinedButton(
+            content="End frame",
+            icon=ft.Icons.IMAGE_OUTLINED,
+            on_click=self._pick_end_frame,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            visible=False,
+        )
+        self.end_frame_col = ft.Column(
+            [
+                label("End (optional)", muted=True),
+                ft.Stack([self.end_placeholder, self.end_preview]),
+                self.btn_pick_end,
+            ],
+            spacing=4,
+            tight=True,
+            visible=False,
+        )
+        self.native_stereo_note = ft.Text(
+            "Native stereo audio on H3 output.",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            visible=False,
+        )
         self.dur_dd = styled_dropdown(
             label_text="Duration (s)",
             options=opts.get("duration_choices") or ["5"],
@@ -314,9 +359,240 @@ class StudioVideoView:
         # Originating Image scenario for Received workspace prompt
         self._received_scenario_label: str | None = state.scenario_label
 
+        self._ref_col = ft.Column(
+            [
+                label("Reference still", muted=True),
+                ft.Stack([self.ref_placeholder, self.ref_preview]),
+                self.btn_pick_ref,
+            ],
+            spacing=4,
+            tight=True,
+        )
+        self._vid_col = ft.Column(
+            [
+                label("Source video", muted=True),
+                ft.Stack([self.video_placeholder, self.video_preview]),
+                self.btn_pick_vid,
+            ],
+            spacing=4,
+            tight=True,
+        )
+        self._media_row = ft.Row(
+            [self._ref_col, self._vid_col, self.end_frame_col],
+            spacing=12,
+        )
+
         self._apply_handoff_from_state()
         self._refresh_resolve_recent()
         self._apply_workspace_ui(self._workspace_id, rebuild_prompt=True)
+        try:
+            self.set_modality("i2v", force_default_model=False, notify_shell=False)
+        except Exception:
+            pass
+
+    def set_modality(
+        self,
+        mode_id: str,
+        *,
+        force_default_model: bool = False,
+        notify_shell: bool = True,
+    ) -> None:
+        """Switch I2V / T2V / V2V / R2V — filter models + media UI."""
+        from media_studio.flet_theme import dropdown_options
+        from media_studio.studio_modality import (
+            default_model_for_modality,
+            models_for_video_modality,
+            normalize_video_modality,
+        )
+
+        mode = normalize_video_modality(mode_id)
+        prev = self._modality
+        self._modality = mode
+        if notify_shell:
+            try:
+                cb = getattr(self.state, "on_video_modality_changed", None)
+                if cb:
+                    cb(mode)
+            except Exception:
+                pass
+
+        filtered = models_for_video_modality(mode)
+        if not filtered:
+            filtered = _video_models(mode)
+        self.model_dd.options = dropdown_options(filtered)
+        cur = _dd_value(self.model_dd)
+        preferred = default_model_for_modality(mode)
+        if force_default_model or not cur or cur not in filtered:
+            self.model_dd.value = preferred if preferred in filtered else filtered[0]
+
+        # Media visibility
+        show_still = mode in ("i2v", "v2v", "r2v")
+        show_video = mode in ("v2v", "r2v", "i2v")  # I2V clip optional
+        # T2V: hide both required media
+        if mode == "t2v":
+            show_still = False
+            show_video = False
+        if mode == "i2v":
+            show_video = False  # still-driven; clip optional later if needed
+        try:
+            self._ref_col.visible = show_still
+            self._vid_col.visible = show_video or mode == "r2v"
+            # R2V: still + motion plate
+            if mode == "r2v":
+                self._ref_col.visible = True
+                self._vid_col.visible = True
+                try:
+                    # relabel for omni
+                    pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # End frame for H3 I2V
+        show_end = False
+        if mode == "i2v":
+            try:
+                spec = resolve_video_model(_dd_value(self.model_dd))
+                show_end = bool(spec and getattr(spec, "supports_end_frame", False))
+            except Exception:
+                show_end = False
+        try:
+            self.end_frame_col.visible = show_end
+            self.btn_pick_end.visible = show_end
+        except Exception:
+            pass
+
+        # Native stereo note for H3
+        try:
+            spec = resolve_video_model(_dd_value(self.model_dd))
+            self.native_stereo_note.visible = bool(
+                spec and getattr(spec, "native_stereo_audio", False)
+            )
+        except Exception:
+            self.native_stereo_note.visible = False
+
+        # Prompt labels
+        try:
+            if mode == "t2v":
+                self.prompt_field.label = "Video prompt (text → video)"
+                self.status_text.value = "T2V — text only; no still or clip required."
+            elif mode == "i2v":
+                self.prompt_field.label = "Video prompt (image → video)"
+                self.status_text.value = (
+                    "I2V — start still required; optional end frame when supported."
+                )
+            elif mode == "v2v":
+                self.prompt_field.label = "Video prompt (video → video)"
+                self.status_text.value = "V2V — source clip required; ref still optional."
+            else:
+                self.prompt_field.label = (
+                    "Video prompt — cite Image 1 / Video 1 (R2V)"
+                )
+                self.status_text.value = (
+                    "R2V — multi still + optional motion/audio refs (e.g. MiniMax H3 omni)."
+                )
+        except Exception:
+            pass
+
+        # Refresh param controls for selected model
+        try:
+            # Fake a model change event
+            class _E:
+                control = self.model_dd
+
+            import asyncio
+
+            # sync path of params
+            self._apply_model_params_sync()
+        except Exception:
+            pass
+        self._refresh_cost_job()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        _ = prev
+
+    def _apply_model_params_sync(self) -> None:
+        """Refresh duration/res/aspect/audio from current model (no async)."""
+        model = _dd_value(self.model_dd) or DEFAULT_VIDEO_EDIT_MODEL
+        try:
+            from media_studio.flet_model_hint import update_best_for_line
+
+            update_best_for_line(self.model_best_for, model, dropdown=self.model_dd)
+        except Exception:
+            pass
+        opts = control_options(model)
+        # Vision T2V models may not be in control_options — soft defaults
+        if not opts or opts.get("kind") is None:
+            try:
+                from media_studio.vision_registry import find_vision_model
+
+                vspec = find_vision_model(model, "text_to_video")
+                if vspec:
+                    self.dur_dd.options = [
+                        ft.DropdownOption(key=x, text=x)
+                        for x in (list(vspec.duration_choices) or ["5"])
+                    ]
+                    self.dur_dd.value = vspec.default_duration
+                    self.dur_dd.visible = True
+                    self.aspect_dd.options = [
+                        ft.DropdownOption(key=x, text=x)
+                        for x in (list(vspec.aspect_choices) or ["16:9"])
+                    ]
+                    self.aspect_dd.value = vspec.default_aspect
+                    self.aspect_dd.visible = True
+                    if vspec.resolution_choices:
+                        self.res_dd.options = [
+                            ft.DropdownOption(key=x, text=x)
+                            for x in list(vspec.resolution_choices)
+                        ]
+                        self.res_dd.value = vspec.default_resolution
+                        self.res_dd.visible = True
+                    else:
+                        self.res_dd.visible = False
+                    self.keep_audio.visible = False
+                    self.gen_audio.visible = bool(vspec.supports_audio)
+                    self.start_time.visible = False
+                    return
+            except Exception:
+                pass
+        self.dur_dd.options = [
+            ft.DropdownOption(key=x, text=x)
+            for x in (opts.get("duration_choices") or ["5"])
+        ]
+        if _dd_value(self.dur_dd) not in (opts.get("duration_choices") or []):
+            self.dur_dd.value = opts.get("duration_value") or "5"
+        res_choices = opts.get("resolution_choices") or ["—"]
+        self.res_dd.options = [ft.DropdownOption(key=x, text=x) for x in res_choices]
+        self.res_dd.value = opts.get("resolution_value") or res_choices[0]
+        self.res_dd.visible = bool(opts.get("resolution_visible", False))
+        ar_choices = opts.get("aspect_choices") or ["—"]
+        self.aspect_dd.options = [ft.DropdownOption(key=x, text=x) for x in ar_choices]
+        self.aspect_dd.value = opts.get("aspect_value") or ar_choices[0]
+        self.aspect_dd.visible = bool(opts.get("aspect_visible", False))
+        self.keep_audio.value = bool(opts.get("keep_audio_value", True))
+        self.keep_audio.visible = bool(opts.get("keep_audio_visible", True))
+        self.gen_audio.value = bool(opts.get("generate_audio_value", False))
+        self.gen_audio.visible = bool(opts.get("generate_audio_visible", False))
+        self.start_time.visible = bool(opts.get("start_time_visible", False))
+
+    async def _pick_end_frame(self, e: ft.ControlEvent) -> None:
+        try:
+            files = await pick_image(self.page, dialog_title="I2V end frame (optional)")
+        except Exception as exc:
+            self.status_text.value = f"Picker error: {exc}"
+            self.page.update()
+            return
+        if not files or not files[0].path:
+            return
+        self.end_path = str(Path(files[0].path).resolve())
+        self.end_preview.src = self.end_path
+        self.end_preview.visible = True
+        self.end_placeholder.visible = False
+        self.status_text.value = f"End frame: {Path(self.end_path).name}"
+        self.page.update()
 
     def build(self) -> ft.Control:
         from media_studio.flet_layout import make_split_workspace
@@ -327,29 +603,8 @@ class StudioVideoView:
             self._workspace_title,
             self._workspace_desc,
             ft.Divider(height=1, color=BORDER),
-            ft.Row(
-                [
-                    ft.Column(
-                        [
-                            label("Reference still", muted=True),
-                            ft.Stack([self.ref_placeholder, self.ref_preview]),
-                            self.btn_pick_ref,
-                        ],
-                        spacing=4,
-                        tight=True,
-                    ),
-                    ft.Column(
-                        [
-                            label("Source video", muted=True),
-                            ft.Stack([self.video_placeholder, self.video_preview]),
-                            self.btn_pick_vid,
-                        ],
-                        spacing=4,
-                        tight=True,
-                    ),
-                ],
-                spacing=12,
-            ),
+            self._media_row,
+            self.native_stereo_note,
             label("Recently from Resolve", muted=True),
             self.resolve_recent_row,
             self.prompt_field,
@@ -477,6 +732,16 @@ class StudioVideoView:
         self._workspace_id = wid
         try:
             set_video_workspace(wid)
+        except Exception:
+            pass
+
+        # Map secondary workspace → modality (Received→I2V, Camera Lock→V2V)
+        try:
+            if wid == "camera_lock":
+                self.set_modality("v2v", force_default_model=False, notify_shell=True)
+            elif wid == "received":
+                self.set_modality("i2v", force_default_model=False, notify_shell=True)
+            # blank: leave current modality
         except Exception:
             pass
 
@@ -1014,18 +1279,63 @@ class StudioVideoView:
 
     async def _on_enhance(self, e: ft.ControlEvent) -> None:
         """Vision-aware prompt rewrite for the selected video model (all workspaces)."""
+        from media_studio.studio_modality import normalize_video_modality
+
+        modality = normalize_video_modality(getattr(self, "_modality", "i2v"))
+
+        def _extra() -> dict[str, Any]:
+            snap: dict[str, Any] = {
+                "workspace": "studio_video",
+                "modality": modality,
+            }
+            if modality == "t2v":
+                snap["guidance"] = (
+                    "Rewrite for text-to-video. Cinematic motion language. "
+                    "No invented API params."
+                )
+            elif modality == "i2v":
+                has_end = bool(
+                    getattr(self, "end_path", None)
+                    and Path(self.end_path).is_file()  # type: ignore[arg-type]
+                )
+                snap["guidance"] = (
+                    "Rewrite for image-to-video. Start still is the first frame."
+                    + (
+                        " End still is the last frame — describe the transition."
+                        if has_end
+                        else ""
+                    )
+                )
+            elif modality == "r2v":
+                snap["guidance"] = (
+                    "Rewrite for reference-to-video (R2V / omni). "
+                    "Cite Image 1, Video 1, Audio 1 by role "
+                    "(subject lock, camera path, timed bed). No invented API params."
+                )
+            else:
+                snap["guidance"] = (
+                    "Rewrite for video-to-video edit. Preserve motion / camera lock; "
+                    "apply look from the reference still when present."
+                )
+            return snap
+
         await run_prompt_enhance(
             page=self.page,
             state=self.state,
             prompt_field=self.prompt_field,
             get_model=lambda: _dd_value(self.model_dd),
-            get_image=lambda: self.state.video_ref_path,
-            get_video=lambda: self.state.video_source_path,
+            get_image=lambda: (
+                None if modality == "t2v" else self.state.video_ref_path
+            ),
+            get_video=lambda: (
+                None if modality in ("t2v", "i2v") else self.state.video_source_path
+            ),
             get_scenario=lambda: (
                 self._received_scenario_label
                 if self._workspace_id == "received"
                 else self.state.scenario_label
             ),
+            get_extra_context=_extra,
             status_ctrl=self.status_text,
             job_progress=self.job_progress,
             enhance_btn=self.btn_enhance,
@@ -1091,8 +1401,12 @@ class StudioVideoView:
             self.page.update()
             return
 
+        from media_studio.studio_modality import normalize_video_modality
+
         model = _dd_value(self.model_dd) or DEFAULT_VIDEO_EDIT_MODEL
-        i2v = self._is_i2v_model(model)
+        modality = normalize_video_modality(getattr(self, "_modality", None))
+        # Align modality with model if user picked across groups
+        i2v = self._is_i2v_model(model) or modality in ("i2v", "r2v", "t2v")
         has_still = bool(
             self.state.video_ref_path and Path(self.state.video_ref_path).is_file()
         )
@@ -1100,33 +1414,39 @@ class StudioVideoView:
             self.state.video_source_path and Path(self.state.video_source_path).is_file()
         )
 
-        # MiniMax H3 omni: still and/or motion clip as references
-        is_h3_omni = "minimax h3" in (model or "").lower() and (
-            "omni" in (model or "").lower() or "reference" in (model or "").lower()
-        )
-        if i2v:
-            if is_h3_omni:
-                if not has_still and not has_clip:
-                    self.status_text.value = (
-                        "MiniMax H3 omni needs a reference still and/or motion clip "
-                        "(cite as Image 1 / Video 1 in the prompt)."
-                    )
-                    self.page.update()
-                    return
-            elif not has_still:
-                # Still-only I2V: require reference still; clip optional
+        if modality == "t2v":
+            pass  # text only
+        elif modality == "r2v":
+            if not has_still and not has_clip:
                 self.status_text.value = (
-                    "Image-to-video needs a start still — upload a reference image "
+                    "R2V needs at least one reference still or motion clip "
+                    "(cite Image 1 / Video 1 in the prompt)."
+                )
+                self.page.update()
+                return
+        elif modality == "i2v":
+            if not has_still:
+                self.status_text.value = (
+                    "I2V needs a start still — upload a reference image "
                     "or send a still from Studio Image."
                 )
                 self.page.update()
                 return
-        else:
-            # V2V: require source clip
+        elif modality == "v2v":
             if not has_clip:
                 self.status_text.value = (
-                    "Video-to-video needs a source clip — upload or Import from Resolve."
+                    "V2V needs a source clip — upload or Import from Resolve."
                 )
+                self.page.update()
+                return
+        else:
+            # Fallback legacy
+            if i2v and not has_still:
+                self.status_text.value = "Image-to-video needs a start still."
+                self.page.update()
+                return
+            if not i2v and not has_clip:
+                self.status_text.value = "Video-to-video needs a source clip."
                 self.page.update()
                 return
 
@@ -1139,15 +1459,44 @@ class StudioVideoView:
         if not self.state.try_busy("video"):
             return
         self.btn_generate.disabled = True
-        self.job_progress.start("Uploading…", self.page)
-        self.status_text.value = (
-            "Starting image-to-video job…" if i2v else "Starting video job…"
+        self.job_progress.start(
+            "Starting…" if modality == "t2v" else "Uploading…", self.page
         )
+        self.status_text.value = {
+            "t2v": "Starting text-to-video job…",
+            "i2v": "Starting image-to-video job…",
+            "r2v": "Starting reference-to-video job…",
+            "v2v": "Starting video edit job…",
+        }.get(modality, "Starting video job…")
         self.job_log.clear(self.page)
         self.video_player.clear()
         self.page.update()
 
+        params = {}
+        try:
+            import json as _json
+
+            params = _json.loads(self._params_json() or "{}")
+        except Exception:
+            params = {}
+        # Optional I2V end frame (local path → upload in run_image_to_video)
+        if (
+            modality == "i2v"
+            and getattr(self, "end_path", None)
+            and Path(self.end_path).is_file()  # type: ignore[arg-type]
+        ):
+            params["end_image_path"] = self.end_path
         params_json = self._params_json()
+        try:
+            import json as _json
+
+            if params.get("end_image_path"):
+                base = _json.loads(params_json or "{}")
+                base["end_image_path"] = params["end_image_path"]
+                params_json = _json.dumps(base)
+        except Exception:
+            pass
+
         # Naming: Received uses originating Image scenario; Camera Lock uses state; Blank = none
         if self._workspace_id == "received":
             sc = get_scenario(self._received_scenario_label or self.state.scenario_label)
@@ -1165,19 +1514,57 @@ class StudioVideoView:
         try:
             from media_studio.job_context import to_thread_with_job
 
-            result = await to_thread_with_job(
-                self.state,
-                generate,
-                prompt=prompt,
-                model_choice=model,
-                image_file=self.state.video_ref_path,
-                # I2V still-only: omit missing clip so services resolve image_to_video
-                video_file=self.state.video_source_path if has_clip else None,
-                output_dir=self.state.output_dir,
-                parameters_json=params_json,
-                on_progress=on_progress,
-                scenario=scenario_key,
-            )
+            if modality == "t2v":
+                from media_studio.vision_service import run_vision
+                from media_studio.services import GenerateResult
+
+                vres = await to_thread_with_job(
+                    self.state,
+                    run_vision,
+                    mode="text_to_video",
+                    prompt=prompt,
+                    model_label=model,
+                    duration=_dd_value(self.dur_dd),
+                    aspect_ratio=_dd_value(self.aspect_dd),
+                    resolution=_dd_value(self.res_dd),
+                    generate_audio=bool(self.gen_audio.value)
+                    if self.gen_audio.visible
+                    else None,
+                    output_dir=self.state.output_dir,
+                    on_progress=on_progress,
+                )
+                result = GenerateResult(
+                    ok=bool(vres.ok and vres.path),
+                    video_path=vres.path,
+                    status=vres.status or "",
+                    model=vres.model_key or model,
+                    job_kind="video",
+                    cost_estimate=vres.cost_label or "",
+                    notes=list(getattr(vres, "notes", None) or []),
+                    metrics_line=vres.metrics_line or vres.cost_label or "",
+                )
+            else:
+                # I2V: still only (optional clip ignored unless R2V)
+                # V2V: clip required; still optional ref
+                # R2V: still and/or clip (clip → motion ref for H3 omni)
+                img = self.state.video_ref_path if has_still else None
+                vid = None
+                if modality == "v2v" and has_clip:
+                    vid = self.state.video_source_path
+                elif modality == "r2v" and has_clip:
+                    vid = self.state.video_source_path
+                result = await to_thread_with_job(
+                    self.state,
+                    generate,
+                    prompt=prompt,
+                    model_choice=model,
+                    image_file=img,
+                    video_file=vid,
+                    output_dir=self.state.output_dir,
+                    parameters_json=params_json,
+                    on_progress=on_progress,
+                    scenario=scenario_key,
+                )
             if result.ok and result.video_path:
                 vp = result.video_path
                 self._last_result_path = vp

@@ -349,14 +349,10 @@ class StudioImageView:
         )
         self.state.on_scenario_changed(self.apply_app_scenario)
 
-        # Precision mode: Standard (full-frame) | Region (annotation boxes)
-        self._edit_mode = "standard"  # standard | region
+        # Modality: I2I | T2I | R2I | Region (pills live on Studio shell next to Image|Video)
+        self._edit_mode = "i2i"  # i2i | t2i | r2i | region  (legacy "standard" → i2i)
         self._pre_region_model: str | None = None
-        self._mode_nav = PillNav(
-            [("standard", "Standard"), ("region", "Region")],
-            selected="standard",
-            on_change=self._on_edit_mode,
-        )
+        self._pre_modality_model: str | None = None
         from media_studio.flet_region import RegionBoxOverlay, RegionEditorPanel
 
         self.region_panel = RegionEditorPanel(
@@ -540,25 +536,35 @@ class StudioImageView:
             show_pack_buttons=True,
         )
 
-        image_models = [m for m in MODEL_LABELS if m.startswith("Image ·") or m.startswith("Auto")]
+        from media_studio.studio_modality import (
+            default_model_for_modality,
+            models_for_image_modality,
+        )
+
+        image_models = models_for_image_modality("i2i")
         if DEFAULT_IMAGE_MODEL not in image_models:
             image_models = [DEFAULT_IMAGE_MODEL] + image_models
         self._all_image_models: list[str] = list(image_models or MODEL_LABELS)
+        # Full edit catalog for restore when leaving T2I/Region filters
+        self._all_edit_models: list[str] = list(models_for_image_modality("i2i"))
         if DEFAULT_IMAGE_MODEL not in self._all_image_models:
             self._all_image_models = [DEFAULT_IMAGE_MODEL] + self._all_image_models
+        _init_img_model = default_model_for_modality("i2i")
+        if _init_img_model not in self._all_image_models and self._all_image_models:
+            _init_img_model = self._all_image_models[0]
         self.model_dd = styled_dropdown(
             label_text="Model",
             options=self._all_image_models,
-            value=DEFAULT_IMAGE_MODEL,
+            value=_init_img_model,
             on_select=self._on_model_or_params,
             expand=True,
         )
         self.model_best_for = make_best_for_line()
         update_best_for_line(
-            self.model_best_for, DEFAULT_IMAGE_MODEL, dropdown=self.model_dd
+            self.model_best_for, _init_img_model, dropdown=self.model_dd
         )
 
-        opts = control_options(DEFAULT_IMAGE_MODEL)
+        opts = control_options(_init_img_model)
         self.res_dd = styled_dropdown(
             label_text="Resolution",
             options=opts["resolution_choices"],
@@ -964,11 +970,6 @@ class StudioImageView:
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             self._workspace_desc,
-            ft.Row(
-                [label("Edit mode", muted=True), self._mode_nav.control],
-                spacing=8,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
             ft.Divider(height=1, color=BORDER),
             ft.Row(
                 [section_title("Source still"), self.btn_pick],
@@ -1333,70 +1334,152 @@ class StudioImageView:
         except Exception:
             pass
 
-    # ----- Standard | Region precision mode -----
+    # ----- Image modality: I2I | T2I | R2I | Region -----
 
     def _on_edit_mode(self, mode_id: str) -> None:
-        self.set_edit_mode(mode_id)
+        self.set_modality(mode_id)
 
     def set_edit_mode(self, mode_id: str, *, force_seedream: bool = True) -> None:
-        """Switch Standard (full-frame) vs Region (annotation boxes)."""
-        mode = (mode_id or "standard").strip().lower()
-        if mode not in ("standard", "region"):
-            mode = "standard"
-        prev = self._edit_mode
+        """Back-compat: Standard|Region → modality (standard→i2i, region→region)."""
+        self.set_modality(mode_id, force_default_model=force_seedream)
+
+    def set_modality(
+        self, mode_id: str, *, force_default_model: bool = False
+    ) -> None:
+        """Switch I2I / T2I / R2I / Region; filter models and UI."""
+        from media_studio.studio_modality import (
+            default_model_for_modality,
+            models_for_image_modality,
+            normalize_image_modality,
+        )
+        from media_studio.flet_theme import dropdown_options
+
+        mode = normalize_image_modality(mode_id)
+        prev = normalize_image_modality(self._edit_mode)
         self._edit_mode = mode
+
+        # Notify Studio shell modality pills when present
         try:
-            self._mode_nav.set_selected(mode, notify=False)
+            cb = getattr(self.state, "on_image_modality_changed", None)
+            if cb:
+                cb(mode)
         except Exception:
             pass
 
         is_region = mode == "region"
+        is_t2i = mode == "t2i"
+        is_r2i = mode == "r2i"
         self.region_panel.set_visible(is_region)
-        # Hide scenario builders in region mode (region uses its own prompts)
+
+        # Model list for modality
+        filtered = models_for_image_modality(mode)
+        if not filtered:
+            filtered = list(self._all_edit_models) or [DEFAULT_IMAGE_MODEL]
+        self._all_image_models = list(filtered)
+        self.model_dd.options = dropdown_options(filtered)
+        cur = _dd_value(self.model_dd)
+        preferred = default_model_for_modality(mode)
+        if force_default_model or not cur or cur not in filtered:
+            if prev == "region" and mode != "region" and self._pre_region_model in filtered:
+                self.model_dd.value = self._pre_region_model
+            elif (
+                prev not in ("region",)
+                and mode != prev
+                and self._pre_modality_model in filtered
+                and not force_default_model
+            ):
+                self.model_dd.value = self._pre_modality_model
+            elif preferred in filtered:
+                self.model_dd.value = preferred
+            else:
+                self.model_dd.value = filtered[0]
+        if mode == "region" and prev != "region":
+            self._pre_region_model = cur
+        elif prev != mode and prev != "region":
+            self._pre_modality_model = cur
+
+        sc = get_scenario(self._workspace_id) or default_scenario()
+        blank = is_blank_canvas(sc.key)
+
         if is_region:
-            # Default to Source 100% — never open Region on a 50% blend veil
             self._ab_gen = False
             self._overlay_opacity = 0.0
             self.furniture_builder.visible = False
             self.simple_builder.visible = False
-            if prev != "region":
-                self._pre_region_model = _dd_value(self.model_dd)
-            self._apply_region_model_filter(force_seedream=force_seedream)
             self.region_panel.set_source(
                 self.state.source_path, output_dir=self.state.output_dir
             )
-            self.region_panel.ensure_one_box()  # places a visible default box
+            self.region_panel.ensure_one_box()
             self.prompt_field.label = "Region prompt (color-keyed — editable)"
             self.prompt_field.hint_text = (
                 "Compiled from boxes, or write freely. Enhance uses vision + box texts."
             )
-            # Sync compiled prompt if empty
             if not (self.prompt_field.value or "").strip():
                 compiled = self.region_panel.compiled_prompt()
                 if compiled:
                     self.prompt_field.value = compiled
             self._refresh_region_overlays()
             self._set_status(
-                "Region mode — Seedream / annotation-model only. "
-                "Source shown clear for box placement; L/T/W/H for precision. "
-                "Generate composites boxes onto the still (fails hard if composite fails)."
+                "Region — Seedream / annotation models. "
+                "Boxes on source; Generate composites (fails hard if composite fails)."
             )
-            self._sync_refs_panel()
-        else:
-            # Restore full model list + previous selection
-            self._restore_standard_models()
-            sc = get_scenario(self._workspace_id) or default_scenario()
-            blank = is_blank_canvas(sc.key)
+        elif is_t2i:
+            self.furniture_builder.visible = False
+            self.simple_builder.visible = False
+            self.prompt_field.label = "Image prompt (text → image)"
+            self.prompt_field.hint_text = "Describe the still — no source required."
+            self._refresh_region_overlays()
+            self._update_compare_pane()
+            self._set_status("T2I — text to image; source still optional (not sent).")
+        elif is_r2i:
             self.furniture_builder.visible = bool(sc.show_furniture_builder) and not blank
             self.simple_builder.visible = bool(sc.show_simple_builder) and not blank
-            self._sync_refs_panel()
+            self.prompt_field.label = (
+                "Image prompt (freeform)" if blank else "Image prompt · multi-ref"
+            )
+            self.prompt_field.hint_text = (
+                "Primary still + reference stills (identity / material / look)."
+            )
+            self._refresh_region_overlays()
+            self._update_compare_pane()
+            self._set_status(
+                "R2I — multi-reference image edit (models with max refs > 1)."
+            )
+        else:
+            # I2I
+            self.furniture_builder.visible = bool(sc.show_furniture_builder) and not blank
+            self.simple_builder.visible = bool(sc.show_simple_builder) and not blank
             self.prompt_field.label = (
                 "Image prompt (freeform)" if blank else "Image prompt"
             )
-            self._set_status("Standard mode — full-frame prompt edit.")
-            # Clear annotated preview on left rail / stage base
+            self.prompt_field.hint_text = "Describe the edit…"
             self._refresh_region_overlays()
             self._update_compare_pane()
+            self._set_status("I2I — single source still · image-edit models.")
+
+        # Source still: required UI for I2I/R2I/Region; optional/hidden emphasis for T2I
+        try:
+            self.btn_pick.visible = True
+            self.source_placeholder.visible = not bool(
+                self.state.source_path and Path(self.state.source_path).is_file()
+            )
+            if is_t2i and not (
+                self.state.source_path and Path(self.state.source_path).is_file()
+            ):
+                try:
+                    ph = self.source_placeholder.content
+                    # soft hint only — keep upload available
+                    _ = ph
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        self._sync_refs_panel()
+        try:
+            self._on_model_or_params_sync()
+        except Exception:
+            pass
         self._refresh_cost_job()
         try:
             self.page.update()
@@ -1404,49 +1487,20 @@ class StudioImageView:
             pass
 
     def _apply_region_model_filter(self, *, force_seedream: bool = True) -> None:
-        """Region mode: only annotation-box models (Seedream 5 Pro)."""
-        from media_studio.flet_theme import dropdown_options
-        from media_studio.region_edit import REGION_DEFAULT_MODEL, REGION_MODEL_LABELS
-
-        labels = [m for m in REGION_MODEL_LABELS if m]
-        if not labels:
-            labels = [REGION_DEFAULT_MODEL]
-        # Prefer labels that exist in the full catalog; always include Seedream
-        full = set(self._all_image_models)
-        filtered = [m for m in labels if m in full] or list(labels)
-        if REGION_DEFAULT_MODEL not in filtered:
-            filtered = [REGION_DEFAULT_MODEL] + filtered
-        self.model_dd.options = dropdown_options(filtered)
-        if force_seedream or _dd_value(self.model_dd) not in filtered:
-            self.model_dd.value = filtered[0]
-        try:
-            self._on_model_or_params_sync()
-        except Exception:
-            pass
+        """Region modality model list (Seedream / annotation)."""
+        self.set_modality("region", force_default_model=force_seedream)
 
     def _restore_standard_models(self) -> None:
-        """Leave Region mode: full image model list again."""
-        from media_studio.flet_theme import dropdown_options
-
-        self.model_dd.options = dropdown_options(self._all_image_models)
-        prev = self._pre_region_model
-        if prev and prev in self._all_image_models:
-            self.model_dd.value = prev
-        elif _dd_value(self.model_dd) not in self._all_image_models:
-            self.model_dd.value = DEFAULT_IMAGE_MODEL
-        self._pre_region_model = None
-        try:
-            self._on_model_or_params_sync()
-        except Exception:
-            pass
+        """Leave Region → I2I model list."""
+        self.set_modality("i2i", force_default_model=False)
 
     def enter_region_mode(self, path: str | None = None) -> bool:
-        """Library / Send to Region edit — load still and open Region mode."""
+        """Library / Send to Region edit — load still and open Region modality."""
         if path:
             ok = self.load_source_path(path, status=f"Region edit ← {Path(path).name}")
             if not ok:
                 return False
-        self.set_edit_mode("region", force_seedream=True)
+        self.set_modality("region", force_default_model=True)
         return True
 
     def _on_region_boxes_changed(self) -> None:
@@ -2010,10 +2064,12 @@ class StudioImageView:
             self._extra_ref_paths = self._extra_ref_paths[:extra_cap]
 
     def _sync_refs_panel(self) -> None:
-        """Show/hide multi-ref UI; rebuild chips. Hidden in Region mode."""
+        """Show/hide multi-ref UI; rebuild chips. Only on R2I (multi-ref models)."""
+        from media_studio.studio_modality import normalize_image_modality
+
         max_refs = self._model_max_refs()
-        is_region = getattr(self, "_edit_mode", "standard") == "region"
-        show = (not is_region) and max_refs > 1
+        modality = normalize_image_modality(getattr(self, "_edit_mode", "i2i"))
+        show = modality == "r2i" and max_refs > 1
         self.refs_panel.visible = show
         if not show:
             return
@@ -2181,7 +2237,15 @@ class StudioImageView:
         )
 
     def apply_app_scenario(self, key: str) -> None:
-        """App-level scenario bar changed — reconfigure Image workspace."""
+        """App-level scenario bar changed — reconfigure Image workspace (I2I)."""
+        from media_studio.studio_modality import normalize_image_modality
+
+        # Scenarios land on Image · I2I unless user is mid-Region placement
+        try:
+            if normalize_image_modality(self._edit_mode) != "region":
+                self.set_modality("i2i", force_default_model=False)
+        except Exception:
+            pass
         self._apply_scenario_ui(key, force_prompt=False)
         try:
             self.page.update()
@@ -2889,16 +2953,42 @@ class StudioImageView:
     async def _on_enhance(self, e: ft.ControlEvent) -> None:
         if self.state.is_busy("image"):
             return
+        from media_studio.studio_modality import normalize_image_modality
+
+        modality = normalize_image_modality(self._edit_mode)
         prompt = (self.prompt_field.value or "").strip()
-        extra = None
-        if self._edit_mode == "region":
-            extra = self.region_panel.enhance_extra_context()
+        extra: dict[str, Any] | None = {
+            "workspace": "studio_image",
+            "modality": modality,
+        }
+        if modality == "region":
+            reg = self.region_panel.enhance_extra_context() or {}
+            extra.update(reg)
             if not prompt and not self.region_panel.has_boxes_with_prompts():
                 self._set_status("Add region box prompts (or a main prompt) to enhance.")
                 return
         elif not prompt:
             self._set_status("Enter a prompt to enhance.")
             return
+        if modality == "t2i":
+            extra["guidance"] = (
+                "Rewrite for text-to-image. Still photography language. "
+                "No invented camera motion unless the user asks. Locked frame."
+            )
+        elif modality == "r2i":
+            n_refs = len(getattr(self, "_extra_ref_paths", None) or [])
+            extra["guidance"] = (
+                "Rewrite for multi-reference image edit (R2I). "
+                "Image 1 / primary is the still to edit; extra refs are identity, "
+                "material, furniture, or style. Name each ref role in natural language. "
+                "Do not invent API parameters."
+            )
+            extra["reference_still_count"] = n_refs
+        elif modality == "i2i":
+            extra["guidance"] = (
+                "Rewrite for single-source image-to-image edit. "
+                "Preserve architecture and camera unless the prompt requires change."
+            )
         if not self.state.try_busy("image"):
             return
         self.btn_enhance.disabled = True
@@ -2906,12 +2996,22 @@ class StudioImageView:
         self.job_progress.start("Enhancing prompt…", self.page)
         extra_refs = (
             []
-            if self._edit_mode == "region"
+            if modality in ("region", "t2i", "i2i")
             else list(getattr(self, "_extra_ref_paths", None) or [])
         )
+        # R2I only sends multi-refs; I2I is primary only
+        if modality != "r2i":
+            extra_refs = []
         self._set_status(
-            "Enhancing with Grok · vision"
-            + (" · region" if self._edit_mode == "region" else "")
+            "Enhancing with Grok"
+            + (f" · {modality.upper()}" if modality else "")
+            + (
+                " · vision"
+                if modality != "t2i"
+                and self.state.source_path
+                and Path(self.state.source_path).is_file()
+                else ""
+            )
             + (f" · {len(extra_refs)} ref(s)" if extra_refs else "")
             + "…"
         )
@@ -2921,7 +3021,11 @@ class StudioImageView:
                 enhance_prompt,
                 prompt=prompt or "",
                 model_choice=model,
-                image_file=self.state.source_path,
+                image_file=(
+                    None
+                    if modality == "t2i"
+                    else self.state.source_path
+                ),
                 video_file=None,
                 parameters=json.loads(self._params_json()),
                 output_dir=self.state.output_dir,
@@ -2955,18 +3059,23 @@ class StudioImageView:
         if self.state.is_busy("image"):
             return
         from media_studio.secrets_store import has_fal_key
+        from media_studio.studio_modality import normalize_image_modality
 
         if not has_fal_key():
             self._set_status("FAL API key required — open Settings (gear icon) to add your key.")
             return
-        if not self.state.source_path or not Path(self.state.source_path).is_file():
+        modality = normalize_image_modality(self._edit_mode)
+        has_source = bool(
+            self.state.source_path and Path(self.state.source_path).is_file()
+        )
+        if modality != "t2i" and not has_source:
             self._set_status("Upload or Import from Resolve first.")
             return
 
         # Region mode: composite boxes → annotated still + color-keyed prompt
         image_path_for_job = self.state.source_path
         prompt = (self.prompt_field.value or "").strip()
-        if self._edit_mode == "region":
+        if modality == "region":
             if not self.region_panel.has_boxes_with_prompts() and not prompt:
                 self._set_status("Region mode: add at least one box prompt.")
                 return
@@ -3016,10 +3125,12 @@ class StudioImageView:
             return
         self.btn_generate.disabled = True
         self.btn_enhance.disabled = True
-        self.job_progress.start("Uploading…", self.page)
+        self.job_progress.start(
+            "Starting…" if modality == "t2i" else "Uploading…", self.page
+        )
         self._set_status("Starting…")
         self.job_log.clear(self.page)
-        if self._edit_mode == "region" and image_path_for_job != self.state.source_path:
+        if modality == "region" and image_path_for_job != self.state.source_path:
             self.job_log.append(
                 f"Region composite → {Path(image_path_for_job).name}", self.page
             )
@@ -3027,7 +3138,7 @@ class StudioImageView:
         self.page.update()
 
         model = _dd_value(self.model_dd) or DEFAULT_IMAGE_MODEL
-        if self._edit_mode == "region":
+        if modality == "region":
             from media_studio.region_edit import REGION_DEFAULT_MODEL
 
             # Prefer Seedream if still on a generic default
@@ -3036,36 +3147,68 @@ class StudioImageView:
             if is_following_scenario_defaults(model) or "Flux 2 Pro" in (model or ""):
                 model = REGION_DEFAULT_MODEL
         params_json = self._params_json()
-        # Region is still-only precision mode; keep active scenario for naming context
         scenario_key = self._scenario_key()
 
         def on_progress(msg: str) -> None:
             self.job_log.append(msg, self.page)
             self.job_progress.set_message(classify_progress(msg), self.page)
 
-        # Multi-ref only in Standard mode; Region ships the annotated primary alone
+        # Multi-ref only on R2I; Region ships annotated primary alone; I2I primary only
         extra_refs = (
-            []
-            if self._edit_mode == "region"
-            else list(getattr(self, "_extra_ref_paths", None) or [])
+            list(getattr(self, "_extra_ref_paths", None) or [])
+            if modality == "r2i"
+            else []
         )
 
         try:
             from media_studio.job_context import to_thread_with_job
 
-            result = await to_thread_with_job(
-                self.state,
-                generate,
-                prompt=prompt,
-                model_choice=model,
-                image_file=image_path_for_job,
-                video_file=None,
-                output_dir=self.state.output_dir,
-                parameters_json=params_json,
-                on_progress=on_progress,
-                scenario=scenario_key,
-                extra_image_files=extra_refs or None,
-            )
+            if modality == "t2i":
+                from media_studio.vision_service import run_vision
+
+                vres = await to_thread_with_job(
+                    self.state,
+                    run_vision,
+                    mode="text_to_image",
+                    prompt=prompt,
+                    model_label=model,
+                    duration=None,
+                    aspect_ratio=_dd_value(self.res_dd) or None,
+                    resolution=_dd_value(self.res_dd) or None,
+                    num_images=None,
+                    output_dir=self.state.output_dir,
+                    on_progress=on_progress,
+                )
+                # Adapt VisionResult → GenerateResult-like handling
+                from media_studio.services import GenerateResult
+
+                paths = list(getattr(vres, "paths", None) or [])
+                if vres.ok and vres.path and not paths:
+                    paths = [vres.path]
+                result = GenerateResult(
+                    ok=bool(vres.ok and paths),
+                    image_paths=paths,
+                    status=vres.status or "",
+                    model=vres.model_key or model,
+                    job_kind="image",
+                    cost_estimate=vres.cost_label or "",
+                    notes=list(getattr(vres, "notes", None) or []),
+                    metrics_line=vres.metrics_line or vres.cost_label or "",
+                )
+            else:
+                result = await to_thread_with_job(
+                    self.state,
+                    generate,
+                    prompt=prompt,
+                    model_choice=model,
+                    image_file=image_path_for_job,
+                    video_file=None,
+                    output_dir=self.state.output_dir,
+                    parameters_json=params_json,
+                    on_progress=on_progress,
+                    scenario=scenario_key,
+                    extra_image_files=extra_refs or None,
+                )
             if result.ok and result.image_paths:
                 for p in result.image_paths:
                     if p not in self.state.comparison:
@@ -3092,7 +3235,7 @@ class StudioImageView:
                 self.job_progress.finish_ok(done, self.page)
                 self.job_log.finish_ok(self.page)
                 # Region placement stays source-only — point user to versions / A/B
-                if getattr(self, "_edit_mode", "standard") == "region":
+                if getattr(self, "_edit_mode", "i2i") == "region":
                     tip = (
                         f"{done} · Result is in versions — toggle A/B to show Gen "
                         "(source stays clear for box placement)."
@@ -3982,7 +4125,7 @@ def main(page: ft.Page) -> None:
 
     # Restore last Studio mode (Image vs Video)
     _studio_mode = get_studio_mode()
-    _studio_idx = 1 if _studio_mode == "video" else 0
+    _studio_is_video = _studio_mode == "video"
 
     def _tab_body(control: ft.Control) -> ft.Control:
         """One expand layer into the tab body (no nested expand wrappers)."""
@@ -3992,20 +4135,122 @@ def main(page: ft.Page) -> None:
             padding=ft.Padding.only(top=8),
         )
 
-    # Flet 0.86: TabBar + TabBarView inside Tabs.content
-    # Studio sub-tabs: body already expands; single wrapper only
-    studio_tabs = build_tabs(
+    # Studio: [ Image | Video ] + modality pills on the same row (no third bar)
+    from media_studio.studio_modality import (
+        DEFAULT_IMAGE_MODALITY,
+        DEFAULT_VIDEO_MODALITY,
+        IMAGE_MODALITY_PILLS,
+        VIDEO_MODALITY_PILLS,
+    )
+
+    _image_body = _tab_body(studio_image.build())
+    _video_body = _tab_body(studio_video.build())
+    _image_host = ft.Container(content=_image_body, expand=True, visible=not _studio_is_video)
+    _video_host = ft.Container(content=_video_body, expand=True, visible=_studio_is_video)
+
+    def _on_image_mod(mod_id: str) -> None:
+        try:
+            studio_image.set_modality(mod_id)
+        except Exception:
+            pass
+
+    def _on_video_mod(mod_id: str) -> None:
+        try:
+            studio_video.set_modality(mod_id)
+        except Exception:
+            pass
+
+    image_mod_nav = PillNav(
+        list(IMAGE_MODALITY_PILLS),
+        selected=DEFAULT_IMAGE_MODALITY,
+        on_change=_on_image_mod,
+    )
+    video_mod_nav = PillNav(
+        list(VIDEO_MODALITY_PILLS),
+        selected=DEFAULT_VIDEO_MODALITY,
+        on_change=_on_video_mod,
+    )
+    mod_host = ft.Container(
+        content=video_mod_nav.control if _studio_is_video else image_mod_nav.control,
+    )
+
+    def _sync_mod_host_for_media(is_video: bool) -> None:
+        mod_host.content = (
+            video_mod_nav.control if is_video else image_mod_nav.control
+        )
+
+    def _on_studio_media(media_id: str) -> None:
+        is_video = media_id == "video"
+        _image_host.visible = not is_video
+        _video_host.visible = is_video
+        _sync_mod_host_for_media(is_video)
+        try:
+            set_studio_mode("video" if is_video else "image")
+        except Exception:
+            pass
+        if is_video:
+            try:
+                studio_video.sync_from_state()
+            except Exception:
+                pass
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    media_nav = PillNav(
+        [("image", "Image"), ("video", "Video")],
+        selected="video" if _studio_is_video else "image",
+        on_change=_on_studio_media,
+    )
+
+    # Keep shell pills in sync when views change modality programmatically
+    def _shell_image_mod(mod: str) -> None:
+        try:
+            image_mod_nav.set_selected(mod, notify=False)
+        except Exception:
+            pass
+
+    def _shell_video_mod(mod: str) -> None:
+        try:
+            video_mod_nav.set_selected(mod, notify=False)
+        except Exception:
+            pass
+
+    state.on_image_modality_changed = _shell_image_mod  # type: ignore[attr-defined]
+    state.on_video_modality_changed = _shell_video_mod  # type: ignore[attr-defined]
+
+    studio_shell = ft.Column(
         [
-            ("Image", ft.Icons.IMAGE, _tab_body(studio_image.build())),
-            ("Video", ft.Icons.MOVIE, _tab_body(studio_video.build())),
+            ft.Row(
+                [
+                    media_nav.control,
+                    ft.Container(
+                        width=1,
+                        height=22,
+                        bgcolor=BORDER,
+                        margin=ft.Margin.symmetric(horizontal=4),
+                    ),
+                    mod_host,
+                ],
+                spacing=8,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                wrap=False,
+            ),
+            ft.Stack(
+                [_image_host, _video_host],
+                expand=True,
+            ),
         ],
-        selected_index=_studio_idx,
+        spacing=6,
+        expand=True,
+        tight=False,
     )
 
     # Tab order: Studio · Tools · Creative Vision · Frame Editor · Audio · Library
     main_tabs = build_tabs(
         [
-            ("Studio", ft.Icons.DASHBOARD, studio_tabs),
+            ("Studio", ft.Icons.DASHBOARD, studio_shell),
             ("Tools", ft.Icons.HANDYMAN, _tab_body(tools_view.build())),
             (
                 "Creative Vision",
@@ -4022,46 +4267,46 @@ def main(page: ft.Page) -> None:
         ]
     )
 
-    def switch_to_video() -> None:
-        """Select Studio → Video (outer tab 0, inner tab 1)."""
+    def switch_to_video(*, modality: str | None = None) -> None:
+        """Select Studio → Video (optionally a video modality)."""
         try:
             main_tabs.selected_index = 0
-            studio_tabs.selected_index = 1
             try:
                 main_tabs.move_to(0)
             except Exception:
                 pass
+            media_nav.set_selected("video", notify=False)
+            _on_studio_media("video")
+            if modality:
+                try:
+                    studio_video.set_modality(modality, force_default_model=False)
+                    video_mod_nav.set_selected(modality, notify=False)
+                except Exception:
+                    pass
             try:
-                studio_tabs.move_to(1)
+                studio_video.sync_from_state()
             except Exception:
                 pass
-            try:
-                set_studio_mode("video")
-            except Exception:
-                pass
-            # Re-bind Source video label after tab becomes active
-            studio_video.sync_from_state()
             page.update()
         except Exception:
             pass
 
-    def switch_to_image() -> None:
-        """Select Studio → Image (outer tab 0, inner tab 0)."""
+    def switch_to_image(*, modality: str | None = None) -> None:
+        """Select Studio → Image (optionally an image modality)."""
         try:
             main_tabs.selected_index = 0
-            studio_tabs.selected_index = 0
             try:
                 main_tabs.move_to(0)
             except Exception:
                 pass
-            try:
-                studio_tabs.move_to(0)
-            except Exception:
-                pass
-            try:
-                set_studio_mode("image")
-            except Exception:
-                pass
+            media_nav.set_selected("image", notify=False)
+            _on_studio_media("image")
+            if modality:
+                try:
+                    studio_image.set_modality(modality, force_default_model=False)
+                    image_mod_nav.set_selected(modality, notify=False)
+                except Exception:
+                    pass
             page.update()
         except Exception:
             pass
@@ -4190,26 +4435,6 @@ def main(page: ft.Page) -> None:
         except Exception:
             pass
 
-    def _on_studio_tab_change(e: ft.ControlEvent) -> None:
-        # When user opens Video tab, re-apply paths (TabBarView can lag off-screen updates)
-        try:
-            idx = getattr(studio_tabs, "selected_index", None)
-            if idx == 1:
-                try:
-                    set_studio_mode("video")
-                except Exception:
-                    pass
-                studio_video.sync_from_state()
-                studio_video._refresh_resolve_recent()
-                page.update()
-            elif idx == 0:
-                try:
-                    set_studio_mode("image")
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
     def _on_main_tab_change(e: ft.ControlEvent) -> None:
         try:
             idx = getattr(main_tabs, "selected_index", None)
@@ -4223,13 +4448,17 @@ def main(page: ft.Page) -> None:
                     page.update()
                 except Exception:
                     pass
+            elif idx == 0:  # Studio — refresh video paths if Video modality active
+                try:
+                    if media_nav.selected == "video":
+                        studio_video.sync_from_state()
+                        studio_video._refresh_resolve_recent()
+                        page.update()
+                except Exception:
+                    pass
         except Exception:
             pass
 
-    try:
-        studio_tabs.on_change = _on_studio_tab_change
-    except Exception:
-        pass
     try:
         main_tabs.on_change = _on_main_tab_change
     except Exception:

@@ -1231,7 +1231,10 @@ class LibraryView:
                 ok = bool(iv.enter_region_mode(path))
             switch = getattr(self.state, "switch_to_image", None)
             if switch:
-                switch()
+                try:
+                    switch(modality="region")
+                except TypeError:
+                    switch()
             if ok:
                 self._on_action_status(f"Sent to Region edit: {Path(path).name}")
                 try:

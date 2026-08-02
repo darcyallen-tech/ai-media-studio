@@ -12,6 +12,11 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### Studio modality sub-tabs (Image / Video)
+- Same row as **Image | Video** (to the right; no third bar): **I2I | T2I | R2I | Region** or **I2V | T2V | V2V | R2V**
+- Defaults: Image → I2I, Video → I2V; model dropdown filtered strictly by sub-tab
+- Region moved off Standard/Region toggle; H3 Omni under R2V; Enhance modality-aware
+
 ### MiniMax H3 (Hailuo-03) — first-class video
 - **Creative Vision**: MiniMax H3 · Text→Video, Image→Video (optional first→last end frame), and **Omni reference**
 - Omni panel: up to 9 stills + 3 motion clips + 3 audio (≤12 files); intent chips insert Image 1 / Video 1 / Audio 1 citation language

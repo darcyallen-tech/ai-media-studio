@@ -135,7 +135,10 @@ def send_to_region(state: Any, path: str, *, status_cb: Callable[[str], None] | 
                     pass
         switch = getattr(state, "switch_to_image", None)
         if switch:
-            switch()
+            try:
+                switch(modality="region")
+            except TypeError:
+                switch()
         if status_cb:
             status_cb(f"Sent to Region edit: {Path(path).name}")
 
