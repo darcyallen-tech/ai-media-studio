@@ -169,6 +169,14 @@ class DualMediaToolCard:
             on_select=self._refresh_cost,
             expand=True,
         )
+        from media_studio.flet_model_hint import make_best_for_line, update_best_for_line
+
+        self.model_best_for = make_best_for_line()
+        update_best_for_line(
+            self.model_best_for,
+            labels[0] if labels else None,
+            dropdown=self.model_dd,
+        )
         self.prompt = ft.TextField(
             label="Prompt (editable)",
             value=default_prompt,
@@ -267,6 +275,7 @@ class DualMediaToolCard:
                         tight=True,
                     ),
                     ft.Row([self.model_dd], spacing=0),
+                    self.model_best_for,
                     # Extra dropdowns: horizontal expand only (never vertical grey slabs)
                     *[ft.Row([ctrl], spacing=0) for ctrl in self.extra],
                     self.prompt,
@@ -342,6 +351,16 @@ class DualMediaToolCard:
         self.model_dd.options = dropdown_options(labels)
         self.model_dd.value = prev if prev in labels else (labels[0] if labels else None)
         self.cost_text.value = self._cost()
+        try:
+            from media_studio.flet_model_hint import update_best_for_line
+
+            update_best_for_line(
+                self.model_best_for,
+                _dd_value(self.model_dd),
+                dropdown=self.model_dd,
+            )
+        except Exception:
+            pass
 
     def force_mode(self, mode: str, *, clear_source: bool = False) -> None:
         """
@@ -434,6 +453,16 @@ class DualMediaToolCard:
 
     async def _refresh_cost(self, e: ft.ControlEvent) -> None:
         self.cost_text.value = self._cost()
+        try:
+            from media_studio.flet_model_hint import update_best_for_line
+
+            update_best_for_line(
+                self.model_best_for,
+                _dd_value(self.model_dd),
+                dropdown=self.model_dd,
+            )
+        except Exception:
+            pass
         self.page.update()
 
     def load_image(self, path: str, *, status: str | None = None) -> bool:

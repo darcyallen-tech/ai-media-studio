@@ -27,6 +27,7 @@ from media_studio.tools_registry import (
     BLOWN_OUT_MODELS,
     CLEANUP_MODELS,
     DEHAZE_MODELS,
+    INPAINT_MODELS,
     MATCH_LOOK_MODELS,
     MIRROR_MODELS,
     REASPECT_IMAGE_MODELS,
@@ -49,6 +50,7 @@ from media_studio.tools_registry import (
     build_codeformer_args,
     build_nafnet_deblur_args,
     build_edit_args,
+    build_inpaint_args,
     build_upscale_args,
     build_video_denoise_args,
     build_video_interpolate_args,
@@ -83,6 +85,7 @@ ProgressCallback = Callable[[str], None]
 class ToolResult:
     ok: bool
     path: str | None = None
+    paths: list[str] = field(default_factory=list)
     status: str = ""
     metrics_line: str = ""
     cost_label: str = ""
@@ -1789,6 +1792,282 @@ def _run_reaspect_video(
             f"{spec.label} OK → {ar}. Saved {Path(resolved).name}. "
             f"{metrics}. Use Show in folder or Send to Resolve."
         ),
+        metrics_line=metrics,
+        cost_label=cost_lbl,
+        notes=[spec.notes] if spec.notes else [],
+    )
+
+
+def run_inpaint(
+    *,
+    image_path: str | Path | None,
+    mask_path: str | Path | None,
+    prompt: str | None = None,
+    negative_prompt: str | None = None,
+    model_label: str | None = None,
+    strength: float | None = None,
+    num_images: int = 1,
+    reference_path: str | Path | None = None,
+    output_dir: str | Path,
+    on_progress: ProgressCallback | None = None,
+) -> ToolResult:
+    """
+    Freehand / mask inpaint — only white mask regions are rewritten.
+
+    Requires a non-empty mask (any non-black pixels). Soft-fails with a clear
+    message if the mask is blank. Optional ``num_images`` batch and reference
+    still when the model supports them.
+    """
+
+    def progress(msg: str) -> None:
+        if on_progress:
+            on_progress(msg)
+
+    img = Path(image_path) if image_path else None
+    mask = Path(mask_path) if mask_path else None
+    if not img or not img.is_file():
+        return ToolResult(ok=False, status="Upload a source still first.")
+    if not mask or not mask.is_file():
+        return ToolResult(
+            ok=False,
+            status="Paint a mask on the region to change, then Run.",
+        )
+
+    # Assert sizes, reject empty masks, never send mismatched shapes to fal
+    try:
+        from PIL import Image
+        import numpy as np
+
+        with Image.open(img) as im_src:
+            iw, ih = im_src.size
+        m = Image.open(mask).convert("L")
+        mw, mh = m.size
+        size_note = f"image {iw}×{ih}, mask {mw}×{mh}"
+        if (mw, mh) != (iw, ih):
+            # NEAREST only — soft edges break hard masks for fill models
+            progress(
+                f"Mask size mismatch ({size_note}) — resizing mask "
+                f"NEAREST to {iw}×{ih}"
+            )
+            m = m.resize((iw, ih), Image.Resampling.NEAREST)
+            # Write corrected mask so upload matches image pixels 1:1
+            fixed = mask.with_name(
+                f"{mask.stem}_sized_{iw}x{ih}{mask.suffix}"
+            )
+            m.save(fixed, format="PNG")
+            mask = fixed
+            mw, mh = m.size
+            size_note = f"image {iw}×{ih}, mask {mw}×{mh}"
+            if (mw, mh) != (iw, ih):
+                return ToolResult(
+                    ok=False,
+                    status=(
+                        f"Mask/image size mismatch — refused submit. {size_note}"
+                    ),
+                )
+
+        arr = np.array(m)  # copy so we can close the image
+        m.close()
+        if arr.size == 0 or int(arr.max()) < 8:
+            return ToolResult(
+                ok=False,
+                status=(
+                    "Mask is empty — paint the region to edit (white = change). "
+                    f"({size_note})"
+                ),
+            )
+        # Require a minimum painted area so accidental dots don't burn cost
+        painted = int((arr > 16).sum())
+        if painted < 24:
+            return ToolResult(
+                ok=False,
+                status=(
+                    "Mask is nearly empty — paint a larger region, then Run. "
+                    f"({size_note})"
+                ),
+            )
+    except Exception as exc:
+        return ToolResult(ok=False, status=f"Could not read mask: {exc}")
+
+    from media_studio.tools_registry import (
+        inpaint_max_num,
+        inpaint_requires_ref,
+        inpaint_shows_ref,
+    )
+
+    spec = find_tool(model_label, INPAINT_MODELS) or next(
+        iter(INPAINT_MODELS.values())
+    )
+    max_n = inpaint_max_num(spec)
+    n_req = max(1, min(max_n, int(num_images or 1)))
+    est = format_tool_cost(spec, num_images=n_req)
+
+    ref_path = Path(reference_path) if reference_path else None
+    if inpaint_requires_ref(spec):
+        if not ref_path or not ref_path.is_file():
+            return ToolResult(
+                ok=False,
+                status=(
+                    f"{spec.label} needs a reference still — "
+                    "upload Ref still, then Run."
+                ),
+                cost_label=est,
+            )
+    elif ref_path and not inpaint_shows_ref(spec):
+        # Ignore ref for models that don't accept one
+        ref_path = None
+        progress("Reference still ignored — this model only uses image + mask.")
+
+    progress(f"{spec.label} · {est}")
+    progress(f"Endpoint: {spec.endpoint}")
+    progress(f"Sizes: {size_note}")
+    if n_req > 1:
+        progress(f"Batch: {n_req} images")
+
+    try:
+        progress(f"Uploading source: {img.name}")
+        image_url = upload_file(img, on_progress=progress)
+        progress(f"Uploading mask: {mask.name}")
+        mask_url = upload_file(mask, on_progress=progress)
+        ref_url = None
+        if ref_path and ref_path.is_file() and inpaint_shows_ref(spec):
+            progress(f"Uploading ref: {ref_path.name}")
+            ref_url = upload_file(ref_path, on_progress=progress)
+    except (FalClientError, Exception) as exc:
+        return ToolResult(
+            ok=False,
+            status=f"{friendly_error(exc, context=spec.label)} · {size_note}",
+            cost_label=est,
+        )
+
+    args = build_inpaint_args(
+        spec,
+        image_url=image_url,
+        mask_url=mask_url,
+        prompt=prompt or "",
+        negative_prompt=negative_prompt,
+        strength=strength,
+        num_images=n_req,
+        reference_image_url=ref_url,
+    )
+    progress("Running inpaint on fal…")
+    t0 = time.perf_counter()
+    try:
+        result = subscribe(spec.endpoint, args, on_progress=progress)
+    except FalClientError as exc:
+        render_s = time.perf_counter() - t0
+        err = str(exc)
+        low = err.lower()
+        if "size" in low or "dimension" in low or "match" in low:
+            err = f"{err} · {size_note}"
+        return ToolResult(
+            ok=False,
+            status=err,
+            metrics_line=format_render_metrics(render_s, None, cost_is_estimate=True),
+            cost_label=est,
+        )
+    render_s = time.perf_counter() - t0
+
+    exact = extract_cost_usd_from_response(result)
+    cost_usd = (
+        exact
+        if exact is not None
+        else float(spec.cost_estimate_usd) * n_req
+    )
+    is_est = exact is None
+    metrics = format_render_metrics(render_s, cost_usd, cost_is_estimate=is_est)
+    cost_lbl = format_cost_label(cost_usd, estimate=is_est)
+
+    urls = extract_image_urls(result)
+    if not urls:
+        single = _extract_single_image(result)
+        if single:
+            urls = [single]
+    if not urls:
+        return ToolResult(
+            ok=False,
+            status=f"{spec.label}: fal returned no image.",
+            metrics_line=metrics,
+            cost_label=cost_lbl,
+        )
+
+    stamp = timestamp_now()
+    media_dir = job_media_dir(output_dir, stamp=stamp)
+    base_stem = make_output_stem(
+        (prompt or "inpaint")[:48],
+        spec.key,
+        stamp=stamp,
+        kind="inpaint",
+    )
+    saved: list[str] = []
+    for i, out_url in enumerate(urls):
+        if len(urls) == 1:
+            stem = base_stem
+        else:
+            stem = f"{base_stem}_{i + 1:02d}"
+        dest = unique_path(media_dir, stem, ".png")
+        try:
+            progress(f"Downloading {i + 1}/{len(urls)}…")
+            download_url(out_url, dest, on_progress=progress)
+            saved.append(str(dest.resolve()))
+        except FalClientError as exc:
+            if not saved:
+                return ToolResult(
+                    ok=False,
+                    status=str(exc),
+                    metrics_line=metrics,
+                    cost_label=cost_lbl,
+                )
+            progress(f"Partial download: {exc}")
+            break
+
+    if not saved:
+        return ToolResult(
+            ok=False,
+            status=f"{spec.label}: download failed.",
+            metrics_line=metrics,
+            cost_label=cost_lbl,
+        )
+
+    try:
+        from media_studio.history import append_history
+
+        notes = ["inpaint", "mask"]
+        if ref_url:
+            notes.append("ref")
+        if len(saved) > 1:
+            notes.append(f"batch×{len(saved)}")
+        append_history(
+            job_kind="image",
+            model=spec.label,
+            prompt=(prompt or "inpaint").strip(),
+            files=saved,
+            cost_estimate=cost_lbl,
+            notes=notes,
+            output_dir=output_dir,
+            timestamp=stamp,
+            scenario="inpaint",
+        )
+    except Exception:
+        pass
+
+    first = saved[0]
+    if len(saved) == 1:
+        status = (
+            f"{spec.label} OK. Saved {Path(first).name}. "
+            f"{metrics}. Use Show in folder or Send to Resolve."
+        )
+    else:
+        status = (
+            f"{spec.label} OK. Saved {len(saved)} stills "
+            f"({Path(first).name} + {len(saved) - 1} more). "
+            f"{metrics}. All in Library / job folder."
+        )
+    return ToolResult(
+        ok=True,
+        path=first,
+        paths=saved,
+        status=status,
         metrics_line=metrics,
         cost_label=cost_lbl,
         notes=[spec.notes] if spec.notes else [],

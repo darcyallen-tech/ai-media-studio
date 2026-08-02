@@ -24,6 +24,7 @@ _IMAGE_TOOLS: list[tuple[str, str]] = [
     ("Sky / Weather", "sky"),
     ("Dehaze", "dehaze"),
     ("Sharpen / Restore", "restore"),
+    ("Inpaint (freehand)", "inpaint"),
     ("Blown Out", "blown_out"),
     ("Mirror / Glass", "mirror"),
     ("Amenity On", "amenity"),

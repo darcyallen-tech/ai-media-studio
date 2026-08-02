@@ -126,6 +126,14 @@ class CreativeVisionView:
             expand=True,
         )
         self.model_notes = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=3)
+        from media_studio.flet_model_hint import make_best_for_line, update_best_for_line
+
+        self.model_best_for = make_best_for_line()
+        update_best_for_line(
+            self.model_best_for,
+            self.model_dd.value if hasattr(self, "model_dd") else None,
+            dropdown=self.model_dd,
+        )
         self.cost_text = ft.Text(
             self._cost_label(),
             size=FONT_SM,
@@ -570,6 +578,7 @@ class CreativeVisionView:
             self._mode_nav.control,
             ft.Divider(height=1, color=BORDER),
             ft.Row([self.model_dd], spacing=0),
+            self.model_best_for,
             self.model_notes,
             ft.Row(
                 [self.dur_dd, self.aspect_dd, self.res_dd, self.num_dd],
@@ -1011,6 +1020,14 @@ class CreativeVisionView:
     def _sync_model_ui(self) -> None:
         spec = self._current_spec()
         self.model_notes.value = spec.notes or ""
+        try:
+            from media_studio.flet_model_hint import update_best_for_line
+
+            update_best_for_line(
+                self.model_best_for, spec.label, dropdown=self.model_dd
+            )
+        except Exception:
+            pass
         still = is_still_mode(self._mode)
         is_i2i = self._mode == "image_to_image"
         is_t2i = self._mode == "text_to_image"

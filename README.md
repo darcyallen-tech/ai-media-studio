@@ -117,7 +117,7 @@ Dashboards:
 | Tab | What it does |
 |-----|----------------|
 | **Studio** | Image (scenarios, Region edit, compare) · Video (Received / Blank / Camera Lock) |
-| **Tools** | Image \| Video tools + large result viewer (upscale, **Denoise**, **Slow Mo**, cleanup, sky, …) |
+| **Tools** | Image \| Video tools + large result viewer (upscale, **Inpaint**, **Denoise**, **Slow Mo**, cleanup, sky, …) |
 | **Creative Vision** | **Text → Image**, **Image → Image**, Text → Video, Image → Video, Bridge / Connect |
 | **Frame Editor** | Aleph 2.0 keyframe edit via **Runware** + optional fal 1080p proxy |
 | **Audio** | Music, SFX, Ambience, VO, Voice clone, **Video → SFX** |
@@ -141,11 +141,16 @@ Dashboards:
 - **Result playback**: full CONTAIN in-app video with play/pause; Show in folder / Send to Resolve stay under the player.
 - Day→night style transitions: pin day @ **first**, night @ **last**, transition prompt / Enhance.
 
+### Tools highlights
+
+- **Inpaint (freehand)** — 3-column UI; brush/eraser; zoom/pan; Grow mask 0–8 px; **# Images 1–4** (cost × N); optional/required **ref still** per model; mask 1:1 with source; mask-capable models only (Pro Fill, LoRA Fill, Dev, Kontext LoRA, Juggernaut — not Nano Banana / Flux 2 edit).
+- Model dropdowns show a short **Best for:** line under the selection (tooltip for more detail).
+- **From Resolve** strips on image + video tool forms (with Previously used).
+
 ### Tools video extras
 
 - **Denoise / Clean** — Topaz Nyx / Artemis (control-driven).
 - **Slow Mo / Interpolate** — RIFE (default) or FILM; 2×–5×.
-- **From Resolve** strips on image + video tool forms (with Previously used).
 
 Full tool and model lists: **FEATURES.txt**.
 

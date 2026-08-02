@@ -185,6 +185,12 @@ class StudioVideoView:
             on_select=self._on_params_change,
             expand=True,
         )
+        from media_studio.flet_model_hint import make_best_for_line, update_best_for_line
+
+        self.model_best_for = make_best_for_line()
+        update_best_for_line(
+            self.model_best_for, self.model_dd.value, dropdown=self.model_dd
+        )
         opts = control_options(self.model_dd.value)
         self.dur_dd = styled_dropdown(
             label_text="Duration (s)",
@@ -349,6 +355,7 @@ class StudioVideoView:
             self.prompt_field,
             self.btn_reset_scenario,
             ft.Row([self.model_dd], spacing=0),
+            self.model_best_for,
             ft.Row(
                 [self.dur_dd, self.res_dd, self.aspect_dd, self.start_time],
                 spacing=8,
@@ -906,6 +913,14 @@ class StudioVideoView:
     async def _on_params_change(self, e: ft.ControlEvent) -> None:
         model = _dd_value(self.model_dd) or DEFAULT_VIDEO_EDIT_MODEL
         if e.control is self.model_dd:
+            try:
+                from media_studio.flet_model_hint import update_best_for_line
+
+                update_best_for_line(
+                    self.model_best_for, model, dropdown=self.model_dd
+                )
+            except Exception:
+                pass
             opts = control_options(model)
             self.dur_dd.options = [
                 ft.DropdownOption(key=x, text=x) for x in (opts.get("duration_choices") or ["5"])

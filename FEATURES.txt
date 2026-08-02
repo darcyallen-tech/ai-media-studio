@@ -129,7 +129,25 @@ Image tools:
     (CodeFormer face fidelity, NAFNet whole-frame deblur, prompt restore;
      with ref still: multi-image identity-lock defaults — Nano Banana / Flux / …;
      Soft source + Reference still stacked vertically so labels/upload are not clipped),
+  Inpaint (freehand) — still only, 3-column layout (controls | large canvas |
+    result): brush/eraser/undo/clear/size on center; canvas zoom (± / Fit /
+    scroll wheel) + Pan mode for fine edges (brush is constant screen-px);
+    strokes map to full-res mask (EXIF-normalized source WxH); Grow mask
+    0/2/4/8 px (default 4) dilates white region at export only for edge blend;
+    # Images 1–4 when endpoint supports num_images (cost × N); optional or
+    required Ref still when the model accepts reference (Kontext requires;
+    LoRA Fill optional; Pro Fill / Dev / Juggernaut hide ref UI);
+    intent helpers (change/add/remove object, sky/background, reflection,
+    custom); prompt + optional negative; mask-capable models only
+    (Flux Pro Fill, Flux LoRA Fill, Flux Dev Inpaint, Flux Kontext LoRA
+    Inpaint, Juggernaut Flux LoRA Inpaint — not Nano Banana / Flux 2 edit);
+    empty mask blocks Run; multi-image results land in Library as separate
+    stills; status logs image/mask WxH on failure; result pane on the right,
   Blown Out, Mirror / Glass, Amenity On, Season / Curb, Match Look, Re-Aspect
+
+Model dropdowns (Studio, Vision, Tools, …):
+  Under-dropdown “Best for: …” line (~6–12 words) + tooltip detail when a
+  registry entry exists; unknown models hide the line (no empty Best for).
 
 Video tools:
   Upscale (SeedVR2, Bytedance, Topaz families: Proteus / Artemis / Nyx /

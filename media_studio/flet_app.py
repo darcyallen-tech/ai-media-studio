@@ -77,6 +77,7 @@ from media_studio.flet_tools import ToolsView
 from media_studio.flet_video import StudioVideoView
 from media_studio.flet_vision import CreativeVisionView
 from media_studio.services import describe_job_kind, enhance_prompt, generate
+from media_studio.flet_model_hint import make_best_for_line, update_best_for_line
 from media_studio.flet_source_strip import ResolveSourcesStrip
 from media_studio.source_history import gallery_value, record_source
 
@@ -553,6 +554,10 @@ class StudioImageView:
             on_select=self._on_model_or_params,
             expand=True,
         )
+        self.model_best_for = make_best_for_line()
+        update_best_for_line(
+            self.model_best_for, DEFAULT_IMAGE_MODEL, dropdown=self.model_dd
+        )
 
         opts = control_options(DEFAULT_IMAGE_MODEL)
         self.res_dd = styled_dropdown(
@@ -978,6 +983,7 @@ class StudioImageView:
                 vertical_alignment=ft.CrossAxisAlignment.END,
             ),
             ft.Row([self.model_dd], spacing=0),
+            self.model_best_for,
             self.advisor_text,
             ft.Row([self.res_dd, self.num_dd], spacing=8),
             label("Strength (edit / denoise)", muted=True),
@@ -2088,6 +2094,12 @@ class StudioImageView:
             self.strength.value = float(opts.get("strength_value") or 0.6)
             self._trim_extra_refs_to_model()
             self._sync_refs_panel()
+            try:
+                update_best_for_line(
+                    self.model_best_for, model, dropdown=self.model_dd
+                )
+            except Exception:
+                pass
         self._refresh_cost_job()
         self.page.update()
 

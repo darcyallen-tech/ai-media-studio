@@ -87,6 +87,7 @@ from media_studio.tools_registry import (
 )
 from media_studio.flet_dual_tool import DualMediaToolCard
 from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
+from media_studio.flet_inpaint import InpaintCard
 from media_studio.flet_pickers import pick_image, pick_video
 from media_studio.flet_progress import JobProgress, classify_progress
 from media_studio.flet_result_actions import make_result_action_row, show_result_actions
@@ -593,6 +594,12 @@ class _RestoreCard:
             on_select=self._refresh_cost,
             expand=True,
         )
+        from media_studio.flet_model_hint import make_best_for_line, update_best_for_line
+
+        self.model_best_for = make_best_for_line()
+        update_best_for_line(
+            self.model_best_for, labels[0] if labels else None, dropdown=self.model_dd
+        )
 
         self.prompt = ft.TextField(
             label="Prompt (auto-built — edit freely)",
@@ -737,6 +744,7 @@ class _RestoreCard:
                         tight=True,
                     ),
                     ft.Row([self.model_dd], spacing=0),
+                    self.model_best_for,
                     self.prompt,
                     self.prompt_favs.root,
                     self.strength,
@@ -899,6 +907,16 @@ class _RestoreCard:
 
     async def _refresh_cost(self, e: ft.ControlEvent) -> None:
         self.cost_text.value = self._cost()
+        try:
+            from media_studio.flet_model_hint import update_best_for_line
+
+            update_best_for_line(
+                self.model_best_for,
+                _dd_value(self.model_dd),
+                dropdown=self.model_dd,
+            )
+        except Exception:
+            pass
         self._sync_restore_model_ui()
         self.page.update()
 
@@ -2331,6 +2349,8 @@ class ToolsView:
             grade_label="Source look (grade ref)",
         )
 
+        self.inpaint = InpaintCard(page, state)
+
         # One tool panel at a time. Key = stable id (Library / Send to).
         # Aleph lives in the top-level Frame Editor tab (not Tools).
         self._tool_panels: dict[str, ft.Control] = {
@@ -2341,6 +2361,7 @@ class ToolsView:
             "sky": self.sky.root,
             "dehaze": self.dehaze.root,
             "restore": self.restore.root,
+            "inpaint": self.inpaint.root,
             "blown_out": self.blown_out.root,
             "reaspect": self.reaspect.root,
             "mirror": self.mirror.root,
@@ -2357,6 +2378,7 @@ class ToolsView:
             ("sky", "Sky / Weather"),
             ("dehaze", "Dehaze"),
             ("restore", "Sharpen / Restore"),
+            ("inpaint", "Inpaint"),
             ("blown_out", "Blown Out"),
             ("mirror", "Mirror / Glass"),
             ("amenity", "Amenity On"),
@@ -2474,6 +2496,7 @@ class ToolsView:
             "sky": "Sky / Weather",
             "dehaze": "Dehaze",
             "restore": "Sharpen / Restore",
+            "inpaint": "Inpaint (freehand)",
             "blown_out": "Blown Out",
             "mirror": "Mirror / Glass",
             "amenity": "Amenity On",
@@ -2841,6 +2864,10 @@ class ToolsView:
             ok = bool(
                 self.restore.load_source(path, as_video=as_video, status=status)
             )
+        elif tool_id == "inpaint":
+            ok = bool(
+                self.inpaint.load_source(path, as_video=as_video, status=status)
+            )
         elif tool_id == "reaspect":
             ok = bool(
                 self.reaspect.load_source(path, as_video=as_video, status=status)
@@ -2852,7 +2879,11 @@ class ToolsView:
         return ok
 
     def _apply_tool_visibility(self) -> None:
-        """Show only the active tool form on the left; result pane stays right."""
+        """Show only the active tool form; result pane on the right.
+
+        Inpaint uses a dedicated 3-column layout (controls | canvas | result).
+        All other tools keep the standard 2-column FixedRail form + result.
+        """
         active = (
             self._selected_tool if self._selected_tool in self._tool_panels else "upscale"
         )
@@ -2866,10 +2897,41 @@ class ToolsView:
             form.visible = True
         except Exception:
             pass
-        # ONE scroll: ListView on left only — form roots must not also scroll
+
         from media_studio.flet_layout import make_left_rail, make_right_pane
         from media_studio.flet_theme import TOOLS_FORM_WIDTH
 
+        # ----- Inpaint-only: controls | large canvas | result -----
+        if active == "inpaint":
+            card = getattr(self, "inpaint", None)
+            if card is not None and getattr(card, "uses_three_column", False):
+                try:
+                    # Hide stacked fallback root; host uses columns directly
+                    form.visible = False
+                except Exception:
+                    pass
+                left = ft.Container(
+                    content=card.controls_column,
+                    width=320,
+                    expand=False,
+                )
+                center = ft.Container(
+                    content=card.canvas_column,
+                    expand=True,
+                )
+                right = make_right_pane(
+                    self.result_pane.root, padding=0, border=False, bgcolor=None
+                )
+                # Prefer 3-col; on very narrow width Flet will compress center
+                self._tool_host.content = ft.Row(
+                    [left, center, right],
+                    spacing=10,
+                    expand=True,
+                    vertical_alignment=ft.CrossAxisAlignment.STRETCH,
+                )
+                return
+
+        # ----- Default 2-column Tools layout -----
         try:
             # Strip nested form scroll if present
             inner = getattr(form, "content", None)

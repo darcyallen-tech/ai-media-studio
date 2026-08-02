@@ -15,12 +15,18 @@ from typing import Any
 class ToolSpec:
     key: str
     label: str
-    category: str  # upscale | cleanup | sky | dehaze | relight | restore | blownout | reaspect
+    category: str  # upscale | cleanup | sky | dehaze | relight | restore | blownout | reaspect | inpaint
     endpoint: str
     cost_estimate_usd: float
     notes: str = ""
     # upscale_factor, etc.
     extra_defaults: dict[str, Any] = field(default_factory=dict)
+    # Inpaint / batch capabilities (UI + builders; not raw fal extras)
+    max_num_images: int = 1  # 1 = no batch control; >1 shows # Images
+    supports_ref: bool = False  # optional reference still
+    requires_ref: bool = False  # ref required (e.g. Kontext inpaint)
+    # How to pass ref: "reference_image_url" | "fill_image" (flux-lora-fill object)
+    ref_mode: str = "reference_image_url"
 
 
 # --- Upscalers (image) ---
@@ -791,6 +797,161 @@ RESTORE_PROMPT_CORE = (
     "Do not invent a different face. "
     "Keep pose, body, clothing, camera movement, and background unchanged."
 )
+
+# --- Freehand / mask inpaint (still only; mask required) ---
+# Mask-capable fill only — do NOT list Nano Banana / Flux 2 edit (no mask contract).
+INPAINT_MODELS: dict[str, ToolSpec] = {
+    "flux fill": ToolSpec(
+        key="flux fill",
+        label="Flux Pro Fill (inpaint)",
+        category="inpaint",
+        endpoint="fal-ai/flux-pro/v1/fill",
+        cost_estimate_usd=0.05,
+        notes=(
+            "Default. Masked fill / object replace. Paint the region to change; "
+            "unmasked pixels stay locked. Supports # Images batch. ~$0.05/image."
+        ),
+        extra_defaults={"output_format": "png", "safety_tolerance": "4"},
+        max_num_images=4,
+    ),
+    "flux lora fill": ToolSpec(
+        key="flux lora fill",
+        label="Flux LoRA Fill (inpaint)",
+        category="inpaint",
+        endpoint="fal-ai/flux-lora-fill",
+        cost_estimate_usd=0.035,
+        notes=(
+            "Economical Flux fill. Optional fill ref (style/object to paste into "
+            "the mask). Mask required."
+        ),
+        extra_defaults={"output_format": "png", "paste_back": True},
+        max_num_images=4,
+        supports_ref=True,
+        requires_ref=False,
+        ref_mode="fill_image",
+    ),
+    "flux dev inpaint": ToolSpec(
+        key="flux dev inpaint",
+        label="Flux Dev Inpaint (LoRA)",
+        category="inpaint",
+        endpoint="fal-ai/flux-lora/inpainting",
+        cost_estimate_usd=0.03,
+        notes=(
+            "FLUX.1 [dev] inpainting with LoRA support. Strength control. "
+            "Mask required. No reference still."
+        ),
+        extra_defaults={"output_format": "png", "num_inference_steps": 28},
+        max_num_images=4,
+    ),
+    "flux kontext lora inpaint": ToolSpec(
+        key="flux kontext lora inpaint",
+        label="Flux Kontext LoRA Inpaint",
+        category="inpaint",
+        endpoint="fal-ai/flux-kontext-lora/inpaint",
+        cost_estimate_usd=0.04,
+        notes=(
+            "Kontext inpaint with required reference still (identity/style lock "
+            "into the mask). Strength control."
+        ),
+        extra_defaults={"output_format": "png", "num_inference_steps": 30},
+        max_num_images=4,
+        supports_ref=True,
+        requires_ref=True,
+        ref_mode="reference_image_url",
+    ),
+    "juggernaut flux lora inpaint": ToolSpec(
+        key="juggernaut flux lora inpaint",
+        label="Juggernaut Flux LoRA Inpaint",
+        category="inpaint",
+        endpoint="rundiffusion-fal/juggernaut-flux-lora/inpainting",
+        cost_estimate_usd=0.03,
+        notes=(
+            "RunDiffusion Juggernaut Flux LoRA inpainting — sharper detail / "
+            "richer color drop-in for Flux Dev inpaint. Mask required."
+        ),
+        extra_defaults={"output_format": "png", "num_inference_steps": 28},
+        max_num_images=4,
+    ),
+}
+
+
+def inpaint_labels() -> list[str]:
+    return [s.label for s in INPAINT_MODELS.values()]
+
+
+def inpaint_supports_batch(spec: ToolSpec | None) -> bool:
+    return bool(spec and int(getattr(spec, "max_num_images", 1) or 1) > 1)
+
+
+def inpaint_max_num(spec: ToolSpec | None) -> int:
+    if not spec:
+        return 1
+    return max(1, min(4, int(getattr(spec, "max_num_images", 1) or 1)))
+
+
+def inpaint_shows_ref(spec: ToolSpec | None) -> bool:
+    if not spec:
+        return False
+    return bool(getattr(spec, "supports_ref", False) or getattr(spec, "requires_ref", False))
+
+
+def inpaint_requires_ref(spec: ToolSpec | None) -> bool:
+    return bool(spec and getattr(spec, "requires_ref", False))
+
+
+def build_inpaint_args(
+    spec: ToolSpec,
+    *,
+    image_url: str,
+    mask_url: str,
+    prompt: str,
+    negative_prompt: str | None = None,
+    strength: float | None = None,
+    num_images: int = 1,
+    reference_image_url: str | None = None,
+) -> dict[str, Any]:
+    """Mask-capable inpaint body (white = edit, black = keep)."""
+    args: dict[str, Any] = {
+        **(spec.extra_defaults or {}),
+        "image_url": image_url,
+        "mask_url": mask_url,
+        "prompt": (prompt or "").strip()
+        or "Fill the masked region naturally to match the surrounding image.",
+    }
+    max_n = inpaint_max_num(spec)
+    n = max(1, min(max_n, int(num_images or 1)))
+    if max_n > 1:
+        args["num_images"] = n
+    neg = (negative_prompt or "").strip()
+    if neg:
+        # Some fill endpoints ignore negative; safe to send when present
+        args["negative_prompt"] = neg
+    # Strength: flux-lora/inpainting, kontext-lora/inpaint, juggernaut inpainting
+    # (not flux-pro/v1/fill or flux-lora-fill — those have no strength field)
+    ep = (spec.endpoint or "").lower()
+    if strength is not None and (
+        ep.endswith("/inpainting")
+        or ep.endswith("/inpaint")
+        or "/inpainting" in ep
+    ):
+        try:
+            args["strength"] = max(0.1, min(1.0, float(strength)))
+        except (TypeError, ValueError):
+            pass
+
+    ref = (reference_image_url or "").strip() or None
+    if ref:
+        mode = (getattr(spec, "ref_mode", None) or "reference_image_url").strip()
+        if mode == "fill_image":
+            # fal-ai/flux-lora-fill optional fill_image object
+            args["fill_image"] = {
+                "fill_image_url": ref,
+                "use_prompt": True,
+                "in_context_fill": False,
+            }
+        else:
+            args["reference_image_url"] = ref
+    return args
 
 # --- Blown-out window repair (interior RE) ---
 BLOWN_OUT_MODELS: dict[str, ToolSpec] = {
@@ -1717,13 +1878,34 @@ def video_sky_prompt(preset: str | None = None, user_prompt: str | None = None) 
     )
 
 
-def format_tool_cost(spec: ToolSpec) -> str:
-    """Flat still-tool estimate (1 image / one job) — total, not a bare rate."""
+def format_tool_cost(spec: ToolSpec, num_images: int = 1) -> str:
+    """Still-tool estimate — total job cost (per-image × N when batching)."""
     from media_studio.pricing import format_job_cost
 
     cat = (spec.category or "").lower()
+    n = max(1, int(num_images or 1))
+    max_n = max(1, int(getattr(spec, "max_num_images", 1) or 1))
+    if cat == "inpaint" and max_n > 1:
+        n = min(n, max_n)
+        amount = float(spec.cost_estimate_usd) * n
+        unit = f"{n} image" if n == 1 else f"{n} images"
+        return format_job_cost(amount, unit=unit, model=spec.label)
     unit = "1 job"
-    if cat in ("upscale", "cleanup", "sky", "dehaze", "relight", "restore", "blownout", "reaspect", "mirror", "amenity", "season", "match_look"):
+    if cat in (
+        "upscale",
+        "cleanup",
+        "sky",
+        "dehaze",
+        "relight",
+        "restore",
+        "blownout",
+        "reaspect",
+        "mirror",
+        "amenity",
+        "season",
+        "match_look",
+        "inpaint",
+    ):
         unit = "1 image"
     return format_job_cost(float(spec.cost_estimate_usd), unit=unit, model=spec.label)
 

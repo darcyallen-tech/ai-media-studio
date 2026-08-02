@@ -46,6 +46,22 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - Enhance: vision on primary + refs; rewritten prompt describes ref roles
 - Send to: **I2I source** and **Add as I2I ref**
 
+### Model “Best for” hints
+- Short **Best for:** line under major model dropdowns (Studio Image/Video, Creative Vision, Tools)
+- Tooltip for 1–2 sentence detail; missing registry entry hides the line (no empty Best for)
+
+### Tools — Inpaint (freehand)
+- New Image tool with **3-column layout**: left controls · large center canvas · right result
+- Brush / eraser / size / clear / undo; live canvas strokes, committed overlay on stroke end
+- **Canvas zoom** (− / Fit / + and scroll wheel) + **Pan** mode for fine masking; brush size is **constant screen pixels** under zoom; Fit resets to whole image
+- Mask baked at **full source resolution** (EXIF-normalized); zoom/pan map brush→full-res so fal fill never sees mask≠image size
+- **Grow mask** 0 / 2 / 4 / 8 px (default 4): dilate white edit region at **export only** (hard MaxFilter) so fill blends at edges; canvas strokes unchanged; WxH still matches source
+- **# Images 1–4** when the endpoint supports `num_images` (e.g. Flux Pro Fill); Est. cost = per-image × N; multi results → Library as separate stills
+- **Reference still** (upload / Previously used / From Resolve) only when the model supports ref — optional for Flux LoRA Fill, **required** for Flux Kontext LoRA Inpaint; hidden for Pro Fill / Dev / Juggernaut
+- Models (mask-capable only): Flux Pro Fill, Flux LoRA Fill, Flux Dev Inpaint (LoRA), Flux Kontext LoRA Inpaint, Juggernaut Flux LoRA Inpaint — not Nano Banana / Flux 2 edit
+- Best-for lines per model; pre-submit size assert; status logs `image WxH, mask WxH` on mismatch
+- Intent helpers; prompt + optional negative; Enhance for inpaint wording
+
 ### Cost & previews
 - **Batch cost × N** — Est. cost always multiplies by selected **# Images** (including sequential singles when API max is 1, e.g. Flux 2 Pro)
 - Label notes sequential runs when batching 1-at-a-time calls
