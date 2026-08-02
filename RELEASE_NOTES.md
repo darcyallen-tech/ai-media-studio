@@ -50,6 +50,19 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - Short **Best for:** line under major model dropdowns (Studio Image/Video, Creative Vision, Tools)
 - Tooltip for 1–2 sentence detail; missing registry entry hides the line (no empty Best for)
 
+### Update checker
+- Prefers **APP_VERSION** vs GitHub release/tag (semver), then **git SHA** vs latest commit
+- Same-day remote commits no longer show “newer commits” from calendar alone; banner only when version or SHA proves remote is newer
+- Local SHA from env / `_build_sha.txt` / `git rev-parse HEAD`
+
+### Studio — Region box alignment
+- Small left source preview and large Comparison stage share one coordinate system: L/T/W/H are % of the **source image content box** (CONTAIN letterbox), not the outer panel
+- Large stage size comes from layout (`on_size_change`), with a fallback that subtracts the versions rail — fixes ~25% horizontal offset between previews
+- Overlay / A-B still maps boxes to the source frame; slider and drag stay in sync across both views
+- Region placement: **no full-stage grey blend scrim** — source stays full brightness; only colored box rects sit on the photo
+- Region box host is sized to the **image content_rect only** (not a full-stage transparent pin that could grey-veil the photo)
+- Gen blend layer is **removed from the Comparison Stack** while placing boxes (asserted; rebuild failures force source-only); Overlay/A-B only after a real generation when A/B is on
+
 ### Tools — Inpaint (freehand)
 - New Image tool with **3-column layout**: left controls · large center canvas · right result
 - Brush / eraser / size / clear / undo; live canvas strokes, committed overlay on stroke end

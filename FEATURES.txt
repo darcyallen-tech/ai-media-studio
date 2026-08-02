@@ -98,7 +98,12 @@ STUDIO — IMAGE
     Saves under job/dated output folder; reveals in Explorer/Finder
 
 Region edit:
-  - Draw/place colored boxes on the still
+  - Draw/place colored boxes on the still (small left + large Comparison stage)
+  - L/T/W/H are % of the source image content box (CONTAIN letterbox); both
+    previews share that coordinate system (no panel-size offset between them)
+  - Large stage: full-brightness source while placing boxes; region boxes live
+    on the image content rect only (not a full-stage host); gen blend omitted
+    from the stack in source-only mode (no grey veil)
   - Per-box prompts; composite hard-fails if annotation still cannot be built
     (never ships a raw still + box text as the model input)
   - Model list filtered to Seedream / annotation-capable models
@@ -346,8 +351,8 @@ SETTINGS / DISK SAFETY
 - Cost guard for expensive generates (default off; warn at $2+ or $5+)
 - Hide missing Library rows
 - Check for updates on startup (default on):
-    Compares local version/build date with GitHub
-    darcyallen-tech/ai-media-studio (release/tag, else latest commit date)
+    Compares APP_VERSION + git SHA with GitHub (release tag, then commit SHA;
+    same-day date alone does not flag behind)
     Quiet banner + snack with Open GitHub link — no auto-download
     Fails soft when offline; toggle in Settings → Storage
     Help → Check for updates… anytime

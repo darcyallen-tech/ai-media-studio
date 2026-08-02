@@ -84,7 +84,7 @@ python app.py
 Reopen the wizard anytime: top bar **?** → **Quick Start**.  
 Also: **?** → Check for updates… / Open FEATURES.txt / README.md.
 
-**Updates:** on startup (default on, Settings → Storage), the app quietly compares its version/build date with [darcyallen-tech/ai-media-studio](https://github.com/darcyallen-tech/ai-media-studio). If GitHub is newer, a small banner + toast offer a link to the repo — no auto-download. Offline checks fail silently.
+**Updates:** on startup (default on, Settings → Storage), the app quietly compares **APP_VERSION** and **git SHA** with [darcyallen-tech/ai-media-studio](https://github.com/darcyallen-tech/ai-media-studio) (release tag first, then latest commit SHA). Same-day commits alone do not flag “behind.” Banner only when remote is actually newer — no auto-download. Offline checks fail silently.
 
 ---
 
@@ -126,7 +126,7 @@ Dashboards:
 ### Creative Vision highlights
 
 - **Text → Image** — invent stills (no source). Still-only helpers (framing / lens / lighting / style); **no camera motion** on rebuild or Enhance. T2I models include Flux family, **Nano Banana** / 2 / Pro, **Seedream** 4.5 / 5 Lite / 5 Pro, Recraft (see FEATURES.txt). **# Images 1–4** multi-variant; **cost always × count** (including sequential singles); separate Library rows; sequential if the API is one-at-a-time (per-tab busy only).
-- **Studio Image** — same 1–4 multi-variant pattern when generating edits. Est. cost scales with **# Images** even when the model max is 1 per call (e.g. Flux 2 Pro · 4 images → ~4× rate). Multi-reference stills when the model allows (primary + optional refs); single-image models stay one still. Region edit uses the annotated primary only. **Previously used** + **From Resolve** stills.
+- **Studio Image** — same 1–4 multi-variant pattern when generating edits. Est. cost scales with **# Images** even when the model max is 1 per call (e.g. Flux 2 Pro · 4 images → ~4× rate). Multi-reference stills when the model allows (primary + optional refs); single-image models stay one still. Region edit uses the annotated primary only; box L/T/W/H map to the source image content rect on both the small preview and large Comparison stage. **Previously used** + **From Resolve** stills.
 - **Image → Image** — creative plate edits with optional **multi-ref** (primary + up to 3 refs for identity/material/furniture on multi-image models; single-image models hide extras). Same still helpers; From Resolve / Previously used for source or refs; Enhance names ref roles in the prompt.
 - T2I / still results: **Send to ▾ → Start frame / End frame** (bridge handoff) without re-exporting from disk.
 - Every helper that feeds Rebuild/Enhance has **(None)** — omit that dimension. Same pattern in Studio scene builders and Audio builders where helpers inject text.

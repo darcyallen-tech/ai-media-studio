@@ -52,7 +52,8 @@ def contain_content_rect(
     """
     Letterbox rect for BoxFit.CONTAIN: (offset_x, offset_y, content_w, content_h).
 
-    Normalized box L/T/W/H map into this content rectangle, not the full panel.
+    Single coordinate system for all region overlays: box L/T/W/H are fractions
+    of this *image content* rectangle (not the letterboxed panel outer bounds).
     """
     sw, sh = max(float(stack_w), 1.0), max(float(stack_h), 1.0)
     iw, ih = float(img_w or 0), float(img_h or 0)
@@ -65,13 +66,57 @@ def contain_content_rect(
     return ox, oy, max(dw, 1.0), max(dh, 1.0)
 
 
+def size_from_layout_event(e: Any) -> tuple[float, float]:
+    """Extract (w, h) from LayoutSizeChangeEvent / ControlEvent / dict-like."""
+    w = h = 0.0
+    try:
+        w = float(getattr(e, "width", None) or 0)
+        h = float(getattr(e, "height", None) or 0)
+    except (TypeError, ValueError):
+        w = h = 0.0
+    if w > 1 and h > 1:
+        return w, h
+    # Some Flet builds put size on e.data
+    data = getattr(e, "data", None)
+    if isinstance(data, str) and "," in data:
+        try:
+            parts = data.replace(" ", "").split(",")
+            w, h = float(parts[0]), float(parts[1])
+            if w > 1 and h > 1:
+                return w, h
+        except (TypeError, ValueError, IndexError):
+            pass
+    if isinstance(data, dict):
+        try:
+            w = float(data.get("width") or data.get("w") or 0)
+            h = float(data.get("height") or data.get("h") or 0)
+            if w > 1 and h > 1:
+                return w, h
+        except (TypeError, ValueError):
+            pass
+    ctrl = getattr(e, "control", None)
+    if ctrl is not None:
+        try:
+            w = float(getattr(ctrl, "width", None) or 0)
+            h = float(getattr(ctrl, "height", None) or 0)
+            if w > 1 and h > 1:
+                return w, h
+        except (TypeError, ValueError):
+            pass
+    return 0.0, 0.0
+
+
 class RegionBoxOverlay:
     """
     Lightweight colored rectangles in a Stack.
 
-    Image previews use BoxFit.CONTAIN (correct aspect). Box L/T/W/H are
-    normalized 0–1 of the *image content* area after letterboxing — not the
-    full panel. Geometry updates are pure layout (no PIL).
+    Image previews use BoxFit.CONTAIN. Box L/T/W/H are normalized 0–1 of the
+    *image content* area. The host is sized/positioned only to that content_rect
+    (ox, oy, dw, dh) — never a full-stage pin over letterbox + image (full-panel
+    transparent Containers can composite a grey veil on Flet desktop).
+
+    Call set_stack_size() with the **panel** pixel size matching the CONTAIN
+    image parent; set_image_size() with natural still WxH.
     """
 
     def __init__(
@@ -86,59 +131,81 @@ class RegionBoxOverlay:
         self.interactive = interactive
         self._boxes: list[RegionBox] = []
         self._selected = 0
-        self._stack_w: float = 400.0
-        self._stack_h: float = 300.0
+        self._stack_w: float = 400.0  # panel W
+        self._stack_h: float = 300.0  # panel H
         self._img_w: float = 0.0
         self._img_h: float = 0.0
         self._drag_mode: str | None = None  # move | resize
         self._drag_index: int = -1
         self._host = ft.Stack(
             controls=[],
-            expand=True,
             fit=ft.StackFit.EXPAND,
         )
-        # Full-size layer; left/top/right/bottom pin to parent Stack (Comparison stage)
+        # Content-rect only — NOT full-stage left/top/right/bottom pin
         self.root = ft.Container(
             content=self._host,
             left=0,
             top=0,
-            right=0,
-            bottom=0,
-            expand=True,
-            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+            width=100,
+            height=100,
+            expand=False,
+            bgcolor=None,  # no paint; avoid TRANSPARENT full-layer scrims
+            clip_behavior=ft.ClipBehavior.NONE,
             visible=False,
+            opacity=1.0,
         )
-        try:
-            self.root.on_resize = self._on_host_resize
-        except Exception:
-            pass
+        self._layout_host_to_content()
 
     def set_visible(self, visible: bool) -> None:
         self.root.visible = bool(visible)
+        if visible:
+            self._layout_host_to_content()
 
-    def set_stack_size(self, w: float, h: float) -> None:
+    def set_stack_size(self, w: float, h: float, *, reflow: bool = False) -> None:
+        """Set *panel* size for CONTAIN letterbox math (must match image host)."""
         if w > 1 and h > 1:
+            changed = abs(self._stack_w - float(w)) > 0.5 or abs(
+                self._stack_h - float(h)
+            ) > 0.5
             self._stack_w = float(w)
             self._stack_h = float(h)
+            self._layout_host_to_content()
+            if reflow and changed and self._boxes:
+                self.sync(self._boxes, self._selected, full_rebuild=False)
 
     def set_image_size(self, img_w: float, img_h: float) -> None:
         """Natural pixel size of the source still (for CONTAIN letterboxing)."""
         self._img_w = float(img_w or 0)
         self._img_h = float(img_h or 0)
+        self._layout_host_to_content()
 
     def content_rect(self) -> tuple[float, float, float, float]:
         return contain_content_rect(
             self._stack_w, self._stack_h, self._img_w, self._img_h
         )
 
-    def _on_host_resize(self, e: ft.ControlEvent) -> None:
+    def stack_size(self) -> tuple[float, float]:
+        return self._stack_w, self._stack_h
+
+    def _layout_host_to_content(self) -> None:
+        """
+        Position/size root to the image content_rect only.
+
+        Boxes are laid out in host-local coordinates (0..dw, 0..dh). Letterbox
+        areas of the panel are not covered by this host — no full-stage veil.
+        """
+        ox, oy, dw, dh = self.content_rect()
         try:
-            w = float(getattr(e.control, "width", None) or 0)
-            h = float(getattr(e.control, "height", None) or 0)
-            if w > 1 and h > 1:
-                self._stack_w = w
-                self._stack_h = h
-                self.sync(self._boxes, self._selected, full_rebuild=False)
+            self.root.left = float(ox)
+            self.root.top = float(oy)
+            self.root.width = max(1.0, float(dw))
+            self.root.height = max(1.0, float(dh))
+            self.root.right = None
+            self.root.bottom = None
+            self.root.expand = False
+            self.root.bgcolor = None
+            self._host.width = max(1.0, float(dw))
+            self._host.height = max(1.0, float(dh))
         except Exception:
             pass
 
@@ -152,6 +219,7 @@ class RegionBoxOverlay:
         """Update overlay geometry. Prefer in-place updates when box count unchanged."""
         self._boxes = boxes
         self._selected = max(0, selected) if boxes else 0
+        self._layout_host_to_content()
         if full_rebuild or len(self._host.controls) != len(boxes):
             self._rebuild_controls()
         else:
@@ -181,16 +249,18 @@ class RegionBoxOverlay:
         return ctrl if isinstance(ctrl, ft.Container) else None
 
     def _place(self, shell: ft.Container, b: RegionBox) -> None:
-        """Map normalized box onto the letterboxed image content rect."""
+        """Map normalized box into host-local coords (host = content_rect)."""
         b.clamp()
-        ox, oy, dw, dh = self.content_rect()
-        shell.left = ox + b.left * dw
-        shell.top = oy + b.top * dh
+        _ox, _oy, dw, dh = self.content_rect()
+        # Host is already at (ox,oy); boxes are fractions of content only
+        shell.left = b.left * dw
+        shell.top = b.top * dh
         shell.width = max(12.0, b.width * dw)
         shell.height = max(12.0, b.height * dh)
 
     def _style_face(self, face: ft.Container, b: RegionBox, *, selected: bool) -> None:
-        face.bgcolor = _hex_to_rgba(b.color_hex, 0.38 if selected else 0.22)
+        # Light fill only on the box — never a full-stage wash
+        face.bgcolor = _hex_to_rgba(b.color_hex, 0.28 if selected else 0.16)
         face.border = ft.Border.all(3 if selected else 2, b.color_hex)
         try:
             if isinstance(face.content, ft.Container) and isinstance(
@@ -220,7 +290,7 @@ class RegionBoxOverlay:
         is_sel = index == self._selected
         face = ft.Container(
             expand=True,
-            bgcolor=_hex_to_rgba(b.color_hex, 0.38 if is_sel else 0.22),
+            bgcolor=_hex_to_rgba(b.color_hex, 0.28 if is_sel else 0.16),
             border=ft.Border.all(3 if is_sel else 2, b.color_hex),
             border_radius=2,
             content=ft.Container(
@@ -236,7 +306,8 @@ class RegionBoxOverlay:
             ),
             data=f"box:{index}",
         )
-        shell = ft.Container(data=f"shell:{index}")
+        # Shell: no fill — only the face paints (host is content-rect sized)
+        shell = ft.Container(data=f"shell:{index}", bgcolor=None)
         self._place(shell, b)
 
         if not self.interactive:
@@ -337,12 +408,8 @@ class RegionEditorPanel:
             on_geometry=self._on_drag_geometry,
             interactive=True,
         )
+        # Panel = mini preview size; host lays out to content_rect only
         self.mini_overlay.set_stack_size(280, 180)
-        self.mini_overlay.root.width = 280
-        self.mini_overlay.root.height = 180
-        self.mini_overlay.root.expand = False
-        self.mini_overlay.root.left = 0
-        self.mini_overlay.root.top = 0
         self.preview_placeholder = ft.Container(
             content=ft.Text(
                 "Upload a still to place region boxes",

@@ -376,10 +376,9 @@ class StudioImageView:
             on_geometry=self._on_region_geometry,
             interactive=False,
         )
+        # Panel size for letterbox math; host lays out to content_rect only
         self.region_source_overlay.set_stack_size(RAIL_WIDTH - 40, 120)
-        self.region_source_overlay.root.expand = False
-        self.region_source_overlay.root.width = RAIL_WIDTH - 40
-        self.region_source_overlay.root.height = 120
+        self.region_stage_overlay.set_stack_size(800, 500)
 
         # Scene builder (furniture)
         self.room_dd = styled_dropdown(
@@ -840,32 +839,46 @@ class StudioImageView:
         # CONTAIN + expand (not edge-pinned) so wide windows letterbox, never crop.
         self._overlay_opacity = 0.5
         self._ab_gen: bool | None = None  # None = slider; True/False = force gen/source
+        # Pin images to full stage so CONTAIN letterboxes inside the same
+        # bounds as region boxes (not a non-positioned expand child).
         self.overlay_base = ft.Image(
             src="",
             fit=ft.BoxFit.CONTAIN,
-            expand=True,
+            left=0,
+            top=0,
+            right=0,
+            bottom=0,
             visible=False,
             gapless_playback=True,
+            opacity=1.0,
         )
         self.overlay_gen_img = ft.Image(
             src="",
             fit=ft.BoxFit.CONTAIN,
-            expand=True,
+            left=0,
+            top=0,
+            right=0,
+            bottom=0,
             gapless_playback=True,
+            opacity=1.0,
         )
         self.overlay_gen_layer = ft.Container(
             content=self.overlay_gen_img,
-            opacity=0.5,
-            expand=True,
+            opacity=0.0,
+            left=0,
+            top=0,
+            right=0,
+            bottom=0,
             visible=False,
             alignment=ft.Alignment.CENTER,
             clip_behavior=ft.ClipBehavior.NONE,
+            bgcolor=ft.Colors.TRANSPARENT,
         )
+        # Stack rebuilt by _rebuild_overlay_stack — region placement omits gen.
         self.overlay_stack = ft.Stack(
             [
                 self.overlay_base,
                 self.region_stage_overlay.root,
-                self.overlay_gen_layer,
             ],
             expand=True,
             fit=ft.StackFit.EXPAND,
@@ -888,6 +901,8 @@ class StudioImageView:
         )
         # Fills remaining right-pane height only when a comparison exists
         # (expand=False while empty — avoids a full-window grey void)
+        self._stage_layout_w: float = 0.0
+        self._stage_layout_h: float = 0.0
         self.overlay_stage = ft.Container(
             content=self.overlay_stack,
             expand=False,
@@ -897,6 +912,8 @@ class StudioImageView:
             alignment=ft.Alignment.CENTER,
             clip_behavior=ft.ClipBehavior.NONE,
             visible=False,
+            # Real panel size → region box letterbox math (not window guess)
+            on_size_change=self._on_overlay_stage_size,
         )
 
         self.overlay_slider = ft.Slider(
@@ -1337,6 +1354,9 @@ class StudioImageView:
         self.region_panel.set_visible(is_region)
         # Hide scenario builders in region mode (region uses its own prompts)
         if is_region:
+            # Default to Source 100% — never open Region on a 50% blend veil
+            self._ab_gen = False
+            self._overlay_opacity = 0.0
             self.furniture_builder.visible = False
             self.simple_builder.visible = False
             if prev != "region":
@@ -1358,7 +1378,7 @@ class StudioImageView:
             self._refresh_region_overlays()
             self._set_status(
                 "Region mode — Seedream / annotation-model only. "
-                "Colored boxes on the large image; L/T/W/H for precision. "
+                "Source shown clear for box placement; L/T/W/H for precision. "
                 "Generate composites boxes onto the still (fails hard if composite fails)."
             )
             self._sync_refs_panel()
@@ -1444,6 +1464,8 @@ class StudioImageView:
         if self._edit_mode != "region":
             return
         try:
+            # Keep stage size current before reflow
+            self._apply_region_viewport_sizes()
             self.region_panel.sync_main_overlay(
                 self.region_stage_overlay, full_rebuild=False
             )
@@ -1466,12 +1488,245 @@ class StudioImageView:
         except Exception:
             pass
 
+    def _on_overlay_stage_size(self, e: Any) -> None:
+        """Comparison stage layout size — source of truth for large box letterbox."""
+        from media_studio.flet_region import size_from_layout_event
+
+        try:
+            w, h = size_from_layout_event(e)
+            if w > 1 and h > 1:
+                self._stage_layout_w = w
+                self._stage_layout_h = h
+                if getattr(self, "_edit_mode", "standard") == "region":
+                    self.region_stage_overlay.set_stack_size(w, h, reflow=True)
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _estimate_stage_size(self) -> tuple[float, float]:
+        """
+        Fallback when layout size is not yet known.
+
+        Must subtract left rail + versions rail so letterbox matches CONTAIN.
+        """
+        try:
+            pw = float(getattr(self.page, "width", None) or 1200)
+            ph = float(getattr(self.page, "height", None) or 800)
+        except Exception:
+            pw, ph = 1200.0, 800.0
+        # Fixed left rail + split spacing/padding
+        left_take = float(RAIL_WIDTH) + 40.0
+        # Versions rail is ~196 wide when visible
+        compare_take = 0.0
+        try:
+            if getattr(self._compare_rail, "visible", False):
+                compare_take = 196.0 + 12.0
+        except Exception:
+            pass
+        # Header / chrome above the stage
+        chrome_h = 220.0
+        sw = max(200.0, pw - left_take - compare_take - 24.0)
+        sh = max(200.0, ph - chrome_h)
+        return sw, sh
+
+    def _apply_region_viewport_sizes(self) -> None:
+        """
+        Push the same image WxH into both overlays; panel sizes are the real
+        host bounds (measured stage, fixed left source stack).
+        """
+        iw, ih = self.region_panel.image_size()
+        self.region_stage_overlay.set_image_size(iw, ih)
+        self.region_source_overlay.set_image_size(iw, ih)
+        # Small left source stack is fixed (matches Stack width/height)
+        src_w = float(RAIL_WIDTH - 40)
+        src_h = 120.0
+        self.region_source_overlay.set_stack_size(src_w, src_h)
+        # Large stage: prefer measured layout size
+        if self._stage_layout_w > 1 and self._stage_layout_h > 1:
+            sw, sh = self._stage_layout_w, self._stage_layout_h
+        else:
+            sw, sh = self._estimate_stage_size()
+        self.region_stage_overlay.set_stack_size(sw, sh)
+
+    def _region_source_only(self) -> bool:
+        """
+        True when Region placement should force Source 100% / Gen hidden.
+
+        Blend is allowed only when the user explicitly toggles A/B to Generation
+        *and* a real generation path exists.
+        """
+        if getattr(self, "_edit_mode", "standard") != "region":
+            return False
+        # Explicit A/B → gen review after generate
+        if self._ab_gen is True and self._resolve_local_image(self._selected_gen()):
+            return False
+        return True
+
+    def _rebuild_overlay_stack(self, *, include_gen: bool, include_boxes: bool) -> bool:
+        """
+        Rebuild Comparison Stack children.
+
+        Region source-only omits gen so a blend layer cannot grey-wash the photo.
+        Returns True on success. Does not swallow errors (caller may status-report).
+        """
+        layers: list[ft.Control] = [self.overlay_base]
+        if include_gen:
+            layers.append(self.overlay_gen_layer)
+        if include_boxes:
+            layers.append(self.region_stage_overlay.root)
+        self.overlay_stack.controls = layers
+        # Assert: source-only never leaves gen in the tree
+        if not include_gen:
+            for c in self.overlay_stack.controls:
+                if c is self.overlay_gen_layer:
+                    raise RuntimeError(
+                        "Region source-only: gen layer still in overlay_stack"
+                    )
+        return True
+
+    def _log_region_stage_layers(self, *, where: str = "") -> None:
+        """Debug which layers are live (status line when REGION_STAGE_DEBUG=1)."""
+        import os
+
+        if os.environ.get("REGION_STAGE_DEBUG", "").strip() not in ("1", "true", "yes"):
+            return
+        try:
+            gen_vis = bool(getattr(self.overlay_gen_layer, "visible", False))
+            gen_op = float(getattr(self.overlay_gen_layer, "opacity", 0) or 0)
+            base_vis = bool(getattr(self.overlay_base, "visible", False))
+            base_op = float(getattr(self.overlay_base, "opacity", 1) or 1)
+            box_vis = bool(getattr(self.region_stage_overlay.root, "visible", False))
+            ctrls = list(getattr(self.overlay_stack, "controls", []) or [])
+            n_stack = len(ctrls)
+            gen_in = any(c is self.overlay_gen_layer for c in ctrls)
+            ox = oy = dw = dh = 0.0
+            try:
+                ox, oy, dw, dh = self.region_stage_overlay.content_rect()
+            except Exception:
+                pass
+            msg = (
+                f"[region-stage {where}] base vis={base_vis} op={base_op:.2f} · "
+                f"gen vis={gen_vis} op={gen_op:.2f} in_stack={gen_in} · "
+                f"boxes={box_vis} host=({ox:.0f},{oy:.0f} {dw:.0f}x{dh:.0f}) · "
+                f"stack_n={n_stack} · ab={self._ab_gen} blend={self._overlay_opacity:.2f}"
+            )
+            print(msg, flush=True)
+            try:
+                self._set_status(msg)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _set_region_stage_layers(self, *, src_visible: bool = True) -> None:
+        """
+        Region placement: source at full brightness; gen out of the stack.
+
+        Box host is content_rect-sized only (not full-stage) — see RegionBoxOverlay.
+        """
+        src_s = self._resolve_local_image(self.state.source_path) or ""
+        show_src = bool(src_visible) and bool(src_s)
+        try:
+            if show_src:
+                self.overlay_base.src = src_s
+                self.overlay_base.visible = True
+                self.overlay_base.opacity = 1.0
+                self.overlay_base.fit = ft.BoxFit.CONTAIN
+            else:
+                self.overlay_base.visible = False
+
+            if self._region_source_only():
+                self._ab_gen = False
+                self._overlay_opacity = 0.0
+                try:
+                    self.overlay_slider.value = 0.0
+                    self.ab_switch.value = False
+                    self.ab_switch.label = "A/B · Source 100%"
+                    self.overlay_mode_label.value = "Region · Source only (place boxes)"
+                except Exception:
+                    pass
+                try:
+                    self.overlay_gen_img.src = ""
+                except Exception:
+                    pass
+                self.overlay_gen_layer.visible = False
+                self.overlay_gen_layer.opacity = 0.0
+                try:
+                    self._rebuild_overlay_stack(include_gen=False, include_boxes=True)
+                except Exception as exc:
+                    # Never leave a Standard (base+gen) stack under Region
+                    try:
+                        self.overlay_stack.controls = [
+                            self.overlay_base,
+                            self.region_stage_overlay.root,
+                        ]
+                    except Exception:
+                        pass
+                    try:
+                        self._set_status(
+                            f"Region stage rebuild failed (source-only forced): {exc}"
+                        )
+                    except Exception:
+                        pass
+            else:
+                # Explicit gen review in Region (A/B Generation on)
+                gen_s = self._resolve_local_image(self._selected_gen()) or ""
+                if gen_s:
+                    self.overlay_gen_img.src = gen_s
+                    self.overlay_gen_layer.visible = True
+                    self.overlay_gen_layer.opacity = 1.0
+                    try:
+                        self._rebuild_overlay_stack(
+                            include_gen=True, include_boxes=True
+                        )
+                    except Exception as exc:
+                        try:
+                            self._set_status(f"Region gen stack rebuild failed: {exc}")
+                        except Exception:
+                            pass
+                else:
+                    self.overlay_gen_layer.visible = False
+                    self.overlay_gen_layer.opacity = 0.0
+                    try:
+                        self._rebuild_overlay_stack(
+                            include_gen=False, include_boxes=True
+                        )
+                    except Exception as exc:
+                        try:
+                            self.overlay_stack.controls = [
+                                self.overlay_base,
+                                self.region_stage_overlay.root,
+                            ]
+                        except Exception:
+                            pass
+                        try:
+                            self._set_status(
+                                f"Region stage rebuild failed (source-only): {exc}"
+                            )
+                        except Exception:
+                            pass
+
+            try:
+                self.region_stage_overlay.root.bgcolor = None
+                self.region_stage_overlay.root.opacity = 1.0
+            except Exception:
+                pass
+            self._log_region_stage_layers(where="set_region_layers")
+        except Exception as exc:
+            try:
+                self._set_status(f"Region stage layer error: {exc}")
+            except Exception:
+                pass
+
     def _refresh_region_overlays(self, *, full_rebuild: bool = False) -> None:
         """
         Lightweight overlays on static source image — no PIL re-encode.
 
-        Images always use CONTAIN (correct aspect). Boxes map to the letterboxed
-        image content rect. Annotated export is deferred to Generate.
+        Region placement: full-brightness source only + colored boxes (no blend).
+        Images always use CONTAIN; boxes map to the letterboxed content rect.
         """
         # Always preserve aspect on previews
         try:
@@ -1490,6 +1745,14 @@ class StudioImageView:
                 self.source_preview.src = src
                 self.source_preview.visible = True
                 self.source_placeholder.visible = False
+            # Restore standard stack (base + gen + no boxes)
+            try:
+                self._rebuild_overlay_stack(include_gen=True, include_boxes=False)
+            except Exception as exc:
+                try:
+                    self._set_status(f"Compare stack rebuild failed: {exc}")
+                except Exception:
+                    pass
             return
 
         src = self.state.source_path
@@ -1498,40 +1761,34 @@ class StudioImageView:
             self.region_source_overlay.set_visible(False)
             return
 
-        # Static source (never rewrite on slider) — CONTAIN, not stretch
+        # Left rail: full-brightness source + boxes
         self.source_preview.src = src
         self.source_preview.visible = True
+        self.source_preview.opacity = 1.0
         self.source_placeholder.visible = False
+
+        # Large stage: expand, source-only path
         self.overlay_placeholder.visible = False
         self.overlay_stage.visible = True
-        self.overlay_base.src = src
-        self.overlay_base.visible = True
+        try:
+            self.overlay_stage.expand = True
+            self._workspace_col.expand = True
+            self._workspace_col.tight = False
+            self._compare_body_row.expand = True
+            self._compare_body_row.vertical_alignment = ft.CrossAxisAlignment.STRETCH
+            self._right_col.expand = True
+            self._right_col.tight = False
+            self._compare_rail.visible = True
+        except Exception:
+            pass
 
-        # Gen still on top if present (also CONTAIN)
-        gen_s = self._resolve_local_image(self._selected_gen()) or ""
-        if gen_s:
-            self.overlay_gen_img.src = gen_s
-            self.overlay_gen_layer.visible = True
-            self.overlay_gen_layer.opacity = self._effective_overlay_opacity()
-        else:
-            self.overlay_gen_layer.visible = False
+        # Force Source 100% / Gen out of tree (unless user A/B'd to a real gen)
+        self._set_region_stage_layers(src_visible=True)
 
         self.region_stage_overlay.set_visible(True)
         self.region_source_overlay.set_visible(True)
 
-        # Natural image size for letterbox math
-        iw, ih = self.region_panel.image_size()
-        self.region_stage_overlay.set_image_size(iw, ih)
-        self.region_source_overlay.set_image_size(iw, ih)
-        self.region_source_overlay.set_stack_size(RAIL_WIDTH - 40, 120)
-
-        # Approximate Comparison stage size from window
-        try:
-            sw = float(getattr(self.page, "width", None) or 900) - RAIL_WIDTH - 80
-            sh = float(getattr(self.page, "height", None) or 700) - 220
-            self.region_stage_overlay.set_stack_size(max(sw, 200), max(sh, 200))
-        except Exception:
-            self.region_stage_overlay.set_stack_size(800, 500)
+        self._apply_region_viewport_sizes()
 
         self.region_panel.set_output_dir(self.state.output_dir)
         self.region_panel.sync_main_overlay(
@@ -1549,6 +1806,7 @@ class StudioImageView:
         except Exception:
             pass
         self._sync_overlay_labels()
+        self._log_region_stage_layers(where="refresh_region")
 
     def _on_model_or_params_sync(self) -> None:
         """Synchronous model options refresh (region mode Seedream switch)."""
@@ -2113,6 +2371,9 @@ class StudioImageView:
 
     def _effective_overlay_opacity(self) -> float:
         """A/B forces 0 or 1; otherwise use slider (instant, no re-encode)."""
+        # Region placement: never report a mid blend (would re-open gen veil)
+        if self._region_source_only():
+            return 0.0
         if self._ab_gen is True:
             return 1.0
         if self._ab_gen is False:
@@ -2120,6 +2381,12 @@ class StudioImageView:
         return max(0.0, min(1.0, _safe_float(self._overlay_opacity, 0.5)))
 
     def _sync_overlay_labels(self) -> None:
+        if self._region_source_only():
+            self.overlay_mode_label.value = "Region · Source only (place boxes)"
+            self.overlay_slider.value = 0.0
+            self.ab_switch.value = False
+            self.ab_switch.label = "A/B · Source 100%"
+            return
         op = self._effective_overlay_opacity()
         if self._ab_gen is True:
             mode = "A/B · Generation 100%"
@@ -2142,13 +2409,15 @@ class StudioImageView:
         Instant local compositing: source under, generation opacity on top.
         No PIL / disk write on slider or A/B flip — stays smooth.
 
-        Region boxes are a separate Stack layer (region_stage_overlay), not baked in.
+        Region placement forces source-only (gen removed from stack). Boxes are
+        a separate Stack layer (region_stage_overlay), not baked in.
         """
         src_s = self._resolve_local_image(self.state.source_path) or ""
         gen_s = self._resolve_local_image(self._selected_gen()) or ""
         has_src = bool(src_s)
         has_gen = bool(gen_s)
         op = self._effective_overlay_opacity()
+        is_region = getattr(self, "_edit_mode", "standard") == "region"
 
         if not has_src and not has_gen:
             self.overlay_placeholder.visible = True
@@ -2202,9 +2471,30 @@ class StudioImageView:
         except Exception:
             pass
 
+        if is_region and has_src:
+            # Source-only placement (or explicit A/B gen) — never 50% blank blend
+            self._set_region_stage_layers(src_visible=True)
+            try:
+                self._apply_region_viewport_sizes()
+                self.region_stage_overlay.set_visible(True)
+                self.region_source_overlay.set_visible(True)
+                self.region_panel.sync_main_overlay(
+                    self.region_stage_overlay, full_rebuild=False
+                )
+                self.region_panel.sync_main_overlay(
+                    self.region_source_overlay, full_rebuild=False
+                )
+            except Exception:
+                pass
+            self._sync_overlay_labels()
+            self._log_region_stage_layers(where="apply_overlay_region")
+            return
+
+        # --- Standard compare path ---
         if has_src:
             self.overlay_base.src = src_s
             self.overlay_base.visible = True
+            self.overlay_base.opacity = 1.0
         else:
             self.overlay_base.visible = False
 
@@ -2213,27 +2503,26 @@ class StudioImageView:
             self.overlay_gen_layer.visible = True
             # Gen-only: full opacity so the stage is never empty grey
             self.overlay_gen_layer.opacity = op if has_src else 1.0
+            try:
+                self._rebuild_overlay_stack(include_gen=True, include_boxes=False)
+            except Exception as exc:
+                try:
+                    self._set_status(f"Compare stack rebuild failed: {exc}")
+                except Exception:
+                    pass
         else:
             self.overlay_gen_layer.visible = False
             self.overlay_gen_layer.opacity = 0.0
-
-        # Region boxes: letterbox-aligned to CONTAIN image content
-        try:
-            if getattr(self, "_edit_mode", "standard") == "region" and has_src:
-                iw, ih = self.region_panel.image_size()
-                self.region_stage_overlay.set_image_size(iw, ih)
+            try:
+                self._rebuild_overlay_stack(include_gen=False, include_boxes=False)
+            except Exception as exc:
                 try:
-                    sw = float(getattr(self.page, "width", None) or 900) - RAIL_WIDTH - 80
-                    sh = float(getattr(self.page, "height", None) or 700) - 220
-                    self.region_stage_overlay.set_stack_size(max(sw, 200), max(sh, 200))
+                    self._set_status(f"Compare stack rebuild failed: {exc}")
                 except Exception:
                     pass
-                self.region_stage_overlay.set_visible(True)
-                self.region_panel.sync_main_overlay(
-                    self.region_stage_overlay, full_rebuild=False
-                )
-            else:
-                self.region_stage_overlay.set_visible(False)
+
+        try:
+            self.region_stage_overlay.set_visible(False)
         except Exception:
             pass
 
@@ -2388,6 +2677,20 @@ class StudioImageView:
 
     async def _on_overlay_slider(self, e: ft.ControlEvent) -> None:
         """Slider drag: only change layer opacity (no re-render / disk I/O)."""
+        # Region placement ignores blend — keep source-only
+        if self._region_source_only() or (
+            getattr(self, "_edit_mode", "standard") == "region"
+            and self._ab_gen is not True
+        ):
+            self._ab_gen = False
+            self._overlay_opacity = 0.0
+            try:
+                self.overlay_slider.value = 0.0
+            except Exception:
+                pass
+            self._apply_overlay_visuals()
+            self.page.update()
+            return
         self._ab_gen = None
         val = _safe_float(
             e.control.value if e and e.control is not None else self.overlay_slider.value,
@@ -2402,6 +2705,10 @@ class StudioImageView:
         show_gen = bool(e.control.value) if e and e.control is not None else False
         self._ab_gen = show_gen
         self._overlay_opacity = 1.0 if show_gen else 0.0
+        # Region + Source: force clear photo; Region + Gen only if a result exists
+        if getattr(self, "_edit_mode", "standard") == "region" and not show_gen:
+            self._ab_gen = False
+            self._overlay_opacity = 0.0
         self._apply_overlay_visuals()
         self.page.update()
 

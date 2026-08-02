@@ -60,14 +60,55 @@ APP_DESCRIPTION = (
     "Outputs: outputs/YYYY-MM-DD/."
 )
 
-# Version / update check (Phase 8) — bump when shipping; build date is calendar day
+# Version / update check — prefer APP_VERSION + git SHA over calendar stamps
 try:
     from media_studio import __version__ as _pkg_ver
 
     APP_VERSION = str(_pkg_ver or "0.1.2").strip() or "0.1.2"
 except Exception:
     APP_VERSION = "0.1.2"
+# Calendar day of this build/release (YYYY-MM-DD). Bump on tagged releases.
+# Same-day remote commits are treated as current unless the git SHA differs.
 APP_BUILD_DATE = os.environ.get("AI_MEDIA_STUDIO_BUILD_DATE", "2026-08-01").strip()
+
+
+def _resolve_app_git_sha() -> str:
+    """
+    Embedded / local git SHA for update checks (full or short).
+
+    Order: env AI_MEDIA_STUDIO_GIT_SHA → media_studio/_build_sha.txt →
+    ``git rev-parse HEAD`` from PROJECT_ROOT → empty.
+    """
+    env = (os.environ.get("AI_MEDIA_STUDIO_GIT_SHA") or "").strip()
+    if env:
+        return env[:40]
+    try:
+        sha_file = Path(__file__).resolve().parent / "_build_sha.txt"
+        if sha_file.is_file():
+            raw = sha_file.read_text(encoding="utf-8").strip().splitlines()
+            if raw and raw[0].strip():
+                return raw[0].strip()[:40]
+    except OSError:
+        pass
+    try:
+        import subprocess
+
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if out.returncode == 0 and (out.stdout or "").strip():
+            return (out.stdout or "").strip()[:40]
+    except Exception:
+        pass
+    return ""
+
+
+APP_GIT_SHA = _resolve_app_git_sha()
 GITHUB_REPO = "darcyallen-tech/ai-media-studio"
 GITHUB_URL = f"https://github.com/{GITHUB_REPO}"
 
