@@ -47,8 +47,19 @@ class VisionModelSpec:
     last_frame_field: str = "last_frame_url"
     # I2V start frame / I2I source field
     image_field: str = "image_url"
-    # I2V optional end frame (e.g. Hailuo) — hide UI when False
+    # I2V optional end frame (e.g. Hailuo / MiniMax H3) — hide UI when False
     supports_end_frame: bool = False
+    # Omni reference-to-video (MiniMax H3): images + videos + audio
+    omni_reference: bool = False
+    max_ref_videos: int = 0
+    max_ref_audios: int = 0
+    max_total_refs: int = 0  # 0 = no combined cap; H3 = 12
+    # Duration sent as integer seconds (H3) vs string enums
+    duration_as_int: bool = False
+    # Native stereo always on output — hide generate_audio; show note in UI
+    native_stereo_audio: bool = False
+    # Prompt citation: "plain" → Image 1 / Video 1; "at" → @Image1
+    prompt_citation_style: str = ""
     # Image→Image: key into fal IMAGE_EDIT_MODELS for build_edit_arguments
     edit_model_key: str = ""
     # Show strength slider when True (passed if API accepts)
@@ -657,6 +668,60 @@ T2V_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="720p",
         extra_defaults={"loop": False},
     ),
+    "minimax h3 t2v": VisionModelSpec(
+        key="minimax h3 t2v",
+        label="MiniMax H3 · Text→Video",
+        mode="text_to_video",
+        endpoint="minimax/h3/text-to-video",
+        cost_estimate_usd=1.30,  # 5s × $0.26
+        cost_per_second=0.26,
+        notes=(
+            "MiniMax H3 (Hailuo-03) T2V — 5–15s · 2K · native stereo audio. "
+            "Est. ~$0.26/s @2K. Prefer Omni when you have stills/motion/audio refs."
+        ),
+        duration_choices=tuple(str(i) for i in range(5, 16)),
+        default_duration="5",
+        aspect_choices=("21:9", "16:9", "4:3", "1:1", "3:4", "9:16"),
+        default_aspect="16:9",
+        resolution_choices=("2K",),
+        default_resolution="2K",
+        supports_audio=False,  # native stereo always; no toggle
+        supports_negative=False,
+        duration_as_int=True,
+        native_stereo_audio=True,
+    ),
+    "minimax h3 omni": VisionModelSpec(
+        key="minimax h3 omni",
+        label="MiniMax H3 · Omni reference",
+        mode="text_to_video",
+        endpoint="minimax/h3/reference-to-video",
+        cost_estimate_usd=1.30,
+        cost_per_second=0.26,
+        notes=(
+            "H3 omni reference-to-video — up to 9 images + 3 videos + 3 audio "
+            "(≤12 files). Cite as Image 1 / Video 1 / Audio 1 in the prompt. "
+            "Motion transfer, subject lock, optional Audio 1 bed. "
+            "Native stereo · 2K · 5–15s. Est. ~$0.26/s (+ ref surcharges per fal)."
+        ),
+        duration_choices=tuple(str(i) for i in range(5, 16)),
+        default_duration="5",
+        aspect_choices=(
+            "adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16",
+        ),
+        default_aspect="adaptive",
+        resolution_choices=("2K",),
+        default_resolution="2K",
+        supports_audio=False,
+        supports_negative=False,
+        max_refs=9,
+        max_ref_videos=3,
+        max_ref_audios=3,
+        max_total_refs=12,
+        omni_reference=True,
+        duration_as_int=True,
+        native_stereo_audio=True,
+        prompt_citation_style="plain",
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -736,6 +801,30 @@ I2V_MODELS: dict[str, VisionModelSpec] = {
         resolution_choices=("512P", "768P"),
         default_resolution="768P",
         extra_defaults={"prompt_optimizer": True},
+    ),
+    "minimax h3 i2v": VisionModelSpec(
+        key="minimax h3 i2v",
+        label="MiniMax H3 · Image→Video",
+        mode="image_to_video",
+        endpoint="minimax/h3/image-to-video",
+        cost_estimate_usd=1.30,
+        cost_per_second=0.26,
+        notes=(
+            "H3 I2V — start still as first frame; optional end still for first→last "
+            "(day→night / porch→interior). 5–15s · 2K · native stereo. "
+            "Est. ~$0.26/s @2K. Aspect follows the start image."
+        ),
+        duration_choices=tuple(str(i) for i in range(5, 16)),
+        default_duration="5",
+        aspect_choices=("auto",),
+        default_aspect="auto",
+        resolution_choices=("2K",),
+        default_resolution="2K",
+        supports_audio=False,
+        supports_negative=False,
+        supports_end_frame=True,
+        duration_as_int=True,
+        native_stereo_audio=True,
     ),
 }
 
@@ -939,9 +1028,16 @@ def estimate_vision_cost(
         flat = float(spec.cost_estimate_usd or 0.0)
         base = flat * (secs / default_secs) if default_secs > 0 else flat
 
-    # Resolution multipliers only when the model bills by res (not flat $/s Veo)
+    # Resolution multipliers only when the model bills by res (not flat $/s Veo/H3)
     ep = (spec.endpoint or "").lower()
-    if "veo3.1" not in ep and "veo3" not in ep:
+    is_flat_rate = (
+        "veo3.1" in ep
+        or "veo3" in ep
+        or "minimax/h3" in ep
+        or "hailuo-03" in ep
+        or (spec.cost_per_second is not None and "2k" in (spec.default_resolution or "").lower())
+    )
+    if not is_flat_rate:
         res = (resolution or spec.default_resolution or "720p").lower()
         if "1080" in res or res == "1080p":
             base *= 1.35
@@ -1002,6 +1098,8 @@ def build_vision_arguments(
     first_frame_url: str | None = None,
     last_frame_url: str | None = None,
     ref_urls: list[str] | None = None,
+    ref_video_urls: list[str] | None = None,
+    ref_audio_urls: list[str] | None = None,
     duration: str | None = None,
     aspect_ratio: str | None = None,
     resolution: str | None = None,
@@ -1067,23 +1165,47 @@ def build_vision_arguments(
             "Image→Image uses build_edit_arguments in vision_service (not this path)."
         )
 
+    ep = spec.endpoint.lower()
+    is_h3 = "minimax/h3" in ep or "hailuo-03" in ep
+
     dur = (duration or spec.default_duration or "").strip()
     if dur and spec.duration_param and spec.duration_choices:
         # Normalize: some models want "8s", others "8" / "5"
-        if "veo" in spec.endpoint or "luma" in spec.endpoint:
+        if "veo" in ep or "luma" in ep:
             if not dur.endswith("s") and dur.isdigit():
                 dur = f"{dur}s"
-        elif "kling" in spec.endpoint or "seedance" in spec.endpoint or "hailuo" in spec.endpoint:
-            dur = dur.replace("s", "")
+        elif (
+            "kling" in ep
+            or "seedance" in ep
+            or "hailuo" in ep
+            or is_h3
+        ):
+            dur = dur.replace("s", "").strip()
         if spec.duration_choices and dur not in spec.duration_choices:
             # try closest allowed
             dur = spec.default_duration
-        args[spec.duration_param] = dur
+        if getattr(spec, "duration_as_int", False) or is_h3:
+            try:
+                args[spec.duration_param] = int(str(dur).replace("s", ""))
+            except (TypeError, ValueError):
+                args[spec.duration_param] = dur
+        else:
+            args[spec.duration_param] = dur
 
     aspect = (aspect_ratio or spec.default_aspect or "").strip()
-    ep = spec.endpoint.lower()
 
-    if "hailuo" in ep:
+    if is_h3:
+        res = resolution or spec.default_resolution or "2K"
+        # API expects "2K"
+        if str(res).lower() == "2k":
+            res = "2K"
+        args["resolution"] = res
+        # I2V: aspect follows start image (no aspect_ratio param)
+        # T2V / omni: send aspect including "adaptive"
+        if "image-to-video" not in ep:
+            if aspect and aspect not in ("", "—"):
+                args["aspect_ratio"] = aspect
+    elif "hailuo" in ep:
         res = resolution or spec.default_resolution
         if res:
             args["resolution"] = res
@@ -1113,8 +1235,10 @@ def build_vision_arguments(
         if not image_url:
             raise ValueError("Image→Video needs a start still.")
         args[spec.image_field] = image_url
-        # Optional last frame for Hailuo when used as I2V with end
-        if last_frame_url and "hailuo" in spec.endpoint:
+        # Optional last frame for Hailuo / H3 I2V
+        if last_frame_url and (
+            "hailuo" in ep or is_h3 or getattr(spec, "supports_end_frame", False)
+        ):
             args["end_image_url"] = last_frame_url
 
     elif spec.mode == "bridge":
@@ -1124,7 +1248,61 @@ def build_vision_arguments(
         args[spec.last_frame_field] = last_frame_url
 
     elif spec.mode == "text_to_video":
-        if spec.max_refs > 0:
+        if getattr(spec, "omni_reference", False) or (
+            is_h3 and "reference-to-video" in ep
+        ):
+            # MiniMax H3 omni: reference_image_urls / _video_ / _audio_
+            imgs = [u for u in (ref_urls or []) if u]
+            vids = [u for u in (ref_video_urls or []) if u]
+            auds = [u for u in (ref_audio_urls or []) if u]
+            if not imgs and not vids:
+                raise ValueError(
+                    "Omni reference needs at least one still or motion clip "
+                    "(audio cannot be the only reference)."
+                )
+            if auds and not imgs and not vids:
+                raise ValueError(
+                    "Reference audio must accompany an image or video reference."
+                )
+            cap_i = max(1, int(spec.max_refs or 9))
+            cap_v = max(0, int(getattr(spec, "max_ref_videos", 0) or 0)) or 3
+            cap_a = max(0, int(getattr(spec, "max_ref_audios", 0) or 0)) or 3
+            total_cap = int(getattr(spec, "max_total_refs", 0) or 0) or 12
+            imgs = imgs[:cap_i]
+            vids = vids[:cap_v]
+            auds = auds[:cap_a]
+            # Trim to combined cap (prefer keeping videos + images, drop audio last)
+            while len(imgs) + len(vids) + len(auds) > total_cap:
+                if auds:
+                    auds.pop()
+                elif imgs and len(imgs) > 1:
+                    imgs.pop()
+                elif vids:
+                    vids.pop()
+                else:
+                    break
+            if imgs:
+                args["reference_image_urls"] = imgs
+            if vids:
+                args["reference_video_urls"] = vids
+            if auds:
+                args["reference_audio_urls"] = auds
+            # Soft-inject citation language if missing
+            style = (getattr(spec, "prompt_citation_style", None) or "plain").lower()
+            low = text.lower()
+            if style == "plain" and "image 1" not in low and "video 1" not in low:
+                cite_bits: list[str] = []
+                if imgs:
+                    cite_bits.append("Image 1 as subject/style lock")
+                if vids:
+                    cite_bits.append("Video 1 as camera path / motion only")
+                if auds:
+                    cite_bits.append("Audio 1 as timed bed")
+                if cite_bits:
+                    args["prompt"] = (
+                        text.rstrip(".") + ". Use " + "; ".join(cite_bits) + "."
+                    )
+        elif spec.max_refs > 0:
             urls = [u for u in (ref_urls or []) if u]
             if not urls:
                 raise ValueError(

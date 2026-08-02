@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 import flet as ft
 
 from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
-from media_studio.flet_pickers import pick_image
+from media_studio.flet_pickers import pick_audio, pick_image, pick_video
 from media_studio.flet_progress import JobProgress, classify_progress
 from media_studio.flet_source_strip import PreviousSourcesStrip, ResolveSourcesStrip
 from media_studio.flet_theme import (
@@ -101,6 +101,9 @@ class CreativeVisionView:
         self.start_path: str | None = None
         self.end_path: str | None = None
         self.ref_paths: list[str] = []
+        # MiniMax H3 omni: motion + audio plates (stills use ref_paths)
+        self.ref_video_paths: list[str] = []
+        self.ref_audio_paths: list[str] = []
         self._result_path: str | None = None
 
         # Mode nav (T2I / I2I first for still-then-Aleph / bridge workflows)
@@ -429,6 +432,101 @@ class CreativeVisionView:
             visible=False,
         )
 
+        # MiniMax H3 omni reference panel (images / videos / audio + intent chips)
+        self.omni_helper = ft.Text(
+            "Cite each as Image 1, Video 1, Audio 1 in the prompt. "
+            "Empty slots OK. Max 9 stills + 3 clips + 3 audio (≤12 files). "
+            "Native stereo always on output.",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=3,
+            visible=False,
+        )
+        self.omni_images_label = ft.Text(
+            "Images 0/9", size=FONT_SM, color=TEXT_MUTED, visible=False
+        )
+        self.omni_videos_label = ft.Text(
+            "Videos 0/3", size=FONT_SM, color=TEXT_MUTED, visible=False
+        )
+        self.omni_audio_label = ft.Text(
+            "Audio 0/3", size=FONT_SM, color=TEXT_MUTED, visible=False
+        )
+        self.omni_images_chips = ft.Column(spacing=4, tight=True, visible=False)
+        self.omni_videos_chips = ft.Column(spacing=4, tight=True, visible=False)
+        self.omni_audio_chips = ft.Column(spacing=4, tight=True, visible=False)
+        self.btn_omni_img = ft.OutlinedButton(
+            content="Add image",
+            icon=ft.Icons.IMAGE,
+            on_click=self._pick_omni_images,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            visible=False,
+        )
+        self.btn_omni_vid = ft.OutlinedButton(
+            content="Add video",
+            icon=ft.Icons.MOVIE,
+            on_click=self._pick_omni_videos,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            visible=False,
+        )
+        self.btn_omni_aud = ft.OutlinedButton(
+            content="Add audio",
+            icon=ft.Icons.AUDIO_FILE,
+            on_click=self._pick_omni_audio,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            visible=False,
+        )
+        self.btn_omni_clear = ft.TextButton(
+            content="Clear omni refs",
+            on_click=self._clear_omni_refs,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+            visible=False,
+        )
+        self.native_stereo_note = ft.Text(
+            "Native stereo audio always on H3 output — Send to Resolve / Library as video+audio.",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=2,
+            visible=False,
+        )
+        # Intent chips insert citation language into the prompt
+        self._omni_chip_defs = (
+            ("Image 1 = subject lock", "Image 1 = subject lock"),
+            ("Video 1 = camera path only", "Video 1 = camera path / motion only"),
+            ("Audio 1 = timed bed", "Audio 1 = timed bed / VO"),
+            ("Image 2 = style", "Image 2 = style / material reference"),
+        )
+        self.omni_intent_row = ft.Row(spacing=6, wrap=True, visible=False)
+        for chip_label, insert in self._omni_chip_defs:
+            self.omni_intent_row.controls.append(
+                ft.TextButton(
+                    content=chip_label,
+                    on_click=self._make_omni_intent_insert(insert),
+                    style=ft.ButtonStyle(color=ACCENT_BRIGHT),
+                )
+            )
+        self.omni_panel = ft.Column(
+            [
+                label("Omni reference (MiniMax H3)", muted=True),
+                self.omni_helper,
+                ft.Row(
+                    [self.btn_omni_img, self.btn_omni_vid, self.btn_omni_aud, self.btn_omni_clear],
+                    spacing=8,
+                    wrap=True,
+                ),
+                self.omni_images_label,
+                self.omni_images_chips,
+                self.omni_videos_label,
+                self.omni_videos_chips,
+                self.omni_audio_label,
+                self.omni_audio_chips,
+                ft.Text("Intent chips (insert citation language)", size=FONT_SM, color=TEXT_MUTED),
+                self.omni_intent_row,
+            ],
+            spacing=6,
+            tight=True,
+            visible=False,
+        )
+
         # Subject library
         self.subject_dd = styled_dropdown(
             label_text="Use subject",
@@ -587,6 +685,7 @@ class CreativeVisionView:
             self.strength_label,
             self.strength,
             self.gen_audio,
+            self.native_stereo_note,
             _cost_box(self.cost_text),
             ft.Divider(height=1, color=BORDER),
             self.helpers_title,
@@ -625,6 +724,7 @@ class CreativeVisionView:
             self.refs_hint,
             self.refs_actions_row,
             self.refs_chips,
+            self.omni_panel,
             ft.Row(
                 [
                     self.strip_target_label,
@@ -811,17 +911,31 @@ class CreativeVisionView:
             pass
 
     def _on_prev_still(self, path: str) -> None:
-        """Previously used still → I2I source/ref or video start."""
+        """Previously used still → I2I source/ref, omni Image N, or video start."""
         if self._mode == "image_to_image":
             if self._strip_load_as_ref and self._i2i_extra_ref_cap() > 0:
                 self.receive_i2i_ref(path, status=f"Previous ref: {Path(path).name}")
             else:
                 self.receive_i2i_source(path, status=f"Previous: {Path(path).name}")
+        elif self._is_omni_model():
+            try:
+                p = str(Path(path).resolve())
+            except OSError:
+                return
+            mi, _, _, _ = self._omni_caps()
+            if p not in self.ref_paths and len(self.ref_paths) < mi:
+                self.ref_paths.append(p)
+                self._sync_omni_panel()
+                self.status.value = f"Omni Image {len(self.ref_paths)}: {Path(p).name}"
+            try:
+                self.page.update()
+            except Exception:
+                pass
         else:
             self.receive_start_frame(path, status=f"Previous: {Path(path).name}")
 
     def _on_resolve_still(self, path: str) -> None:
-        """From Resolve still → I2I source/ref or start frame."""
+        """From Resolve still → I2I source/ref, omni Image N, or start frame."""
         if self._mode == "image_to_image":
             if self._strip_load_as_ref and self._i2i_extra_ref_cap() > 0:
                 self.receive_i2i_ref(
@@ -831,6 +945,22 @@ class CreativeVisionView:
                 self.receive_i2i_source(
                     path, status=f"From Resolve: {Path(path).name}"
                 )
+        elif self._is_omni_model():
+            try:
+                p = str(Path(path).resolve())
+            except OSError:
+                return
+            mi, _, _, _ = self._omni_caps()
+            if p not in self.ref_paths and len(self.ref_paths) < mi:
+                self.ref_paths.append(p)
+                self._sync_omni_panel()
+                self.status.value = (
+                    f"From Resolve → Omni Image {len(self.ref_paths)}: {Path(p).name}"
+                )
+            try:
+                self.page.update()
+            except Exception:
+                pass
         else:
             self.receive_start_frame(path, status=f"From Resolve: {Path(path).name}")
         try:
@@ -1079,7 +1209,12 @@ class CreativeVisionView:
                 self.res_dd.value = spec.default_resolution
         else:
             self.res_dd.visible = False
-        self.gen_audio.visible = bool(spec.supports_audio) and not still
+        native = bool(getattr(spec, "native_stereo_audio", False))
+        self.gen_audio.visible = bool(spec.supports_audio) and not still and not native
+        try:
+            self.native_stereo_note.visible = native and not still
+        except Exception:
+            pass
         self.negative.visible = bool(spec.supports_negative) or still
         # Strength (I2I when model supports)
         show_str = is_i2i and bool(getattr(spec, "supports_strength", False))
@@ -1095,9 +1230,19 @@ class CreativeVisionView:
             elif still:
                 self.prompt.label = "Image prompt (editable — Enhance rewrites)"
                 self.btn_generate.content = "Generate still"
+            elif getattr(spec, "omni_reference", False):
+                self.prompt.label = (
+                    "Motion prompt — cite Image 1 / Video 1 / Audio 1 (Enhance rewrites)"
+                )
+                self.btn_generate.content = "Generate vision"
             else:
                 self.prompt.label = "Motion / shot prompt (editable — Enhance rewrites)"
                 self.btn_generate.content = "Generate vision"
+        except Exception:
+            pass
+        # Omni panel + cost
+        try:
+            self._sync_omni_panel()
         except Exception:
             pass
         # Total job cost for current duration / res / audio
@@ -1171,14 +1316,311 @@ class CreativeVisionView:
         except Exception:
             return False
 
+    def _is_omni_model(self) -> bool:
+        try:
+            return bool(getattr(self._current_spec(), "omni_reference", False))
+        except Exception:
+            return False
+
+    def _is_native_stereo(self) -> bool:
+        try:
+            return bool(getattr(self._current_spec(), "native_stereo_audio", False))
+        except Exception:
+            return False
+
+    def _omni_caps(self) -> tuple[int, int, int, int]:
+        """max images, videos, audio, total."""
+        try:
+            spec = self._current_spec()
+            mi = max(1, int(getattr(spec, "max_refs", 9) or 9))
+            mv = max(0, int(getattr(spec, "max_ref_videos", 3) or 3))
+            ma = max(0, int(getattr(spec, "max_ref_audios", 3) or 3))
+            mt = max(0, int(getattr(spec, "max_total_refs", 12) or 12)) or 12
+            return mi, mv, ma, mt
+        except Exception:
+            return 9, 3, 3, 12
+
+    def _trim_omni_refs(self) -> None:
+        mi, mv, ma, mt = self._omni_caps()
+        self.ref_paths = list(self.ref_paths)[:mi]
+        self.ref_video_paths = list(self.ref_video_paths)[:mv]
+        self.ref_audio_paths = list(self.ref_audio_paths)[:ma]
+        # Combined cap: drop audio first, then extra images
+        while (
+            len(self.ref_paths)
+            + len(self.ref_video_paths)
+            + len(self.ref_audio_paths)
+            > mt
+        ):
+            if self.ref_audio_paths:
+                self.ref_audio_paths.pop()
+            elif len(self.ref_paths) > 1:
+                self.ref_paths.pop()
+            elif self.ref_video_paths:
+                self.ref_video_paths.pop()
+            else:
+                break
+
+    def _make_omni_intent_insert(self, phrase: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            cur = (self.prompt.value or "").strip()
+            if phrase.lower() in cur.lower():
+                self.status.value = f"Already in prompt: {phrase}"
+            else:
+                self.prompt.value = (cur + (" " if cur else "") + phrase + ".").strip()
+                self.status.value = f"Inserted: {phrase}"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click
+
+    def _sync_omni_panel(self) -> None:
+        """Show/hide MiniMax H3 omni multi-modal ref UI."""
+        show = self._is_omni_model()
+        try:
+            self.omni_panel.visible = show
+            self.omni_helper.visible = show
+            self.omni_images_label.visible = show
+            self.omni_videos_label.visible = show
+            self.omni_audio_label.visible = show
+            self.omni_images_chips.visible = show
+            self.omni_videos_chips.visible = show
+            self.omni_audio_chips.visible = show
+            self.btn_omni_img.visible = show
+            self.btn_omni_vid.visible = show
+            self.btn_omni_aud.visible = show
+            self.btn_omni_clear.visible = show
+            self.omni_intent_row.visible = show
+        except Exception:
+            pass
+        if not show:
+            return
+        self._trim_omni_refs()
+        mi, mv, ma, _mt = self._omni_caps()
+        ni, nv, na = (
+            len(self.ref_paths),
+            len(self.ref_video_paths),
+            len(self.ref_audio_paths),
+        )
+        self.omni_images_label.value = f"Images {ni}/{mi}"
+        self.omni_videos_label.value = f"Videos {nv}/{mv}"
+        self.omni_audio_label.value = f"Audio {na}/{ma}"
+        self.btn_omni_img.disabled = ni >= mi
+        self.btn_omni_vid.disabled = nv >= mv
+        self.btn_omni_aud.disabled = na >= ma
+
+        def _chip_row(
+            paths: list[str], prefix: str, remove_fn
+        ) -> list[ft.Control]:
+            chips: list[ft.Control] = []
+            for i, path in enumerate(list(paths)):
+                name = Path(path).name
+                is_img = prefix == "Image"
+                chips.append(
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Image(
+                                    src=path if is_img and Path(path).is_file() else "",
+                                    width=40,
+                                    height=40,
+                                    fit=ft.BoxFit.COVER,
+                                    border_radius=4,
+                                    visible=is_img and Path(path).is_file(),
+                                )
+                                if is_img
+                                else ft.Icon(
+                                    ft.Icons.MOVIE if prefix == "Video" else ft.Icons.AUDIO_FILE,
+                                    size=28,
+                                    color=TEXT_MUTED,
+                                ),
+                                ft.Text(
+                                    f"{prefix} {i + 1} · {name}",
+                                    size=FONT_SM,
+                                    color=TEXT,
+                                    expand=True,
+                                    max_lines=1,
+                                    overflow=ft.TextOverflow.ELLIPSIS,
+                                ),
+                                ft.IconButton(
+                                    icon=ft.Icons.CLOSE,
+                                    icon_size=16,
+                                    icon_color=TEXT_MUTED,
+                                    tooltip=f"Remove {prefix} {i + 1}",
+                                    on_click=remove_fn(i),
+                                ),
+                            ],
+                            spacing=6,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        bgcolor=PANEL_ELEVATED,
+                        border=ft.Border.all(1, BORDER),
+                        border_radius=6,
+                        padding=ft.Padding.symmetric(horizontal=6, vertical=4),
+                    )
+                )
+            return chips
+
+        self.omni_images_chips.controls = _chip_row(
+            self.ref_paths, "Image", self._make_remove_omni_image
+        )
+        self.omni_videos_chips.controls = _chip_row(
+            self.ref_video_paths, "Video", self._make_remove_omni_video
+        )
+        self.omni_audio_chips.controls = _chip_row(
+            self.ref_audio_paths, "Audio", self._make_remove_omni_audio
+        )
+
+    def _make_remove_omni_image(self, index: int):
+        async def _click(_e: ft.ControlEvent) -> None:
+            if 0 <= index < len(self.ref_paths):
+                removed = self.ref_paths.pop(index)
+                self.status.value = f"Removed Image: {Path(removed).name}"
+            self._sync_omni_panel()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click
+
+    def _make_remove_omni_video(self, index: int):
+        async def _click(_e: ft.ControlEvent) -> None:
+            if 0 <= index < len(self.ref_video_paths):
+                removed = self.ref_video_paths.pop(index)
+                self.status.value = f"Removed Video: {Path(removed).name}"
+            self._sync_omni_panel()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click
+
+    def _make_remove_omni_audio(self, index: int):
+        async def _click(_e: ft.ControlEvent) -> None:
+            if 0 <= index < len(self.ref_audio_paths):
+                removed = self.ref_audio_paths.pop(index)
+                self.status.value = f"Removed Audio: {Path(removed).name}"
+            self._sync_omni_panel()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click
+
+    async def _pick_omni_images(self, e: ft.ControlEvent) -> None:
+        mi, _, _, _ = self._omni_caps()
+        room = mi - len(self.ref_paths)
+        if room <= 0:
+            self.status.value = f"Max {mi} reference images."
+            self.page.update()
+            return
+        try:
+            files = await pick_image(
+                self.page,
+                dialog_title="Omni reference stills (Image 1, Image 2…)",
+                allow_multiple=True,
+            )
+        except Exception as exc:
+            self.status.value = f"Picker error: {exc}"
+            self.page.update()
+            return
+        for f in files or []:
+            if not f.path or len(self.ref_paths) >= mi:
+                break
+            try:
+                p = str(Path(f.path).resolve())
+            except OSError:
+                continue
+            if p not in self.ref_paths:
+                self.ref_paths.append(p)
+        self._trim_omni_refs()
+        self._sync_omni_panel()
+        self.status.value = f"Omni images: {len(self.ref_paths)}"
+        self.page.update()
+
+    async def _pick_omni_videos(self, e: ft.ControlEvent) -> None:
+        _, mv, _, _ = self._omni_caps()
+        if len(self.ref_video_paths) >= mv:
+            self.status.value = f"Max {mv} reference videos."
+            self.page.update()
+            return
+        try:
+            files = await pick_video(
+                self.page,
+                dialog_title="Omni motion ref (Video 1…) — 2–15s each, ≤15s total",
+                allow_multiple=True,
+            )
+        except Exception as exc:
+            self.status.value = f"Picker error: {exc}"
+            self.page.update()
+            return
+        for f in files or []:
+            if not f.path or len(self.ref_video_paths) >= mv:
+                break
+            try:
+                p = str(Path(f.path).resolve())
+            except OSError:
+                continue
+            if p not in self.ref_video_paths:
+                self.ref_video_paths.append(p)
+        self._trim_omni_refs()
+        self._sync_omni_panel()
+        self.status.value = f"Omni videos: {len(self.ref_video_paths)}"
+        self.page.update()
+
+    async def _pick_omni_audio(self, e: ft.ControlEvent) -> None:
+        _, _, ma, _ = self._omni_caps()
+        if len(self.ref_audio_paths) >= ma:
+            self.status.value = f"Max {ma} reference audio clips."
+            self.page.update()
+            return
+        try:
+            files = await pick_audio(
+                self.page,
+                dialog_title="Omni audio ref (Audio 1…) — must accompany image/video",
+                allow_multiple=True,
+            )
+        except Exception as exc:
+            self.status.value = f"Picker error: {exc}"
+            self.page.update()
+            return
+        for f in files or []:
+            if not f.path or len(self.ref_audio_paths) >= ma:
+                break
+            try:
+                p = str(Path(f.path).resolve())
+            except OSError:
+                continue
+            if p not in self.ref_audio_paths:
+                self.ref_audio_paths.append(p)
+        self._trim_omni_refs()
+        self._sync_omni_panel()
+        self.status.value = f"Omni audio: {len(self.ref_audio_paths)}"
+        self.page.update()
+
+    async def _clear_omni_refs(self, e: ft.ControlEvent) -> None:
+        self.ref_paths = []
+        self.ref_video_paths = []
+        self.ref_audio_paths = []
+        self._sync_omni_panel()
+        self.refs_label.value = "No reference pack"
+        self.status.value = "Cleared omni references."
+        self.page.update()
+
     def _apply_mode_visibility(self) -> None:
         is_t2i = self._mode == "text_to_image"
         is_i2i = self._mode == "image_to_image"
         is_i2v = self._mode == "image_to_video"
         is_bridge = self._mode == "bridge"
+        is_omni = self._is_omni_model()
         still = is_still_mode(self._mode)
-        show_start = is_i2v or is_bridge or is_i2i
-        show_end = is_bridge or (is_i2v and self._supports_end_frame())
+        show_start = (is_i2v or is_bridge or is_i2i) and not is_omni
+        show_end = (is_bridge or (is_i2v and self._supports_end_frame())) and not is_omni
         # Source / start still picker
         self.btn_start.visible = show_start
         self.btn_end.visible = show_end
@@ -1202,9 +1644,21 @@ class CreativeVisionView:
             self._sync_i2i_refs_panel()
         except Exception:
             pass
-        # Previously used + From Resolve stills for I2I (and I2V/bridge start)
         try:
-            show_src_strips = is_i2i or is_i2v or is_bridge
+            self._sync_omni_panel()
+        except Exception:
+            pass
+        # Hide generic video ref pack row when omni panel owns refs
+        try:
+            if is_omni:
+                self.refs_actions_row.visible = False
+                self.refs_hint.visible = False
+                self.refs_chips.visible = False
+        except Exception:
+            pass
+        # Previously used + From Resolve stills for I2I (and I2V/bridge start) + omni
+        try:
+            show_src_strips = is_i2i or is_i2v or is_bridge or is_omni
             self.prev_strip.root.visible = show_src_strips
             self.resolve_strip.root.visible = show_src_strips
             if show_src_strips:
@@ -1367,12 +1821,57 @@ class CreativeVisionView:
                 a = active_helper(val)
                 if a:
                     snap[key] = a
-            snap["guidance"] = (
-                "Rewrite for cinematic video generation. "
-                "Use only the helper dimensions that are set (ignore None). "
-                "For bridges: keep architecture consistent between start and end frames. "
-                "Subject refs are consistency help, not perfect identity lock."
+            try:
+                spec = self._current_spec()
+            except Exception:
+                spec = None
+            is_omni = bool(spec and getattr(spec, "omni_reference", False))
+            n_img = len([p for p in self.ref_paths if p and Path(p).is_file()])
+            n_vid = len(
+                [p for p in self.ref_video_paths if p and Path(p).is_file()]
             )
+            n_aud = len(
+                [p for p in self.ref_audio_paths if p and Path(p).is_file()]
+            )
+            if is_omni and (n_img or n_vid or n_aud):
+                snap["guidance"] = (
+                    "Rewrite for MiniMax H3 omni reference-to-video. "
+                    "Attached assets must be cited by modality and order: "
+                    "Image 1, Image 2, … Video 1, … Audio 1, … "
+                    f"(currently {n_img} image(s), {n_vid} video(s), {n_aud} audio). "
+                    "Describe how each plate should guide the shot "
+                    "(e.g. 'Image 1 = subject lock', 'Video 1 = camera path only', "
+                    "'Audio 1 = timed bed'). Do NOT invent API parameters or unsupported "
+                    "flags. Use only helper dimensions that are set. "
+                    "Native stereo is always on — do not add generate_audio toggles."
+                )
+                snap["reference_image_count"] = n_img
+                snap["reference_video_count"] = n_vid
+                snap["reference_audio_count"] = n_aud
+                snap["citation_style"] = "Image N / Video N / Audio N"
+            elif (
+                self._mode == "image_to_video"
+                and spec
+                and getattr(spec, "supports_end_frame", False)
+                and self.end_path
+                and Path(self.end_path).is_file()
+            ):
+                snap["guidance"] = (
+                    "Rewrite for MiniMax H3 (or Hailuo) first→last image-to-video. "
+                    "Start still is the first frame; end still is the last frame. "
+                    "Describe the transition (day→night, porch→interior, etc.) while "
+                    "keeping architecture consistent. No invented API params. "
+                    "Native stereo is always on H3 output."
+                )
+            else:
+                snap["guidance"] = (
+                    "Rewrite for cinematic video generation. "
+                    "Use only the helper dimensions that are set (ignore None). "
+                    "For bridges: keep architecture consistent between start and end frames. "
+                    "Subject refs are consistency help, not perfect identity lock."
+                )
+            if spec and getattr(spec, "native_stereo_audio", False):
+                snap["native_stereo_audio"] = True
         direction = (self.creative_direction.value or "").strip()
         if direction:
             snap["creative_direction"] = direction
@@ -1776,21 +2275,52 @@ class CreativeVisionView:
         job_name: str | None = None,
     ) -> bool:
         """
-        Receive a video from Send-to. Vision is still-driven; surface the path
-        in status (use Studio Video / Tools for full clip workflows).
+        Receive a video from Send-to.
+
+        Omni (MiniMax H3): attach as Video N motion plate.
+        Otherwise: surface status (Studio Video / Tools for full clip workflows).
         """
         try:
             p = Path(path)
             if not p.is_file():
                 self.status.value = f"Video missing: {path}"
                 return False
+            resolved = str(p.resolve())
             name = p.name
         except OSError as exc:
             self.status.value = f"Video error: {exc}"
             return False
+        if self._is_omni_model() or (
+            self._mode == "text_to_video"
+            and "omni" in (( _dd(self.model_dd) or "").lower())
+        ):
+            # Prefer switching to Omni model if available in T2V list
+            try:
+                if not self._is_omni_model() and self._mode == "text_to_video":
+                    labels = vision_labels("text_to_video")
+                    for lab in labels:
+                        if "omni" in lab.lower() and "h3" in lab.lower():
+                            self.model_dd.value = lab
+                            self._sync_model_ui()
+                            break
+            except Exception:
+                pass
+            _, mv, _, _ = self._omni_caps()
+            if resolved not in self.ref_video_paths and len(self.ref_video_paths) < mv:
+                self.ref_video_paths.append(resolved)
+            self._sync_omni_panel()
+            self.status.value = status or self._job_status(
+                f"Omni Video {len(self.ref_video_paths)}: {name}",
+                job_name=job_name,
+            )
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return True
         base = (
             f"Received video {name} — use Send to Studio Video or Tools for "
-            "clip workflows; Vision is primarily still → video."
+            "clip workflows; or pick MiniMax H3 · Omni reference for motion plates."
         )
         self.status.value = status or self._job_status(base, job_name=job_name)
         try:
@@ -2148,9 +2678,25 @@ class CreativeVisionView:
                         if p not in refs:
                             refs.append(p)
 
-        # Reference-to-video models need refs (not I2I — primary is required separately)
+        # Reference-to-video / omni models need refs
         spec = self._current_spec()
-        if (
+        is_omni = bool(getattr(spec, "omni_reference", False))
+        if is_omni:
+            has_omni = bool(refs or self.ref_video_paths)
+            if not has_omni:
+                self.status.value = (
+                    f"{spec.label} needs at least one still or motion clip "
+                    "(Audio alone is not enough)."
+                )
+                self.page.update()
+                return
+            if self.ref_audio_paths and not refs and not self.ref_video_paths:
+                self.status.value = (
+                    "Reference audio must accompany an image or video reference."
+                )
+                self.page.update()
+                return
+        elif (
             self._mode == "text_to_video"
             and spec.max_refs > 0
             and not refs
@@ -2262,6 +2808,16 @@ class CreativeVisionView:
                     )
                     else None
                 ),
+                ref_video_paths=(
+                    list(self.ref_video_paths)
+                    if (not still_job and getattr(spec, "omni_reference", False))
+                    else None
+                ),
+                ref_audio_paths=(
+                    list(self.ref_audio_paths)
+                    if (not still_job and getattr(spec, "omni_reference", False))
+                    else None
+                ),
                 duration=None if still_job else _dd(self.dur_dd),
                 aspect_ratio=_dd(self.aspect_dd),
                 resolution=(
@@ -2270,7 +2826,15 @@ class CreativeVisionView:
                     else (None if still_job else _dd(self.res_dd))
                 ),
                 negative_prompt=self.negative.value,
-                generate_audio=False if still_job else bool(self.gen_audio.value),
+                generate_audio=(
+                    False
+                    if still_job
+                    else (
+                        None
+                        if getattr(spec, "native_stereo_audio", False)
+                        else bool(self.gen_audio.value)
+                    )
+                ),
                 strength=strength_val,
                 num_images=self._num_images_for_cost(),
                 output_dir=self.state.output_dir,

@@ -43,20 +43,18 @@ class ImageToVideoResult:
 def run_image_to_video(
     *,
     prompt: str,
-    image_path: str | Path,
+    image_path: str | Path | None = None,
     model_choice: str | None = None,
     parameters: dict[str, Any] | None = None,
     output_dir: str | Path,
     on_progress: ProgressCallback | None = None,
     scenario: str | None = None,
+    extra_image_paths: list[str | Path] | None = None,
+    ref_video_paths: list[str | Path] | None = None,
+    ref_audio_paths: list[str | Path] | None = None,
 ) -> ImageToVideoResult:
     prompt = (prompt or "").strip()
     ipath = Path(image_path) if image_path else None
-    if not ipath or not ipath.is_file():
-        return ImageToVideoResult(
-            ok=False,
-            status="Generate (image-to-video): upload a still image as the start frame.",
-        )
 
     spec = resolve_video_model(model_choice)
     if spec is None or spec.task != "image_to_video":
@@ -65,19 +63,121 @@ def run_image_to_video(
     else:
         auto_note = None
 
+    is_omni = bool(getattr(spec, "ref_image_field", None)) and (
+        "reference-to-video" in (spec.endpoint or "")
+    )
+    has_still = bool(ipath and ipath.is_file())
+    has_vrefs = bool(
+        ref_video_paths
+        or (parameters or {}).get("video_urls")
+        or (parameters or {}).get("reference_video_urls")
+    )
+    if not has_still and not (is_omni and has_vrefs):
+        return ImageToVideoResult(
+            ok=False,
+            status=(
+                "Generate (image-to-video): upload a still as the start frame."
+                if not is_omni
+                else "MiniMax H3 omni needs at least one reference still or motion clip."
+            ),
+        )
+
     def progress(msg: str) -> None:
         if on_progress:
             on_progress(msg)
 
     progress(f"Model: {spec.label} ({spec.endpoint})")
-    progress(f"Start frame: {ipath.name}")
+    if has_still:
+        progress(f"Start frame: {ipath.name}")  # type: ignore[union-attr]
 
     notes: list[str] = []
     if auto_note:
         notes.append(auto_note)
 
+    params = dict(parameters or {})
     try:
-        image_url = upload_file(ipath, on_progress=progress)
+        image_url = ""
+        if has_still and ipath is not None:
+            image_url = upload_file(ipath, on_progress=progress)
+
+        # Extra stills (multi-ref / omni Image 2+)
+        extra_urls: list[str] = []
+        cap_img = max(1, int(getattr(spec, "max_ref_images", 1) or 1))
+        for raw in extra_image_paths or []:
+            if len(extra_urls) + (1 if image_url else 0) >= cap_img:
+                break
+            try:
+                p = Path(raw)
+                if not p.is_file():
+                    continue
+                if has_still and ipath and p.resolve() == ipath.resolve():
+                    continue
+                progress(f"Uploading ref still: {p.name}")
+                extra_urls.append(upload_file(p, on_progress=progress))
+            except Exception as exc:
+                progress(f"Skip ref still {raw}: {exc}")
+        if extra_urls:
+            params["image_urls"] = extra_urls
+
+        # Optional end frame (first→last) — local path in parameters
+        end_local = params.pop("end_image_path", None) or params.pop(
+            "end_image_file", None
+        )
+        if end_local and Path(str(end_local)).is_file() and (
+            getattr(spec, "supports_end_frame", False)
+            or "minimax/h3" in (spec.endpoint or "")
+            or "hailuo" in (spec.endpoint or "")
+        ):
+            progress(f"Uploading end frame: {Path(str(end_local)).name}")
+            params["end_image_url"] = upload_file(
+                Path(str(end_local)), on_progress=progress
+            )
+
+        # Reference videos (omni / Seedance)
+        v_urls: list[str] = list(
+            params.get("video_urls") or params.get("reference_video_urls") or []
+        )
+        if isinstance(v_urls, str):
+            v_urls = [v_urls]
+        cap_v = max(0, int(getattr(spec, "max_ref_videos", 0) or 0)) or 3
+        for raw in ref_video_paths or []:
+            if len(v_urls) >= cap_v:
+                break
+            try:
+                p = Path(raw)
+                if not p.is_file():
+                    continue
+                progress(f"Uploading ref video: {p.name}")
+                v_urls.append(upload_file(p, on_progress=progress))
+            except Exception as exc:
+                progress(f"Skip ref video {raw}: {exc}")
+        if v_urls:
+            if getattr(spec, "ref_video_field", None):
+                params["reference_video_urls"] = v_urls[:cap_v]
+            else:
+                params["video_urls"] = v_urls[:cap_v]
+
+        # Reference audio (H3 omni)
+        a_urls: list[str] = list(
+            params.get("audio_urls") or params.get("reference_audio_urls") or []
+        )
+        if isinstance(a_urls, str):
+            a_urls = [a_urls]
+        cap_a = max(0, int(getattr(spec, "max_ref_audios", 0) or 0))
+        for raw in ref_audio_paths or []:
+            if cap_a and len(a_urls) >= cap_a:
+                break
+            try:
+                p = Path(raw)
+                if not p.is_file():
+                    continue
+                progress(f"Uploading ref audio: {p.name}")
+                a_urls.append(upload_file(p, on_progress=progress))
+            except Exception as exc:
+                progress(f"Skip ref audio {raw}: {exc}")
+        if a_urls and getattr(spec, "ref_audio_field", None):
+            params["reference_audio_urls"] = a_urls[: max(1, cap_a or 3)]
+
     except (FalClientError, Exception) as exc:
         return ImageToVideoResult(
             ok=False,
@@ -92,7 +192,7 @@ def run_image_to_video(
             spec,
             prompt=prompt,
             image_url=image_url,
-            parameters=parameters,
+            parameters=params,
         )
     except ValueError as exc:
         return ImageToVideoResult(

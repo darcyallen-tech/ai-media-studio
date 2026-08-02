@@ -594,15 +594,34 @@ def generate(
 
     # ---- IMAGE-TO-VIDEO ----
     if kind == "image_to_video":
-        start = _resolve_edit_image(image_file, video_file)
-        if not start:
+        from media_studio.fal.models import resolve_video_model as _rvm
+
+        vspec_i2v = _rvm(model_choice or model)
+        is_omni = bool(
+            vspec_i2v
+            and getattr(vspec_i2v, "ref_image_field", None)
+            and "reference-to-video" in (vspec_i2v.endpoint or "")
+        )
+        start = _resolve_edit_image(image_file, video_file if not is_omni else None)
+        # H3 omni: source clip is a motion reference (Video 1), not V2V source
+        ref_videos: list[str] = []
+        if is_omni and has_video and video_file:
+            ref_videos.append(video_file)
+            progress(f"Omni motion ref (Video 1): {Path(video_file).name}")
+        if not start and not (is_omni and ref_videos):
             return GenerateResult(
                 ok=False,
                 model=model,
                 job_kind="image_to_video",
-                status="Generate (image-to-video): upload a still as the start frame.",
+                status=(
+                    "Generate (image-to-video): upload a still as the start frame."
+                    if not is_omni
+                    else "MiniMax H3 omni: add a reference still and/or motion clip."
+                ),
             )
-        progress("Job type: IMAGE→VIDEO (fal)")
+        progress(
+            "Job type: IMAGE→VIDEO omni (fal)" if is_omni else "Job type: IMAGE→VIDEO (fal)"
+        )
         result = run_image_to_video(
             prompt=prompt,
             image_path=start,
@@ -611,6 +630,8 @@ def generate(
             output_dir=out,
             on_progress=progress,
             scenario=scenario_key,
+            extra_image_paths=extra_refs or None,
+            ref_video_paths=ref_videos or None,
         )
         stamp = result.timestamp or stamp
         _write_job_receipt(

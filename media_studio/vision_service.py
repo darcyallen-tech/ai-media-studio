@@ -61,6 +61,8 @@ def run_vision(
     first_frame_path: str | None = None,
     last_frame_path: str | None = None,
     ref_paths: list[str] | None = None,
+    ref_video_paths: list[str] | None = None,
+    ref_audio_paths: list[str] | None = None,
     duration: str | None = None,
     aspect_ratio: str | None = None,
     resolution: str | None = None,
@@ -102,8 +104,11 @@ def run_vision(
     first_url = None
     last_url = None
     ref_urls: list[str] = []
+    ref_video_urls: list[str] = []
+    ref_audio_urls: list[str] = []
     source_still_path: Path | None = None
     build_notes: list[str] = []
+    is_omni = bool(getattr(spec, "omni_reference", False))
 
     try:
         if mode == "text_to_image":
@@ -159,7 +164,7 @@ def run_vision(
                 )
             progress(f"Uploading start frame: {ip.name}")
             image_url = upload_file(ip, on_progress=progress)
-            # Optional end for Hailuo I2V
+            # Optional end for Hailuo / H3 I2V
             if last_frame_path and Path(last_frame_path).is_file():
                 progress(f"Uploading end frame: {Path(last_frame_path).name}")
                 last_url = upload_file(Path(last_frame_path), on_progress=progress)
@@ -180,19 +185,52 @@ def run_vision(
             progress(f"Uploading end frame: {lp.name}")
             last_url = upload_file(lp, on_progress=progress)
 
-        # Reference pack for reference-to-video / video context (I2I refs uploaded above)
-        if mode not in ("image_to_image", "text_to_image"):
-            for rp in ref_paths or []:
-                try:
-                    p = Path(rp)
-                    if not p.is_file():
-                        continue
-                    progress(f"Uploading ref: {p.name}")
-                    ref_urls.append(upload_file(p, on_progress=progress))
-                except Exception as exc:
-                    progress(f"Skip ref {rp}: {exc}")
-                if len(ref_urls) >= max(1, spec.max_refs or 8):
-                    break
+        # Reference pack for reference-to-video / omni / video context
+        if mode not in ("image_to_image", "text_to_image") or is_omni:
+            # Still refs (omni + Veo reference pack + subject library)
+            if mode != "image_to_image":
+                cap_img = max(1, int(spec.max_refs or 8)) if (
+                    is_omni or int(spec.max_refs or 0) > 0
+                ) else 8
+                for rp in ref_paths or []:
+                    try:
+                        p = Path(rp)
+                        if not p.is_file():
+                            continue
+                        progress(f"Uploading ref still: {p.name}")
+                        ref_urls.append(upload_file(p, on_progress=progress))
+                    except Exception as exc:
+                        progress(f"Skip ref still {rp}: {exc}")
+                    if len(ref_urls) >= cap_img:
+                        break
+
+            # Omni motion + audio plates (MiniMax H3)
+            if is_omni or getattr(spec, "max_ref_videos", 0):
+                cap_v = max(0, int(getattr(spec, "max_ref_videos", 0) or 0)) or 3
+                for rp in ref_video_paths or []:
+                    try:
+                        p = Path(rp)
+                        if not p.is_file():
+                            continue
+                        progress(f"Uploading ref video: {p.name}")
+                        ref_video_urls.append(upload_file(p, on_progress=progress))
+                    except Exception as exc:
+                        progress(f"Skip ref video {rp}: {exc}")
+                    if len(ref_video_urls) >= cap_v:
+                        break
+            if is_omni or getattr(spec, "max_ref_audios", 0):
+                cap_a = max(0, int(getattr(spec, "max_ref_audios", 0) or 0)) or 3
+                for rp in ref_audio_paths or []:
+                    try:
+                        p = Path(rp)
+                        if not p.is_file():
+                            continue
+                        progress(f"Uploading ref audio: {p.name}")
+                        ref_audio_urls.append(upload_file(p, on_progress=progress))
+                    except Exception as exc:
+                        progress(f"Skip ref audio {rp}: {exc}")
+                    if len(ref_audio_urls) >= cap_a:
+                        break
 
     except (FalClientError, Exception) as exc:
         return VisionResult(
@@ -275,6 +313,8 @@ def run_vision(
                 first_frame_url=first_url,
                 last_frame_url=last_url,
                 ref_urls=ref_urls or None,
+                ref_video_urls=ref_video_urls or None,
+                ref_audio_urls=ref_audio_urls or None,
                 duration=duration,
                 aspect_ratio=aspect_ratio,
                 resolution=resolution,

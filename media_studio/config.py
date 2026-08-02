@@ -49,6 +49,8 @@ MODEL_OPTIONS: list[str] = [""] + [
     "seedance 2.0 i2v",
     "seedance 2.0 fast i2v",
     "seedance 2.0 reference",
+    "minimax h3 i2v",
+    "minimax h3 reference",
 ]
 
 MODEL_CATALOG: dict[str, dict] = catalog_for_enhance()

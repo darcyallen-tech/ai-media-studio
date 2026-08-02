@@ -12,6 +12,15 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### MiniMax H3 (Hailuo-03) — first-class video
+- **Creative Vision**: MiniMax H3 · Text→Video, Image→Video (optional first→last end frame), and **Omni reference**
+- Omni panel: up to 9 stills + 3 motion clips + 3 audio (≤12 files); intent chips insert Image 1 / Video 1 / Audio 1 citation language
+- Grok Enhance: mode-aware citations; does not invent unsupported params; native stereo noted
+- Duration 5–15s · 2K · cost est. ~$0.26/s (scales with duration); native stereo always on output
+- **Studio Video**: MiniMax H3 I2V + Omni Reference in the model picker (still + optional motion plate as Video 1)
+- fal endpoints: `minimax/h3/text-to-video`, `image-to-video` (`end_image_url`), `reference-to-video`
+- Does not wire Flux 3 or Seedance 2.5; existing Kling / Seedance 2.0 / Aleph / Veo paths unchanged
+
 ### Audio — Layered SFX mixer (v1)
 - New **Mixer** pill: Bed / Spot / Accent (plain labels + subtitles; not a DAW)
 - **Scene Enhance** — one scene box → Grok fills Bed/Spot/Accent; retry if &lt;2 slots parse; raw text to Spot on sparse fill

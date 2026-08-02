@@ -362,6 +362,19 @@ class VideoModelSpec:
     i2v_image_field: str = "image_url"  # start frame for i2v
     multi_image: bool = True
     max_ref_images: int = 4
+    # Omni / reference-to-video: optional motion + audio plates (MiniMax H3)
+    max_ref_videos: int = 0
+    max_ref_audios: int = 0
+    max_total_refs: int = 0  # 0 = no combined cap; H3 uses 12
+    # Field names for multi-ref endpoints (None → Seedance-style image_urls / video_urls)
+    ref_image_field: str | None = None  # e.g. reference_image_urls
+    ref_video_field: str | None = None  # e.g. reference_video_urls
+    ref_audio_field: str | None = None  # e.g. reference_audio_urls
+    # Prompt citation style for auto-inject: "at" → @Image1; "plain" → Image 1
+    prompt_citation_style: str = "at"
+    supports_end_frame: bool = False  # I2V optional last frame (end_image_url)
+    # Native stereo always on output (no generate_audio toggle) — MiniMax H3
+    native_stereo_audio: bool = False
     keep_audio_param: str | None = "keep_audio"
     default_keep_audio: bool = True
     generate_audio_param: str | None = None
@@ -1164,6 +1177,79 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
             "Source clip @Video1 + optional still @Image1. Est. ~$0.15/s @720p."
         ),
     ),
+    # --- MiniMax H3 (Hailuo-03) — multimodal T2V/I2V/omni reference ---
+    "minimax h3 i2v": VideoModelSpec(
+        key="minimax h3 i2v",
+        label="Video · MiniMax H3 – Image-to-Video",
+        endpoint="minimax/h3/image-to-video",
+        task="image_to_video",
+        image_field=None,
+        i2v_image_field="image_url",
+        multi_image=False,
+        max_ref_images=1,
+        keep_audio_param=None,
+        generate_audio_param=None,
+        native_stereo_audio=True,
+        supports_end_frame=True,
+        duration_param="duration",
+        duration_as_int=True,
+        default_duration="5",
+        min_duration_seconds=5.0,
+        max_duration_seconds=15.0,
+        allowed_durations=tuple(str(i) for i in range(5, 16)),
+        resolution_param="resolution",
+        allowed_resolutions=("2K",),
+        default_resolution="2K",
+        aspect_ratio_param=None,  # aspect follows start frame
+        cost_per_second=0.26,
+        notes=(
+            "MiniMax H3 (Hailuo-03) I2V — first frame still; optional end_image_url "
+            "for first→last (day→night / porch→interior). Duration 5–15s · 2K. "
+            "Native stereo audio on output. Est. ~$0.26/s @2K (+ ref surcharges per fal)."
+        ),
+    ),
+    "minimax h3 reference": VideoModelSpec(
+        key="minimax h3 reference",
+        label="Video · MiniMax H3 – Omni Reference",
+        endpoint="minimax/h3/reference-to-video",
+        task="image_to_video",
+        image_field="reference_image_urls",
+        i2v_image_field="reference_image_urls",
+        multi_image=True,
+        max_ref_images=9,
+        max_ref_videos=3,
+        max_ref_audios=3,
+        max_total_refs=12,
+        ref_image_field="reference_image_urls",
+        ref_video_field="reference_video_urls",
+        ref_audio_field="reference_audio_urls",
+        prompt_citation_style="plain",
+        keep_audio_param=None,
+        generate_audio_param=None,
+        native_stereo_audio=True,
+        duration_param="duration",
+        duration_as_int=True,
+        default_duration="5",
+        min_duration_seconds=5.0,
+        max_duration_seconds=15.0,
+        allowed_durations=tuple(str(i) for i in range(5, 16)),
+        resolution_param="resolution",
+        allowed_resolutions=("2K",),
+        default_resolution="2K",
+        aspect_ratio_param="aspect_ratio",
+        allowed_aspect_ratios=(
+            "adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16",
+        ),
+        default_aspect_ratio="adaptive",
+        auto_image_refs_in_prompt=True,
+        cost_per_second=0.26,
+        notes=(
+            "MiniMax H3 omni reference-to-video — up to 9 images + 3 videos + 3 audio "
+            "(≤12 files). Cite as Image 1 / Video 1 / Audio 1 in the prompt. "
+            "Motion transfer + subject lock. Native stereo. 2K · 5–15s. "
+            "Est. ~$0.26/s @2K (+ ref image/video surcharges per fal)."
+        ),
+    ),
 }
 
 # Back-compat name used by older code
@@ -1318,6 +1404,22 @@ _ALIASES: dict[str, str] = {
     "seedance 2.0 fast v2v": "seedance 2.0 fast v2v",
     "video · seedance 2.0 fast – v2v / ref edit": "seedance 2.0 fast v2v",
     "bytedance/seedance-2.0/fast/reference-to-video": "seedance 2.0 fast v2v",
+    # MiniMax H3 (Hailuo-03)
+    "minimax h3": "minimax h3 i2v",
+    "minimax h3 i2v": "minimax h3 i2v",
+    "minimax h3 image-to-video": "minimax h3 i2v",
+    "hailuo 03 i2v": "minimax h3 i2v",
+    "hailuo-03 i2v": "minimax h3 i2v",
+    "video · minimax h3 – image-to-video": "minimax h3 i2v",
+    "minimax/h3/image-to-video": "minimax h3 i2v",
+    "fal-ai/minimax/hailuo-03/image-to-video": "minimax h3 i2v",
+    "minimax h3 reference": "minimax h3 reference",
+    "minimax h3 omni": "minimax h3 reference",
+    "minimax h3 omni reference": "minimax h3 reference",
+    "hailuo 03 reference": "minimax h3 reference",
+    "video · minimax h3 – omni reference": "minimax h3 reference",
+    "minimax/h3/reference-to-video": "minimax h3 reference",
+    "fal-ai/minimax/hailuo-03/reference-to-video": "minimax h3 reference",
 }
 
 
@@ -1365,6 +1467,8 @@ def model_dropdown_choices() -> list[str]:
         "seedance 2.0 i2v",
         "seedance 2.0 fast i2v",
         "seedance 2.0 reference",
+        "minimax h3 i2v",
+        "minimax h3 reference",
     ):
         if key in VIDEO_MODELS:
             labels.append(VIDEO_MODELS[key].label)
@@ -1845,15 +1949,39 @@ def build_i2v_arguments(
     notes: list[str] = []
     other = params.get("other") if isinstance(params.get("other"), dict) else {}
 
-    if not image_url:
+    # MiniMax H3 omni can run image-only, video-only, or mixed (prompt required)
+    is_h3_omni = bool(spec.ref_image_field) and "reference-to-video" in spec.endpoint
+    if not image_url and not is_h3_omni:
         raise ValueError("Start-frame image is required for image-to-video.")
 
-    # Seedance reference-to-video expects image_urls list (+ optional video_urls)
-    if spec.i2v_image_field in ("image_urls",) or (
+    # Extra image URLs (multi-ref) from parameters
+    extra_imgs = params.get("image_urls") or other.get("image_urls") or []
+    if isinstance(extra_imgs, str):
+        extra_imgs = [extra_imgs]
+    extra_imgs = [str(u) for u in extra_imgs if u]
+
+    # --- Image field(s) ---
+    if is_h3_omni:
+        img_field = spec.ref_image_field or "reference_image_urls"
+        all_imgs: list[str] = []
+        if image_url:
+            all_imgs.append(image_url)
+        for u in extra_imgs:
+            if u not in all_imgs:
+                all_imgs.append(u)
+        cap_i = max(1, int(spec.max_ref_images or 9))
+        args: dict[str, Any] = {**spec.extra_defaults}
+        if all_imgs:
+            args[img_field] = all_imgs[:cap_i]
+    elif spec.i2v_image_field in ("image_urls",) or (
         "reference-to-video" in spec.endpoint and spec.multi_image
     ):
-        args: dict[str, Any] = {
-            "image_urls": [image_url],
+        imgs = [image_url] if image_url else []
+        for u in extra_imgs:
+            if u not in imgs:
+                imgs.append(u)
+        args = {
+            "image_urls": imgs[: max(1, int(spec.max_ref_images or 9))],
             **spec.extra_defaults,
         }
     else:
@@ -1861,21 +1989,49 @@ def build_i2v_arguments(
             spec.i2v_image_field: image_url,
             **spec.extra_defaults,
         }
+
     prompt_out = (prompt or "").strip()
     if prompt_out:
-        # Inject @Image1 for Seedance multi-ref style when missing
+        style = (spec.prompt_citation_style or "at").lower()
+        # Inject citation for multi-ref / omni when missing
         if (
-            "seedance" in spec.key
-            and "reference" in spec.key
-            and "@image1" not in prompt_out.lower()
-            and "[image1]" not in prompt_out.lower()
-        ):
-            prompt_out = (
-                prompt_out.rstrip(".")
-                + ". Use @Image1 as the primary visual reference for appearance and layout."
+            spec.auto_image_refs_in_prompt
+            and (
+                is_h3_omni
+                or ("seedance" in spec.key and "reference" in spec.key)
             )
-            notes.append("Injected @Image1 reference tag into prompt.")
+        ):
+            low = prompt_out.lower()
+            if style == "plain":
+                if "image 1" not in low and "video 1" not in low:
+                    prompt_out = (
+                        prompt_out.rstrip(".")
+                        + ". Use Image 1 as the primary subject/style reference"
+                        + (
+                            "; Video 1 for camera path / motion only"
+                            if (
+                                params.get("video_urls")
+                                or other.get("video_urls")
+                                or params.get("reference_video_urls")
+                                or other.get("reference_video_urls")
+                            )
+                            else ""
+                        )
+                        + "."
+                    )
+                    notes.append("Injected Image 1 citation into prompt.")
+            elif (
+                "@image1" not in low
+                and "[image1]" not in low
+            ):
+                prompt_out = (
+                    prompt_out.rstrip(".")
+                    + ". Use @Image1 as the primary visual reference for appearance and layout."
+                )
+                notes.append("Injected @Image1 reference tag into prompt.")
         args["prompt"] = prompt_out
+    elif is_h3_omni:
+        raise ValueError("MiniMax H3 reference-to-video needs a prompt.")
 
     if spec.duration_param:
         dur_in = params.get("duration_seconds") or params.get("duration")
@@ -1908,9 +2064,11 @@ def build_i2v_arguments(
         res_in = params.get("resolution") or other.get("resolution")
         res = spec.clamp_resolution(str(res_in) if res_in is not None else None)
         if res:
-            # Normalize 4K casing for Seedance (API uses "4k")
+            # Normalize 4K casing for Seedance (API uses "4k"); H3 uses "2K"
             if res.lower() == "4k":
                 res = "4k"
+            elif res.lower() == "2k":
+                res = "2K"
             args[spec.resolution_param] = res
 
     if spec.aspect_ratio_param:
@@ -1919,11 +2077,17 @@ def build_i2v_arguments(
             ar_req = other.get("aspect_ratio")
         if ar_req is None:
             ar_req = spec.default_aspect_ratio
-        # Seedance allows literal "auto"
-        if ar_req and str(ar_req).strip().lower() == "auto" and "auto" in (
-            a.lower() for a in (spec.allowed_aspect_ratios or ())
-        ):
-            args[spec.aspect_ratio_param] = "auto"
+        ar_low = str(ar_req or "").strip().lower()
+        allowed_low = {a.lower() for a in (spec.allowed_aspect_ratios or ())}
+        # Seedance "auto" / H3 "adaptive"
+        if ar_low in ("auto", "adaptive") and ar_low in allowed_low:
+            # Preserve API casing from allowed list
+            for a in spec.allowed_aspect_ratios or ():
+                if a.lower() == ar_low:
+                    args[spec.aspect_ratio_param] = a
+                    break
+            else:
+                args[spec.aspect_ratio_param] = ar_req
         else:
             _apply_aspect_ratio_arg(
                 args,
@@ -1937,15 +2101,73 @@ def build_i2v_arguments(
             )
 
     end = params.get("end_image_url") or other.get("end_image_url")
-    if end:
+    if end and (spec.supports_end_frame or "hailuo" in spec.endpoint or "minimax/h3" in spec.endpoint):
         args["end_image_url"] = str(end)
 
-    # Optional reference videos for Seedance reference-to-video
-    vrefs = params.get("video_urls") or other.get("video_urls")
+    # Reference videos (Seedance video_urls or H3 reference_video_urls)
+    vrefs = (
+        params.get("reference_video_urls")
+        or other.get("reference_video_urls")
+        or params.get("video_urls")
+        or other.get("video_urls")
+    )
     if vrefs and "reference-to-video" in spec.endpoint:
         if isinstance(vrefs, str):
             vrefs = [vrefs]
-        args["video_urls"] = list(vrefs)[:3]
+        vlist = [str(u) for u in vrefs if u]
+        cap_v = max(1, int(spec.max_ref_videos or 3))
+        vfield = spec.ref_video_field or "video_urls"
+        if vlist:
+            args[vfield] = vlist[:cap_v]
+
+    # Reference audio (H3 only)
+    arefs = (
+        params.get("reference_audio_urls")
+        or other.get("reference_audio_urls")
+        or params.get("audio_urls")
+        or other.get("audio_urls")
+    )
+    if arefs and spec.ref_audio_field:
+        if isinstance(arefs, str):
+            arefs = [arefs]
+        alist = [str(u) for u in arefs if u]
+        cap_a = max(1, int(spec.max_ref_audios or 3))
+        if alist:
+            args[spec.ref_audio_field] = alist[:cap_a]
+
+    # Combined file cap (H3: ≤12)
+    if spec.max_total_refs and int(spec.max_total_refs) > 0:
+        total = 0
+        for fk in (
+            spec.ref_image_field,
+            spec.ref_video_field,
+            spec.ref_audio_field,
+            "image_urls",
+            "video_urls",
+        ):
+            if fk and isinstance(args.get(fk), list):
+                total += len(args[fk])
+        if total > int(spec.max_total_refs):
+            notes.append(
+                f"Reference pack exceeds {spec.max_total_refs} files — trim images/videos/audio."
+            )
+
+    # H3 omni needs at least one image or video
+    if is_h3_omni:
+        has_i = bool(args.get(spec.ref_image_field or "reference_image_urls"))
+        has_v = bool(args.get(spec.ref_video_field or "reference_video_urls"))
+        if not has_i and not has_v:
+            raise ValueError(
+                "MiniMax H3 omni needs at least one reference image or video "
+                "(audio cannot be the only reference)."
+            )
+        if args.get(spec.ref_audio_field) and not has_i and not has_v:
+            raise ValueError(
+                "Reference audio must accompany an image or video reference."
+            )
+
+    if getattr(spec, "native_stereo_audio", False):
+        notes.append("Native stereo audio is always on H3 output (no toggle).")
 
     return args, notes
 

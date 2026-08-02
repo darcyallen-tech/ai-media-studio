@@ -104,6 +104,51 @@ _BEST_FOR: dict[str, BestFor] = {
         "I2V / bridge with start–end frames",
         "Hailuo when you need start+end frame control on short clips.",
     ),
+    "minimax h3": BestFor(
+        "multimodal ref + native stereo audio / motion transfer",
+        "MiniMax H3 (Hailuo-03): T2V, first→last I2V, or omni refs "
+        "(up to 9 stills + 3 clips + 3 audio). Cite Image 1 / Video 1 / Audio 1. "
+        "Native stereo; ~$0.26/s @2K.",
+    ),
+    "minimax h3 i2v": BestFor(
+        "first/last frame I2V + native stereo 2K",
+        "H3 image-to-video: start still as first frame; optional last frame for "
+        "day→night / porch→interior. 5–15s · 2K · native stereo. Est. ~$0.26/s.",
+    ),
+    "video · minimax h3 – image-to-video": BestFor(
+        "first/last frame I2V + native stereo 2K",
+        "H3 image-to-video: start still as first frame; optional last frame for "
+        "transitions. 5–15s · 2K · native stereo. Est. ~$0.26/s.",
+    ),
+    "minimax h3 reference": BestFor(
+        "multimodal ref + native stereo audio / motion transfer",
+        "H3 omni: multi stills (subject lock) + motion plate as Video 1 + optional "
+        "Audio 1 bed. Cite assets in the prompt. 2K · ~$0.26/s.",
+    ),
+    "video · minimax h3 – omni reference": BestFor(
+        "multimodal ref + native stereo audio / motion transfer",
+        "H3 omni reference-to-video for realtor consistency + camera-path lock.",
+    ),
+    "minimax h3 t2v": BestFor(
+        "cinematic T2V 2K + native stereo",
+        "H3 text-to-video: 5–15s · 2K · native stereo. Est. ~$0.26/s.",
+    ),
+    "minimax h3 · text→video": BestFor(
+        "cinematic T2V 2K + native stereo",
+        "H3 text-to-video: 5–15s · 2K · native stereo. Est. ~$0.26/s.",
+    ),
+    "minimax h3 · image→video": BestFor(
+        "first/last frame I2V + native stereo 2K",
+        "H3 I2V with optional end frame; native stereo · 2K · ~$0.26/s.",
+    ),
+    "minimax h3 omni": BestFor(
+        "multimodal ref + native stereo audio / motion transfer",
+        "H3 omni reference: Image/Video/Audio plates with citation labels in prompt.",
+    ),
+    "minimax h3 · omni reference": BestFor(
+        "multimodal ref + native stereo audio / motion transfer",
+        "H3 omni: multi stills + motion plate + optional audio; cite Image/Video/Audio N.",
+    ),
     # --- Creative Vision I2I labels ---
     "flux 2 pro (edit)": BestFor(
         "furniture / architecture lock, photoreal edits",

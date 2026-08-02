@@ -1100,9 +1100,21 @@ class StudioVideoView:
             self.state.video_source_path and Path(self.state.video_source_path).is_file()
         )
 
+        # MiniMax H3 omni: still and/or motion clip as references
+        is_h3_omni = "minimax h3" in (model or "").lower() and (
+            "omni" in (model or "").lower() or "reference" in (model or "").lower()
+        )
         if i2v:
-            # Still-only I2V: require reference still; clip optional
-            if not has_still:
+            if is_h3_omni:
+                if not has_still and not has_clip:
+                    self.status_text.value = (
+                        "MiniMax H3 omni needs a reference still and/or motion clip "
+                        "(cite as Image 1 / Video 1 in the prompt)."
+                    )
+                    self.page.update()
+                    return
+            elif not has_still:
+                # Still-only I2V: require reference still; clip optional
                 self.status_text.value = (
                     "Image-to-video needs a start still — upload a reference image "
                     "or send a still from Studio Image."

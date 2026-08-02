@@ -115,7 +115,9 @@ Workspaces include Received, Blank Canvas, Camera Lock (and related).
 - Source video + reference still (from Image “use as reference”)
 - Recently from Resolve (clips / stills from handoff history)
 - Camera-lock style prompts for furniture / day-night / etc.
-- Models: Kling family, Seedance 2.0 I2V/V2V, others on fal
+- Models: Kling family, Seedance 2.0 I2V/V2V/reference, MiniMax H3 I2V + Omni
+  Reference (still + optional motion plate as Video 1), others on fal
+- MiniMax H3: 5–15s · 2K · ~$0.26/s; native stereo on output
 - Grok Enhance on video prompts
 - Duration / resolution guidance, cost estimate (job total)
 - Export: Show in folder, Send to Resolve, Library
@@ -209,14 +211,24 @@ Modes (left → right):
     Send matrix: I2I source + Add as I2I ref
 
   Text → Video (T2V)
-    e.g. Veo 3.1 / Veo 3.1 Fast / Reference pack, Luma Ray 2
+    e.g. Veo 3.1 / Veo 3.1 Fast / Reference pack, Luma Ray 2,
+         MiniMax H3 T2V, MiniMax H3 Omni reference
     Veo on fal: ~$0.40/s standard, ~$0.15/s Fast (totals = rate × duration)
+    MiniMax H3 (Hailuo-03) on fal (minimax/h3/*):
+      - T2V: prompt · duration 5–15s · aspect · 2K · native stereo
+      - Omni reference (primary when refs exist): up to 9 images + 3 videos +
+        3 audio (≤12 files); cite Image 1 / Video 1 / Audio 1 in prompt
+      - Est. ~$0.26/s @2K (+ ref image/video surcharges per fal docs)
+      - Native stereo always on output (Send to Resolve / Library as video+audio)
 
   Image → Video (I2V)
-    Start still → motion (Veo, Kling O3 Pro, Seedance 2.0, Hailuo, …)
+    Start still → motion (Veo, Kling O3 Pro, Seedance 2.0, Hailuo 02, MiniMax H3, …)
+    MiniMax H3 I2V: first frame still; optional last-frame still (first→last
+      transitions: day→night, porch→interior); 5–15s · 2K · native stereo
 
   Bridge / Connect
     Start frame + end frame → in-between (Veo first→last, Hailuo start+end)
+    (H3 first→last also available as I2V with optional end frame)
 
 Shared Vision UI:
   - Video modes: Camera / shot helpers (shot type, lens feel, motion, style)
