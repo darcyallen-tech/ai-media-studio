@@ -191,10 +191,6 @@ def live_estimate_cost(
     has_image = bool(image_file and Path(str(image_file)).is_file())
     has_video = bool(video_file and Path(str(video_file)).is_file())
 
-    kind = resolve_job_kind(
-        model_choice, has_image=has_image, has_video=has_video
-    )
-
     # duration from params first; optional probe
     dur = params.get("duration_seconds") or params.get("duration")
     if dur is None:
@@ -202,7 +198,12 @@ def live_estimate_cost(
     try:
         dur_f = float(dur) if dur is not None else None
     except (TypeError, ValueError):
-        dur_f = None
+        # tokens like "5s" / "8s"
+        try:
+            raw = str(dur or "").strip().lower().replace("s", "").strip()
+            dur_f = float(raw) if raw else None
+        except (TypeError, ValueError):
+            dur_f = None
     if dur_f is None and has_video and probe_video:
         dur_f = _probe_duration(video_file)
     if dur_f is None and has_video:
@@ -216,9 +217,49 @@ def live_estimate_cost(
         num_images = 1
 
     resolution = params.get("resolution") or other.get("resolution")
+    aspect = params.get("aspect_ratio") or other.get("aspect_ratio")
     gen_audio = bool(params.get("generate_audio") or other.get("generate_audio"))
 
+    # --- Vision T2V / T2I labels (Studio modality) before fal Flux fallback ---
+    try:
+        from media_studio.params_ui import resolve_vision_studio_model
+        from media_studio.vision_registry import format_vision_cost
+
+        vspec = resolve_vision_studio_model(model_choice)
+        if vspec is not None and getattr(vspec, "mode", "") == "text_to_video":
+            # Prefer explicit duration token (incl. "5s"); else seconds
+            dur_token = None
+            if params.get("duration") is not None:
+                dur_token = str(params.get("duration"))
+            elif other.get("duration") is not None:
+                dur_token = str(other.get("duration"))
+            elif dur_f is not None and dur_f > 0:
+                dur_token = str(int(dur_f)) if abs(dur_f - round(dur_f)) < 1e-6 else str(dur_f)
+            else:
+                dur_token = vspec.default_duration or "5"
+            return format_vision_cost(
+                vspec,
+                duration_token=dur_token,
+                resolution=str(resolution) if resolution else None,
+                aspect_ratio=str(aspect) if aspect else None,
+                generate_audio=gen_audio if getattr(vspec, "supports_audio", False) else None,
+            )
+        if vspec is not None and getattr(vspec, "mode", "") == "text_to_image":
+            return format_vision_cost(
+                vspec,
+                resolution=str(resolution) if resolution else None,
+                aspect_ratio=str(aspect) if aspect else None,
+                num_images=num_images,
+            )
+    except Exception:
+        pass
+
+    kind = resolve_job_kind(
+        model_choice, has_image=has_image, has_video=has_video
+    )
+
     if kind == "image":
+        # Avoid Flux default when label is unknown Vision video (already handled above)
         spec = resolve_image_edit_model(model_choice) or default_image_edit_model()
         try:
             n = max(1, int(num_images))

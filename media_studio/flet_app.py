@@ -565,6 +565,14 @@ class StudioImageView:
         )
 
         opts = control_options(_init_img_model)
+        self.aspect_dd = styled_dropdown(
+            label_text="Size / aspect",
+            options=opts.get("aspect_choices") or ["—"],
+            value=opts.get("aspect_value") or "—",
+            on_select=self._on_model_or_params,
+            expand=True,
+        )
+        self.aspect_dd.visible = bool(opts.get("aspect_visible", False))
         self.res_dd = styled_dropdown(
             label_text="Resolution",
             options=opts["resolution_choices"],
@@ -572,12 +580,18 @@ class StudioImageView:
             on_select=self._on_model_or_params,
             expand=True,
         )
+        self.res_dd.visible = bool(opts.get("resolution_visible", True))
         self.num_dd = styled_dropdown(
             label_text="# Images",
             options=opts["num_images_choices"],
             value=opts["num_images_value"],
             on_select=self._on_model_or_params,
             expand=True,
+        )
+        self.strength_label = ft.Text(
+            "Strength (edit / denoise)",
+            size=FONT_SM,
+            color=TEXT_MUTED,
         )
         self.strength = ft.Slider(
             min=0.0,
@@ -1003,8 +1017,8 @@ class StudioImageView:
             ft.Row([self.model_dd], spacing=0),
             self.model_best_for,
             self.advisor_text,
-            ft.Row([self.res_dd, self.num_dd], spacing=8),
-            label("Strength (edit / denoise)", muted=True),
+            ft.Row([self.aspect_dd, self.res_dd, self.num_dd], spacing=8),
+            self.strength_label,
             self.strength,
             self.job_text,
             ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
@@ -1130,9 +1144,14 @@ class StudioImageView:
     def _params_json(self) -> str:
         return parameters_to_json(
             build_parameters_dict(
-                resolution=_dd_value(self.res_dd),
+                resolution=_dd_value(self.res_dd) if getattr(self.res_dd, "visible", True) else None,
                 num_images=_dd_value(self.num_dd),
                 strength=_safe_float(self.strength.value, 0.6),
+                aspect_ratio=(
+                    _dd_value(self.aspect_dd)
+                    if getattr(self.aspect_dd, "visible", False)
+                    else None
+                ),
             )
         )
 
@@ -1863,19 +1882,48 @@ class StudioImageView:
         self._log_region_stage_layers(where="refresh_region")
 
     def _on_model_or_params_sync(self) -> None:
-        """Synchronous model options refresh (region mode Seedream switch)."""
+        """Synchronous model options refresh (modality / region Seedream switch)."""
         model = _dd_value(self.model_dd) or DEFAULT_IMAGE_MODEL
         opts = control_options(model)
-        self.res_dd.options = [
-            ft.DropdownOption(key=x, text=x) for x in opts["resolution_choices"]
-        ]
-        self.res_dd.value = opts["resolution_value"]
-        self.num_dd.options = [
-            ft.DropdownOption(key=x, text=x) for x in opts["num_images_choices"]
-        ]
-        self.num_dd.value = opts["num_images_value"]
-        self.strength.value = float(opts.get("strength_value") or 0.6)
+        self._apply_param_options(opts)
         self._refresh_cost_job()
+
+    def _apply_param_options(self, opts: dict) -> None:
+        """Apply control_options to aspect / res / num / strength visibility."""
+        from media_studio.flet_theme import dropdown_options
+
+        # Aspect (T2I size presets; I2I edit may also expose)
+        ar_choices = list(opts.get("aspect_choices") or ["—"])
+        show_ar = bool(opts.get("aspect_visible", False))
+        self.aspect_dd.options = dropdown_options(ar_choices)
+        self.aspect_dd.visible = show_ar
+        if show_ar:
+            pref = opts.get("aspect_value") or ar_choices[0]
+            self.aspect_dd.value = pref if pref in ar_choices else ar_choices[0]
+            try:
+                self.aspect_dd.label = "Size / aspect"
+            except Exception:
+                pass
+
+        res_choices = list(opts.get("resolution_choices") or ["—"])
+        show_res = bool(opts.get("resolution_visible", False))
+        self.res_dd.options = dropdown_options(res_choices)
+        self.res_dd.visible = show_res
+        if show_res:
+            self.res_dd.value = opts.get("resolution_value") or res_choices[0]
+        else:
+            self.res_dd.value = res_choices[0] if res_choices else "—"
+
+        num_choices = list(opts.get("num_images_choices") or ["1"])
+        self.num_dd.options = dropdown_options(num_choices)
+        self.num_dd.value = opts.get("num_images_value") or "1"
+        self.num_dd.visible = bool(opts.get("num_images_visible", True))
+
+        show_str = bool(opts.get("strength_visible", True))
+        self.strength.visible = show_str
+        self.strength_label.visible = show_str
+        if show_str:
+            self.strength.value = float(opts.get("strength_value") or 0.6)
 
     async def _on_local_edit(self, e: ft.ControlEvent) -> None:
         if self.state.is_busy("image"):
@@ -2403,17 +2451,9 @@ class StudioImageView:
     async def _on_model_or_params(self, e: ft.ControlEvent) -> None:
         model = _dd_value(self.model_dd) or DEFAULT_IMAGE_MODEL
         opts = control_options(model)
-        # Refresh resolution / count choices if model changed
+        # Refresh resolution / aspect / count when model changed
         if e.control is self.model_dd:
-            self.res_dd.options = [
-                ft.DropdownOption(key=x, text=x) for x in opts["resolution_choices"]
-            ]
-            self.res_dd.value = opts["resolution_value"]
-            self.num_dd.options = [
-                ft.DropdownOption(key=x, text=x) for x in opts["num_images_choices"]
-            ]
-            self.num_dd.value = opts["num_images_value"]
-            self.strength.value = float(opts.get("strength_value") or 0.6)
+            self._apply_param_options(opts)
             self._trim_extra_refs_to_model()
             self._sync_refs_panel()
             try:
@@ -3166,6 +3206,20 @@ class StudioImageView:
             if modality == "t2i":
                 from media_studio.vision_service import run_vision
 
+                aspect = (
+                    _dd_value(self.aspect_dd)
+                    if getattr(self.aspect_dd, "visible", False)
+                    else None
+                )
+                res = (
+                    _dd_value(self.res_dd)
+                    if getattr(self.res_dd, "visible", False)
+                    else None
+                )
+                try:
+                    n_img = max(1, min(4, int(_dd_value(self.num_dd) or 1)))
+                except (TypeError, ValueError):
+                    n_img = 1
                 vres = await to_thread_with_job(
                     self.state,
                     run_vision,
@@ -3173,9 +3227,9 @@ class StudioImageView:
                     prompt=prompt,
                     model_label=model,
                     duration=None,
-                    aspect_ratio=_dd_value(self.res_dd) or None,
-                    resolution=_dd_value(self.res_dd) or None,
-                    num_images=None,
+                    aspect_ratio=aspect,
+                    resolution=res,
+                    num_images=n_img,
                     output_dir=self.state.output_dir,
                     on_progress=on_progress,
                 )

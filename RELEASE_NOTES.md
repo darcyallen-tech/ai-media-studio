@@ -16,6 +16,7 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - Same row as **Image | Video** (to the right; no third bar): **I2I | T2I | R2I | Region** or **I2V | T2V | V2V | R2V**
 - Defaults: Image → I2I, Video → I2V; model dropdown filtered strictly by sub-tab
 - Region moved off Standard/Region toggle; H3 Omni under R2V; Enhance modality-aware
+- P1: Studio T2V / Vision T2V cost + duration (not Flux image fallback); T2I Size/aspect; R2V = still + optional motion (full omni in Creative Vision)
 
 ### MiniMax H3 (Hailuo-03) — first-class video
 - **Creative Vision**: MiniMax H3 · Text→Video, Image→Video (optional first→last end frame), and **Omni reference**

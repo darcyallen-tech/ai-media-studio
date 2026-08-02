@@ -76,7 +76,7 @@ STUDIO — IMAGE
 Same-row modality sub-tabs (to the right of Image | Video):
   I2I | T2I | R2I | Region  (default I2I; model list filtered by sub-tab)
 - I2I — single source still; image-edit models only
-- T2I — no source required; text-to-image models only
+- T2I — no source required; text-to-image models; Size/aspect from T2I presets
 - R2I — primary + multi-ref stills; only models with max_refs > 1
 - Region — colored boxes + per-box prompts (Seedream annotation); was Standard/Region toggle
 - Source still upload + Previously used + From Resolve (handoff stills)
@@ -119,6 +119,9 @@ STUDIO — VIDEO
 Same-row modality sub-tabs (to the right of Image | Video):
   I2V | T2V | V2V | R2V  (default I2V)
   Model dropdown filtered strictly by sub-tab; MiniMax H3 Omni under R2V
+  T2V cost = rate × duration (Vision T2V / H3 T2V; not image-edit fallback)
+  R2V Studio = one still + optional motion clip as Video 1; full multi-image
+    + audio omni stays Creative Vision · Omni reference
 Secondary workspaces: Received, Blank Canvas, Camera Lock (map → I2V / V2V)
 - Source video + reference still (from Image “use as reference”)
 - Recently from Resolve (clips / stills from handoff history)

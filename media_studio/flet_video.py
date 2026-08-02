@@ -490,7 +490,9 @@ class StudioVideoView:
                     "Video prompt — cite Image 1 / Video 1 (R2V)"
                 )
                 self.status_text.value = (
-                    "R2V — multi still + optional motion/audio refs (e.g. MiniMax H3 omni)."
+                    "R2V — one reference still + optional motion clip as Video 1 "
+                    "(e.g. MiniMax H3 Omni / Seedance reference). "
+                    "Full multi-image + audio omni: Creative Vision · Omni reference."
                 )
         except Exception:
             pass
@@ -524,58 +526,42 @@ class StudioVideoView:
         except Exception:
             pass
         opts = control_options(model)
-        # Vision T2V models may not be in control_options — soft defaults
-        if not opts or opts.get("kind") is None:
-            try:
-                from media_studio.vision_registry import find_vision_model
+        # Duration (required for T2V / I2V cost + API)
+        dur_choices = list(opts.get("duration_choices") or ["5"])
+        # Filter sentinel "—" for video duration
+        dur_choices = [d for d in dur_choices if d and d != "—"] or ["5"]
+        self.dur_dd.options = [ft.DropdownOption(key=x, text=x) for x in dur_choices]
+        show_dur = bool(opts.get("duration_visible", True))
+        self.dur_dd.visible = show_dur
+        pref_dur = opts.get("duration_value") or dur_choices[0]
+        if pref_dur not in dur_choices or pref_dur == "—":
+            pref_dur = dur_choices[0]
+        self.dur_dd.value = pref_dur
 
-                vspec = find_vision_model(model, "text_to_video")
-                if vspec:
-                    self.dur_dd.options = [
-                        ft.DropdownOption(key=x, text=x)
-                        for x in (list(vspec.duration_choices) or ["5"])
-                    ]
-                    self.dur_dd.value = vspec.default_duration
-                    self.dur_dd.visible = True
-                    self.aspect_dd.options = [
-                        ft.DropdownOption(key=x, text=x)
-                        for x in (list(vspec.aspect_choices) or ["16:9"])
-                    ]
-                    self.aspect_dd.value = vspec.default_aspect
-                    self.aspect_dd.visible = True
-                    if vspec.resolution_choices:
-                        self.res_dd.options = [
-                            ft.DropdownOption(key=x, text=x)
-                            for x in list(vspec.resolution_choices)
-                        ]
-                        self.res_dd.value = vspec.default_resolution
-                        self.res_dd.visible = True
-                    else:
-                        self.res_dd.visible = False
-                    self.keep_audio.visible = False
-                    self.gen_audio.visible = bool(vspec.supports_audio)
-                    self.start_time.visible = False
-                    return
-            except Exception:
-                pass
-        self.dur_dd.options = [
-            ft.DropdownOption(key=x, text=x)
-            for x in (opts.get("duration_choices") or ["5"])
-        ]
-        if _dd_value(self.dur_dd) not in (opts.get("duration_choices") or []):
-            self.dur_dd.value = opts.get("duration_value") or "5"
-        res_choices = opts.get("resolution_choices") or ["—"]
+        res_choices = list(opts.get("resolution_choices") or ["—"])
         self.res_dd.options = [ft.DropdownOption(key=x, text=x) for x in res_choices]
         self.res_dd.value = opts.get("resolution_value") or res_choices[0]
         self.res_dd.visible = bool(opts.get("resolution_visible", False))
-        ar_choices = opts.get("aspect_choices") or ["—"]
+        ar_choices = list(opts.get("aspect_choices") or ["—"])
         self.aspect_dd.options = [ft.DropdownOption(key=x, text=x) for x in ar_choices]
         self.aspect_dd.value = opts.get("aspect_value") or ar_choices[0]
         self.aspect_dd.visible = bool(opts.get("aspect_visible", False))
         self.keep_audio.value = bool(opts.get("keep_audio_value", True))
         self.keep_audio.visible = bool(opts.get("keep_audio_visible", True))
-        self.gen_audio.value = bool(opts.get("generate_audio_value", False))
-        self.gen_audio.visible = bool(opts.get("generate_audio_visible", False))
+        # Native stereo models (H3): no generate_audio toggle
+        if opts.get("native_stereo"):
+            self.gen_audio.visible = False
+            self.native_stereo_note.visible = True
+        else:
+            self.gen_audio.value = bool(opts.get("generate_audio_value", False))
+            self.gen_audio.visible = bool(opts.get("generate_audio_visible", False))
+            try:
+                spec = resolve_video_model(model)
+                self.native_stereo_note.visible = bool(
+                    spec and getattr(spec, "native_stereo_audio", False)
+                )
+            except Exception:
+                self.native_stereo_note.visible = False
         self.start_time.visible = bool(opts.get("start_time_visible", False))
 
     async def _pick_end_frame(self, e: ft.ControlEvent) -> None:

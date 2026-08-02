@@ -215,7 +215,7 @@ Long jobs use **per-tab busy** scopes so one generate does not lock the whole ap
 - `outputs/` (generations, caches)
 - `data/resolve_handoff/`
 - `.env` (secrets)
-- `data/voice_samples/`, personal `AUDIT_REPORT*.txt`
+- `data/voice_samples/`, local `Reports/` (audits; gitignored)
 
 `.gitignore` already excludes these. Recipients: clone → `start.bat` / `start.sh` → Settings → keys.
 

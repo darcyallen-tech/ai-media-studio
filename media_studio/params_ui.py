@@ -42,6 +42,28 @@ def is_auto_model(choice: str | None) -> bool:
     return choice.strip().lower() in ("", "auto", "auto (default)", "default")
 
 
+def resolve_vision_studio_model(model_choice: str | None):
+    """
+    Resolve Creative Vision / Studio T2I·T2V labels (not fal IMAGE_EDIT / VIDEO_MODELS).
+
+    Returns VisionModelSpec or None. Prefer pure T2V / T2I over omni/ref packs for
+    control_options and cost (omni stays Vision UI).
+    """
+    if not model_choice or is_auto_model(model_choice):
+        return None
+    try:
+        from media_studio.vision_registry import find_vision_model
+
+        # Explicit modes first (Studio modality lists)
+        for mode in ("text_to_video", "text_to_image", "image_to_video", "bridge"):
+            spec = find_vision_model(model_choice, mode)  # type: ignore[arg-type]
+            if spec is not None:
+                return spec
+        return find_vision_model(model_choice)
+    except Exception:
+        return None
+
+
 def resolve_active_model(
     model_choice: str | None,
     *,
@@ -69,13 +91,123 @@ def resolve_active_model(
     vid = resolve_video_model(model_choice)
     if vid:
         return ("image_to_video" if vid.task == "image_to_video" else "video"), vid
+    # Vision T2V/T2I labels: not fal VIDEO/IMAGE registry — leave kind for caller;
+    # control_options handles VisionModelSpec via resolve_vision_studio_model.
     return kind, default_image_edit_model()
+
+
+def _control_options_vision(spec: Any) -> dict[str, Any]:
+    """control_options payload for Creative Vision T2I / T2V models."""
+    mode = getattr(spec, "mode", "") or ""
+    if mode == "text_to_video":
+        dur_choices = list(spec.duration_choices or ()) or ["5", "6", "8"]
+        dur_value = (
+            spec.default_duration
+            if spec.default_duration in dur_choices
+            else dur_choices[0]
+        )
+        ar_choices = list(spec.aspect_choices or ()) or ["16:9"]
+        ar_value = (
+            spec.default_aspect
+            if spec.default_aspect in ar_choices
+            else ar_choices[0]
+        )
+        res_choices = list(spec.resolution_choices or ())
+        show_res = bool(res_choices)
+        res_value = (
+            (
+                spec.default_resolution
+                if spec.default_resolution in res_choices
+                else res_choices[0]
+            )
+            if show_res
+            else NONE
+        )
+        return {
+            "kind": "text_to_video",
+            "resolution_choices": res_choices if show_res else [NONE],
+            "resolution_value": res_value,
+            "resolution_visible": show_res,
+            "num_images_choices": ["1"],
+            "num_images_value": "1",
+            "num_images_visible": False,
+            "duration_choices": dur_choices,
+            "duration_value": dur_value,
+            "duration_visible": True,
+            "duration_api": True,
+            "aspect_choices": ar_choices,
+            "aspect_value": ar_value,
+            "aspect_visible": True,
+            "strength_visible": False,
+            "strength_value": 0.6,
+            "generate_audio_visible": bool(getattr(spec, "supports_audio", False)),
+            "generate_audio_value": bool(getattr(spec, "supports_audio", False)),
+            "keep_audio_visible": False,
+            "keep_audio_value": False,
+            "start_time_visible": False,
+            "start_time_value": 0.0,
+            "native_stereo": bool(getattr(spec, "native_stereo_audio", False)),
+        }
+
+    # text_to_image
+    ar_choices = list(spec.aspect_choices or ()) or [
+        "16:9 landscape",
+        "9:16 portrait",
+        "1:1 square",
+    ]
+    ar_value = (
+        spec.default_aspect
+        if spec.default_aspect in ar_choices
+        else ar_choices[0]
+    )
+    res_choices = list(spec.resolution_choices or ())
+    show_res = bool(res_choices)
+    res_value = (
+        (
+            spec.default_resolution
+            if spec.default_resolution in res_choices
+            else res_choices[0]
+        )
+        if show_res
+        else NONE
+    )
+    max_n = max(1, int(getattr(spec, "max_num_images", 1) or 1))
+    _UI_BATCH_MAX = 4
+    num_choices = [str(i) for i in range(1, _UI_BATCH_MAX + 1)]
+    return {
+        "kind": "text_to_image",
+        "resolution_choices": res_choices if show_res else [NONE],
+        "resolution_value": res_value if show_res else NONE,
+        "resolution_visible": show_res,
+        "num_images_choices": num_choices,
+        "num_images_value": "1",
+        "num_images_visible": True,
+        "duration_choices": [NONE],
+        "duration_value": NONE,
+        "duration_visible": False,
+        "aspect_choices": ar_choices,
+        "aspect_value": ar_value,
+        "aspect_visible": True,
+        "strength_visible": False,
+        "strength_value": 0.6,
+        "generate_audio_visible": False,
+        "generate_audio_value": False,
+        "max_num_images_api": max_n,
+    }
 
 
 def control_options(model_choice: str | None) -> dict[str, Any]:
     """
     Dropdown choices + visibility for the currently selected model.
     """
+    # Vision T2I / T2V first (Studio modality lists) — before fal fallback to Flux edit
+    vspec = resolve_vision_studio_model(model_choice)
+    if vspec is not None and getattr(vspec, "mode", "") in (
+        "text_to_video",
+        "text_to_image",
+    ):
+        return _control_options_vision(vspec)
+
     kind, spec = resolve_active_model(model_choice, has_image=True, has_video=True)
 
     if isinstance(spec, ImageEditModelSpec):

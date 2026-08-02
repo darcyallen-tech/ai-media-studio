@@ -40,7 +40,9 @@ data/resolve_handoff/*
 *.tmp
 *.log
 
-# Personal audit / local layout notes (machine paths, not product docs)
+# Local audits / reports (not product docs — never commit)
+Reports/
+Reports/**
 AUDIT*.txt
 *AUDIT*.txt
 *AUDIT*.md
