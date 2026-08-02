@@ -258,7 +258,7 @@ class InpaintCard:
             expand=True,
         )
         self.grow_hint = ft.Text(
-            "Expand mask so fill blends at edges (export only).",
+            "Applied at export only (canvas shows exact brush).",
             size=11,
             color=TEXT_MUTED,
             max_lines=2,

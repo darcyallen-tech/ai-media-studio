@@ -123,10 +123,17 @@ def run_vision(
             source_still_path = ip
             progress(f"Uploading source still: {ip.name}")
             image_url = upload_file(ip, on_progress=progress)
-            # Multi-ref extras (identity / material / furniture) when model allows
+            # Multi-ref extras — cap from fal.models (edit_model_key), not dual table
+            from media_studio.fal.models import max_extra_ref_images_for_choice
             from media_studio.vision_registry import I2I_MAX_EXTRA_REFS
 
-            extra_cap = min(I2I_MAX_EXTRA_REFS, max(0, int(spec.max_refs or 0)))
+            edit_key = (getattr(spec, "edit_model_key", None) or "").strip() or (
+                getattr(spec, "label", None) or ""
+            )
+            extra_cap = min(
+                I2I_MAX_EXTRA_REFS,
+                max(0, int(max_extra_ref_images_for_choice(edit_key))),
+            )
             for rp in (ref_paths or [])[:extra_cap]:
                 try:
                     p = Path(rp)

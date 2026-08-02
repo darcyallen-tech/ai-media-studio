@@ -312,7 +312,8 @@ LIBRARY
     Assign: same New / existing / Clear menu as single-card; metadata + optional
     file move for every selected item.
     Send to Resolve: Tier A per item (bin AI Media Studio / job or date; optional
-    V2/playhead + marker); images + videos mixed OK; continues on per-item failure;
+    V2/playhead + marker); images + videos mixed OK; continues on per-item failure
+    except Resolve unavailable / no project (stops batch with one message);
     snack summary “N sent, M skipped (…)”. Single-card Send to menu unchanged.
 - Local spend panel (from history costs only):
     Today / This week / This month / All time totals

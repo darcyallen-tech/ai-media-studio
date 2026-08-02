@@ -865,12 +865,23 @@ class CreativeVisionView:
             pass
 
     def _i2i_extra_ref_cap(self) -> int:
-        """Max extra refs for current I2I model (0 = single-image)."""
+        """
+        Max extra refs for current I2I model (0 = single-image).
+
+        Source of truth: fal.models max_ref_images (via edit_model_key), not a
+        separate vision max_refs table (avoids dual drift).
+        """
         if self._mode != "image_to_image":
             return 0
         try:
+            from media_studio.fal.models import max_extra_ref_images_for_choice
+
             spec = self._current_spec()
-            return min(I2I_MAX_EXTRA_REFS, max(0, int(spec.max_refs or 0)))
+            key = (getattr(spec, "edit_model_key", None) or "").strip()
+            if not key:
+                key = (getattr(spec, "label", None) or "").strip()
+            extras = max_extra_ref_images_for_choice(key)
+            return min(I2I_MAX_EXTRA_REFS, max(0, int(extras)))
         except Exception:
             return 0
 

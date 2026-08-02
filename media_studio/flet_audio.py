@@ -1768,44 +1768,97 @@ class AudioView:
                 self.mx_status.value = err
                 self.mx_status.color = "#e57373"
             else:
-                parsed = self._mx_parse_scene_layers(result.optimized_prompt)
-                filled = 0
-                for s in self.mx_slots:
-                    k = s["key"]
-                    text = (parsed.get(k) or "").strip()
-                    if text:
-                        s["prompt"].value = text
-                        filled += 1
-                        # Reset intent to Custom — scene is source of truth
-                        try:
-                            if s.get("intent_dd") is not None:
-                                s["intent_dd"].value = self._MX_INTENT_CUSTOM
-                        except Exception:
-                            pass
-                if filled == 0:
-                    # Put whole rewrite on spot as last resort
-                    self._mx_slot("spot")["prompt"].value = (
-                        result.optimized_prompt.strip()[:600]
+                raw_out = result.optimized_prompt.strip()
+                parsed = self._mx_parse_scene_layers(raw_out)
+                filled = self._mx_apply_scene_prompts(parsed)
+
+                # One retry if fewer than 2 slots filled
+                if filled < 2:
+                    self.mx_status.value = (
+                        "Scene Enhance sparse — retrying with stricter format…"
                     )
-                    filled = 1
-                done = (
-                    f"Scene Enhance filled {filled} layer prompt(s). "
-                    "Edit any slot, then Generate each (not auto-run)."
-                )
-                self.mx_progress.finish_ok(done, self.page)
-                self.mx_status.value = done
-                self.mx_status.color = TEXT_MUTED
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+                    retry_seed = (
+                        user_seed
+                        + "\n\nIMPORTANT: Previous reply was not parseable. "
+                        "Reply with ONLY three lines starting exactly:\n"
+                        "BED: …\nSPOT: …\nACCENT: …\n"
+                        "No other text."
+                    )
+                    try:
+                        result2 = await to_thread_with_job(
+                            self.state,
+                            enhance_prompt,
+                            prompt=retry_seed,
+                            model_choice=model_label or "",
+                            output_dir=self.state.output_dir,
+                            extra_context={
+                                "workspace": "sfx_mixer_scene",
+                                "guidance": (
+                                    "ONLY BED:/SPOT:/ACCENT: lines. No prose."
+                                ),
+                            },
+                        )
+                        if result2.ok and (result2.optimized_prompt or "").strip():
+                            raw_out = result2.optimized_prompt.strip()
+                            parsed = self._mx_parse_scene_layers(raw_out)
+                            filled = self._mx_apply_scene_prompts(parsed)
+                    except Exception:
+                        pass
+
+                if filled < 2:
+                    # Surface raw text for manual edit (put on Spot)
+                    spot = self._mx_slot("spot")
+                    if spot is not None:
+                        spot["prompt"].value = raw_out[:800]
+                    done = (
+                        f"Scene Enhance could only split {filled} layer(s). "
+                        "Raw text is in Spot — copy lines into Bed/Accent, or re-run."
+                    )
+                    self.mx_progress.finish_ok(done, self.page)
+                    self.mx_status.value = done
+                    self.mx_status.color = TEXT_MUTED
+                else:
+                    done = (
+                        f"Scene Enhance filled {filled} layer prompt(s). "
+                        "Edit any slot, then Generate (not auto-run)."
+                    )
+                    self.mx_progress.finish_ok(done, self.page)
+                    self.mx_status.value = done
+                    self.mx_status.color = TEXT_MUTED
         except Exception as exc:
             self.mx_progress.finish_error(str(exc), self.page)
             self.mx_status.value = f"Scene Enhance error: {exc}"
             self.mx_status.color = "#e57373"
         finally:
-            self.state.clear_busy("enhance")
+            try:
+                self.state.clear_busy("enhance")
+            except Exception:
+                pass
             self.apply_key_gates()
             try:
                 self.page.update()
             except Exception:
                 pass
+
+    def _mx_apply_scene_prompts(self, parsed: dict[str, str]) -> int:
+        """Write parsed bed/spot/accent into slots; return how many non-empty."""
+        filled = 0
+        for s in self.mx_slots:
+            k = s["key"]
+            text = (parsed.get(k) or "").strip()
+            if text:
+                s["prompt"].value = text
+                filled += 1
+                try:
+                    if s.get("intent_dd") is not None:
+                        s["intent_dd"].value = self._MX_INTENT_CUSTOM
+                except Exception:
+                    pass
+        return filled
 
     async def _mx_on_intent(self, key: str) -> None:
         """Inject a short prompt scaffold from the intent helper (editable after)."""
@@ -2088,11 +2141,16 @@ class AudioView:
                     self.page.update()
                 except Exception:
                     pass
-                ok = await self._mx_generate_slot(
-                    key,
-                    manage_busy=False,
-                    batch_label=f"Generate all ({i + 1}/{n}): {title}…",
-                )
+                try:
+                    ok = await self._mx_generate_slot(
+                        key,
+                        manage_busy=False,
+                        batch_label=f"Generate all ({i + 1}/{n}): {title}…",
+                    )
+                except Exception as exc:
+                    ok = False
+                    self.mx_status.value = f"{title} error: {exc}"
+                    self.mx_status.color = "#e57373"
                 if ok:
                     ok_n += 1
                 else:
@@ -2116,9 +2174,23 @@ class AudioView:
                 self.mx_status.value = done
                 self.mx_status.color = TEXT_MUTED
             self.mx_cost.value = self._mx_cost_label()
+        except Exception as exc:
+            # Never leave audio permanently busy if batch blows up
+            try:
+                self.mx_progress.finish_error(str(exc), self.page)
+            except Exception:
+                pass
+            self.mx_status.value = f"Generate all error: {exc}"
+            self.mx_status.color = "#e57373"
         finally:
-            self.state.clear_busy("audio")
-            self.apply_key_gates()
+            try:
+                self.state.clear_busy("audio")
+            except Exception:
+                pass
+            try:
+                self.apply_key_gates()
+            except Exception:
+                pass
             try:
                 self.page.update()
             except Exception:

@@ -776,16 +776,26 @@ class LibraryView:
             # Soft fail — still count as skipped for summary
             reason = result.message or "Resolve import failed"
             # Keep reason short for snack
-            if "not running" in reason.lower() or "scripting" in reason.lower():
+            low = reason.lower()
+            if (
+                "not running" in low
+                or "scripting" in low
+                or "could not connect" in low
+                or "unavailable" in low
+            ):
                 short = "Resolve unavailable"
-            elif "no project" in reason.lower():
+            elif "no project" in low or "project open" in low:
                 short = "no project open"
-            elif "missing" in reason.lower() or "not found" in reason.lower():
+            elif "missing" in low or "not found" in low:
                 short = "file missing"
             else:
                 short = reason.split(".")[0][:48]
             return False, short
 
+        # Failures that mean the rest of the batch will also fail — stop early
+        _STOP_BULK = frozenset({"Resolve unavailable", "no project open"})
+
+        aborted_rest = 0
         try:
             for eid in ids:
                 entry = find_by_id(eid, self.state.output_dir)
@@ -804,6 +814,13 @@ class LibraryView:
                     skipped += 1
                     if detail and detail not in skip_reasons:
                         skip_reasons.append(detail)
+                    # Don't soft-fail every card when Resolve is closed / no project
+                    if detail in _STOP_BULK:
+                        rest = len(ids) - (sent + skipped)
+                        if rest > 0:
+                            aborted_rest = rest
+                            skipped += rest
+                        break
         finally:
             try:
                 self.btn_bulk_resolve.disabled = False
@@ -811,7 +828,19 @@ class LibraryView:
                 pass
 
         total = len(ids)
-        if sent and not skipped:
+        if aborted_rest and sent == 0:
+            reason = skip_reasons[0] if skip_reasons else "Resolve unavailable"
+            summary = (
+                f"Stopped: {reason}. "
+                f"0 sent · {total} selected (open Resolve with a project, then retry)."
+            )
+        elif aborted_rest and sent:
+            reason = skip_reasons[0] if skip_reasons else "Resolve unavailable"
+            summary = (
+                f"{sent} sent, then stopped ({reason}). "
+                f"{skipped} not sent of {total} selected."
+            )
+        elif sent and not skipped:
             summary = f"Sent {sent} item{'s' if sent != 1 else ''} to Resolve."
         elif sent and skipped:
             reason = skip_reasons[0] if skip_reasons else "error"

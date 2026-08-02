@@ -1414,11 +1414,21 @@ def max_ref_images_for_choice(choice: str | None) -> int:
     How many input stills (primary + optional refs) the selected image model accepts.
 
     Auto / unknown → 1 (safe single-ref). Region / single-image models stay at 1.
+    Single source of truth for Studio + Vision multi-ref caps.
     """
     spec = resolve_image_edit_model(choice)
     if spec is None:
         return 1
     return spec.clamp_ref_images(spec.max_ref_images or 1)
+
+
+def max_extra_ref_images_for_choice(choice: str | None) -> int:
+    """
+    Max *extra* reference stills (excluding primary).
+
+    Vision I2I UI/service should use this — not a parallel max_refs table.
+    """
+    return max(0, max_ref_images_for_choice(choice) - 1)
 
 
 def resolve_video_model(choice: str | None) -> VideoModelSpec | None:

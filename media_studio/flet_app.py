@@ -3091,7 +3091,24 @@ class StudioImageView:
                 )
                 self.job_progress.finish_ok(done, self.page)
                 self.job_log.finish_ok(self.page)
-                self._set_status(done)
+                # Region placement stays source-only — point user to versions / A/B
+                if getattr(self, "_edit_mode", "standard") == "region":
+                    tip = (
+                        f"{done} · Result is in versions — toggle A/B to show Gen "
+                        "(source stays clear for box placement)."
+                    )
+                    self._set_status(tip)
+                    try:
+                        from media_studio.flet_dialogs import show_snack
+
+                        show_snack(
+                            self.page,
+                            "Region: result in versions · use A/B for Gen",
+                        )
+                    except Exception:
+                        pass
+                else:
+                    self._set_status(done)
                 self.qc_row.visible = True
                 self.btn_qc.visible = True
                 self.btn_qc_fix.visible = False

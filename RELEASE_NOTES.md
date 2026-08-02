@@ -14,14 +14,14 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 ### Audio — Layered SFX mixer (v1)
 - New **Mixer** pill: Bed / Spot / Accent (plain labels + subtitles; not a DAW)
-- **Scene Enhance** — one scene box → Grok fills Bed/Spot/Accent prompts (no auto Generate)
-- **Generate all** — sequential Generate for unmuted layers with prompts; keeps old audio until a slot succeeds
+- **Scene Enhance** — one scene box → Grok fills Bed/Spot/Accent; retry if &lt;2 slots parse; raw text to Spot on sparse fill
+- **Generate all** — sequential Generate for unmuted layers with prompts; busy lock always cleared on error; keeps old audio until success
 - Per-slot Generate / Enhance + intent helpers; **Load from Video → SFX** on Bed/Spot
 - Bounce mix + optional stems; MP3 via pygame WAV sidecars; cost sums pending layers
 
 ### Library
 - **Bulk Assign to Job / Listing** — multi-select cards (checkbox), bulk bar with Assign to ▾ (New / existing jobs / Clear); same metadata + optional move under `jobs/<name>/` as single-card Assign
-- **Bulk Send to Resolve** — same bulk bar; each selected item uses Tier A send (bin / optional track+marker); mixed image+video OK; continues on failures; snack “N sent, M skipped”
+- **Bulk Send to Resolve** — same bulk bar; each selected item uses Tier A send (bin / optional track+marker); mixed image+video OK; continues on failures unless Resolve is unavailable / no project (stops with one snack)
 - **From Resolve** filter chip (All | Image | Video | Audio | From Resolve)
 - **Resolve** badge on handoff-origin cards in All (and other filters)
 - History stores `origin=resolve` on Import / plugin send
@@ -68,14 +68,14 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - Overlay / A-B still maps boxes to the source frame; slider and drag stay in sync across both views
 - Region placement: **no full-stage grey blend scrim** — source stays full brightness; only colored box rects sit on the photo
 - Region box host is sized to the **image content_rect only** (not a full-stage transparent pin that could grey-veil the photo)
-- Gen blend layer is **removed from the Comparison Stack** while placing boxes (asserted; rebuild failures force source-only); Overlay/A-B only after a real generation when A/B is on
+- Gen blend layer is **removed from the Comparison Stack** while placing boxes (asserted; rebuild failures force source-only); after Generate, status/toast points to versions + A/B for Gen
 
 ### Tools — Inpaint (freehand)
 - New Image tool with **3-column layout**: left controls · large center canvas · right result
 - Brush / eraser / size / clear / undo; live canvas strokes, committed overlay on stroke end
 - **Canvas zoom** (− / Fit / + and scroll wheel) + **Pan** mode for fine masking; brush size is **constant screen pixels** under zoom; Fit resets to whole image
 - Mask baked at **full source resolution** (EXIF-normalized); zoom/pan map brush→full-res so fal fill never sees mask≠image size
-- **Grow mask** 0 / 2 / 4 / 8 px (default 4): dilate white edit region at **export only** (hard MaxFilter) so fill blends at edges; canvas strokes unchanged; WxH still matches source
+- **Grow mask** 0 / 2 / 4 / 8 px (default 4): dilate at **export only** — UI note “Applied at export only (canvas shows exact brush)”
 - **# Images 1–4** when the endpoint supports `num_images` (e.g. Flux Pro Fill); Est. cost = per-image × N; multi results → Library as separate stills
 - **Reference still** (upload / Previously used / From Resolve) only when the model supports ref — optional for Flux LoRA Fill, **required** for Flux Kontext LoRA Inpaint; hidden for Pro Fill / Dev / Juggernaut
 - Models (mask-capable only): Flux Pro Fill, Flux LoRA Fill, Flux Dev Inpaint (LoRA), Flux Kontext LoRA Inpaint, Juggernaut Flux LoRA Inpaint — not Nano Banana / Flux 2 edit
