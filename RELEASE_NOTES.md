@@ -27,6 +27,11 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - fal endpoints: `minimax/h3/text-to-video`, `image-to-video` (`end_image_url`), `reference-to-video`
 - Does not wire Flux 3 or Seedance 2.5; existing Kling / Seedance 2.0 / Aleph / Veo paths unchanged
 
+### Music — Arrangement builder
+- Optional **Arrangement** block: intro energy/length, lift cue, solo instrument/start/length, outro style, band layers (drums/bass/…)
+- Merges into the auto-built editable Music prompt (ElevenLabs-friendly form language); Enhance keeps structure
+- Duration reliability: hard-limit length language in auto prompt + Enhance; **Trim to Ns** after generate (ffmpeg + short fade-out)
+
 ### Audio — Layered SFX mixer (v1)
 - New **Mixer** pill: Bed / Spot / Accent (plain labels + subtitles; not a DAW)
 - **Scene Enhance** — one scene box → Grok fills Bed/Spot/Accent; retry if &lt;2 slots parse; raw text to Spot on sparse fill

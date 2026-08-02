@@ -67,16 +67,25 @@ from media_studio.flet_theme import (
     styled_dropdown,
 )
 from media_studio.music_builder import (
+    BAND_LAYERS as MUSIC_BAND_LAYERS,
     ENERGY as MUSIC_ENERGY,
     ERAS as MUSIC_ERAS,
     GENRES as MUSIC_GENRES,
     INSTRUMENTS as MUSIC_INSTRUMENTS,
+    INTRO_ENERGY as MUSIC_INTRO_ENERGY,
+    INTRO_LENGTH as MUSIC_INTRO_LENGTH,
+    LIFT_CUE as MUSIC_LIFT_CUE,
     MOODS as MUSIC_MOODS,
+    OUTRO_STYLE as MUSIC_OUTRO,
+    SOLO_INSTRUMENT as MUSIC_SOLO_INST,
+    SOLO_LENGTH as MUSIC_SOLO_LEN,
+    SOLO_START as MUSIC_SOLO_START,
     TEMPO_PRESETS as MUSIC_TEMPO,
     VOCALS as MUSIC_VOCALS,
     build_music_prompt,
     clear_builder_values,
     default_subgenre,
+    ensure_duration_in_prompt,
     subgenres_for,
     vocals_is_instrumental,
 )
@@ -240,11 +249,67 @@ class AudioView:
         return False
 
     async def _enhance_music(self, e: ft.ControlEvent) -> None:
+        def _extra() -> dict:
+            kw = self._music_prompt_kwargs()
+            layers = list(kw.get("layers") or [])
+            snap: dict = {
+                "workspace": "audio_music",
+                "genre": kw.get("genre"),
+                "subgenre": kw.get("subgenre"),
+                "tempo": kw.get("tempo"),
+                "bpm": kw.get("bpm"),
+                "mood": kw.get("mood"),
+                "energy": kw.get("energy"),
+                "vocals": kw.get("vocals"),
+                "instruments_focus": kw.get("instruments"),
+                "custom_notes": (kw.get("custom_notes") or "").strip() or None,
+                "exclude": (kw.get("exclude") or "").strip() or None,
+                "arrangement": {
+                    "intro_energy": kw.get("intro_energy"),
+                    "intro_length": kw.get("intro_length"),
+                    "intro_length_custom_s": kw.get("intro_length_custom_s"),
+                    "lift_cue": kw.get("lift_cue"),
+                    "lift_cue_custom": kw.get("lift_cue_custom"),
+                    "solo_instrument": kw.get("solo_instrument"),
+                    "solo_start": kw.get("solo_start"),
+                    "solo_start_custom": kw.get("solo_start_custom"),
+                    "solo_length": kw.get("solo_length"),
+                    "solo_length_custom_s": kw.get("solo_length_custom_s"),
+                    "outro": kw.get("outro"),
+                    "layers": layers,
+                },
+                "target_duration_s": kw.get("duration_s"),
+                "guidance": (
+                    "Rewrite one cohesive music-generation prompt (ElevenLabs-style). "
+                    "Preserve arrangement structure when set: intro energy/length, "
+                    "lift timing (when full energy hits), optional solo instrument/start/length, "
+                    "outro style, and selected band layers (drums/bass/etc.). "
+                    "Keep form-over-time language clear and ordered. "
+                    "HARD LENGTH: keep a total-length constraint of about "
+                    f"{int(kw.get('duration_s') or 30)} seconds with a tight cutoff — "
+                    "do not remove or soften 'Total length strictly about N seconds' language. "
+                    "If Vocals is Instrumental only, keep fully instrumental — no vocals/lyrics. "
+                    "Do not invent multi-stem or mixer instructions. "
+                    "Fold custom notes and excludes into the final prompt; do not drop them."
+                ),
+            }
+            # Drop empty arrangement keys for cleaner enhance payload
+            arr = snap["arrangement"]
+            snap["arrangement"] = {
+                k: v
+                for k, v in arr.items()
+                if v not in (None, "", (), [])
+                and str(v).strip().lower()
+                not in {"(none)", "none", "(none / auto)", "auto"}
+            }
+            return {k: v for k, v in snap.items() if v is not None}
+
         await run_prompt_enhance(
             page=self.page,
             state=self.state,
             prompt_field=self.mu_prompt,
             get_model=lambda: _dd_value(self.mu_model),
+            get_extra_context=_extra,
             status_ctrl=self.mu_status,
             job_progress=self.mu_progress,
             enhance_btn=self.mu_enhance,
@@ -376,7 +441,12 @@ class AudioView:
             panel.visible = True
         except Exception:
             pass
-        # Single scroll: ListView host only (no nested form scroll)
+        # Single scroll: ListView host only (no nested form scroll).
+        # Card must stay content-sized (no expand) or ListView paints a tall grey void.
+        try:
+            panel.expand = False
+        except Exception:
+            pass
         self._audio_host.content = ft.ListView(
             controls=[
                 ft.Container(
@@ -384,11 +454,14 @@ class AudioView:
                     padding=ft.Padding.only(right=8, bottom=16),
                     # Cap card width on ultra-wide so empty margin isn't a grey slab
                     width=900,
+                    expand=False,
+                    alignment=ft.Alignment.TOP_LEFT,
                 )
             ],
             expand=True,
             spacing=0,
             padding=ft.Padding.only(bottom=8),
+            auto_scroll=False,
         )
 
     def build(self) -> ft.Control:
@@ -466,6 +539,193 @@ class AudioView:
             value=d.get("instruments") or MUSIC_INSTRUMENTS[0],
             on_select=self._music_rebuild,
             expand=True,
+        )
+        # ----- Arrangement / layer builder (optional) -----
+        self.mu_arr_title = ft.Text(
+            "Arrangement (optional)",
+            size=FONT_SM,
+            color=TEXT,
+            weight=ft.FontWeight.W_700,
+        )
+        self.mu_arr_hint = ft.Text(
+            "Intro · lift · solo · outro + band layers — empty fields add no prompt text. "
+            "One track prompt only (not multi-stem).",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=2,
+        )
+        # Arrangement dropdowns: no expand=True (ListView + expand Rows = tall grey voids)
+        self.mu_intro_energy = styled_dropdown(
+            label_text="Intro energy",
+            options=MUSIC_INTRO_ENERGY,
+            value=MUSIC_INTRO_ENERGY[0],
+            on_select=self._music_rebuild,
+            expand=False,
+            width=160,
+        )
+        self.mu_intro_length = styled_dropdown(
+            label_text="Intro length",
+            options=MUSIC_INTRO_LENGTH,
+            value=MUSIC_INTRO_LENGTH[0],
+            on_select=self._music_arr_visibility,
+            expand=False,
+            width=140,
+        )
+        self.mu_intro_custom = ft.TextField(
+            label="Intro custom (s)",
+            value="",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            width=120,
+            height=48,
+            visible=False,
+            on_change=self._music_rebuild,
+        )
+        self.mu_lift = styled_dropdown(
+            label_text="Lift (full energy)",
+            options=MUSIC_LIFT_CUE,
+            value=MUSIC_LIFT_CUE[0],
+            on_select=self._music_arr_visibility,
+            expand=False,
+            width=180,
+        )
+        self.mu_lift_custom = ft.TextField(
+            label="Lift custom time",
+            hint_text="e.g. 12s or after verse",
+            value="",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            width=200,
+            height=48,
+            visible=False,
+            on_change=self._music_rebuild,
+        )
+        self.mu_solo_inst = styled_dropdown(
+            label_text="Solo",
+            options=MUSIC_SOLO_INST,
+            value=MUSIC_SOLO_INST[0],
+            on_select=self._music_arr_visibility,
+            expand=False,
+            width=150,
+        )
+        self.mu_solo_start = styled_dropdown(
+            label_text="Solo start",
+            options=MUSIC_SOLO_START,
+            value=MUSIC_SOLO_START[0],
+            on_select=self._music_arr_visibility,
+            expand=False,
+            width=150,
+        )
+        self.mu_solo_start_custom = ft.TextField(
+            label="Solo start custom",
+            value="",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            width=160,
+            height=48,
+            visible=False,
+            on_change=self._music_rebuild,
+        )
+        self.mu_solo_length = styled_dropdown(
+            label_text="Solo length",
+            options=MUSIC_SOLO_LEN,
+            value=MUSIC_SOLO_LEN[0],
+            on_select=self._music_arr_visibility,
+            expand=False,
+            width=140,
+        )
+        self.mu_solo_len_custom = ft.TextField(
+            label="Solo length (s)",
+            value="",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            width=120,
+            height=48,
+            visible=False,
+            on_change=self._music_rebuild,
+        )
+        self.mu_outro = styled_dropdown(
+            label_text="Outro",
+            options=MUSIC_OUTRO,
+            value=MUSIC_OUTRO[0],
+            on_select=self._music_rebuild,
+            expand=False,
+            width=160,
+        )
+        self.mu_layer_checks: dict[str, ft.Checkbox] = {}
+        layer_boxes: list[ft.Control] = []
+        for name in MUSIC_BAND_LAYERS:
+            cb = ft.Checkbox(
+                label=name,
+                value=False,
+                on_change=self._music_rebuild,
+            )
+            self.mu_layer_checks[name] = cb
+            layer_boxes.append(cb)
+        self.mu_layers_row = ft.Row(
+            layer_boxes,
+            spacing=8,
+            wrap=True,
+            run_spacing=4,
+            tight=True,
+        )
+        # Two fixed solo rows (no wrap + expand — that created tall grey voids)
+        self.mu_solo_row = ft.Row(
+            [self.mu_solo_inst, self.mu_solo_start, self.mu_solo_length],
+            spacing=8,
+            tight=True,
+            wrap=False,
+        )
+        self.mu_solo_custom_row = ft.Row(
+            [self.mu_solo_start_custom, self.mu_solo_len_custom],
+            spacing=8,
+            tight=True,
+            wrap=False,
+            visible=False,
+        )
+        self.mu_arr_block = ft.Column(
+            [
+                self.mu_arr_title,
+                self.mu_arr_hint,
+                ft.Row(
+                    [self.mu_intro_energy, self.mu_intro_length, self.mu_intro_custom],
+                    spacing=8,
+                    tight=True,
+                    wrap=False,
+                ),
+                ft.Row(
+                    [self.mu_lift, self.mu_lift_custom],
+                    spacing=8,
+                    tight=True,
+                    wrap=False,
+                ),
+                self.mu_solo_row,
+                self.mu_solo_custom_row,
+                ft.Row([self.mu_outro], spacing=8, tight=True),
+                ft.Text(
+                    "Layers", size=FONT_SM, color=TEXT_MUTED, weight=ft.FontWeight.W_600
+                ),
+                self.mu_layers_row,
+            ],
+            spacing=6,
+            tight=True,
+            expand=False,
         )
         # High-contrast labels + full-width fields (Music polish)
         self.mu_lyrics_label = ft.Text(
@@ -572,7 +832,13 @@ class AudioView:
             value=30,
             label="Duration {value}s",
             active_color=ACCENT,
-            on_change=self._music_cost_refresh,
+            on_change=self._music_duration_change,
+        )
+        self.mu_dur_hint = ft.Text(
+            "Target length — model may run long; Trim to target after generate.",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=2,
         )
         self.mu_cost = ft.Text(self._music_cost(), size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600)
         self.mu_status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=3)
@@ -584,12 +850,25 @@ class AudioView:
             style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
         )
         self.mu_enhance = make_enhance_button(on_click=self._enhance_music)
+        # Post-generate hard trim to slider target (ffmpeg)
+        self._mu_last_path: str | None = None
+        self._mu_last_target_s: float = 30.0
+        self.mu_btn_trim = ft.OutlinedButton(
+            content="Trim to 30s",
+            icon=ft.Icons.CONTENT_CUT,
+            on_click=self._trim_music_to_target,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            visible=False,
+            tooltip="Hard-cut the last result to the duration slider target (short fade-out).",
+        )
 
         self.music_card = ft.Container(
             bgcolor=PANEL,
             border=ft.Border.all(1, BORDER),
             border_radius=8,
             padding=12,
+            # Content-sized only — never expand into ListView grey slab
+            expand=False,
             content=ft.Column(
                 [
                     section_title("1. Music"),
@@ -597,6 +876,8 @@ class AudioView:
                     ft.Row([self.mu_genre, self.mu_sub, self.mu_era], spacing=8),
                     ft.Row([self.mu_tempo, self.mu_bpm, self.mu_mood, self.mu_energy], spacing=8),
                     ft.Row([self.mu_vocals, self.mu_instruments], spacing=8),
+                    # Arrangement / form (optional — empty slots silent)
+                    self.mu_arr_block,
                     # Persistent notes / exclude (never wiped by structured rebuild)
                     self.mu_notes_label,
                     self.mu_notes,
@@ -611,14 +892,17 @@ class AudioView:
                     ft.Row([self.mu_model], spacing=8),
                     label("Duration (seconds) — used when model supports it", muted=True),
                     self.mu_dur,
+                    self.mu_dur_hint,
                     _cost_box(self.mu_cost),
-                    ft.Row([self.mu_enhance, self.mu_btn], spacing=8),
+                    ft.Row([self.mu_enhance, self.mu_btn, self.mu_btn_trim], spacing=8),
                     self.mu_progress.control,
                     self.mu_status,
                     self.mu_player.control,
                 ],
                 spacing=8,
                 tight=True,
+                expand=False,
+                scroll=None,
             ),
         )
 
@@ -637,10 +921,33 @@ class AudioView:
             "lyrics": d.get("lyrics") or "",
             "custom_notes": d.get("custom_notes") or "",
             "exclude": d.get("exclude") or "",
+            "intro_energy": d.get("intro_energy"),
+            "intro_length": d.get("intro_length"),
+            "intro_length_custom_s": d.get("intro_length_custom_s"),
+            "lift_cue": d.get("lift_cue"),
+            "lift_cue_custom": d.get("lift_cue_custom") or "",
+            "solo_instrument": d.get("solo_instrument"),
+            "solo_start": d.get("solo_start"),
+            "solo_start_custom": d.get("solo_start_custom") or "",
+            "solo_length": d.get("solo_length"),
+            "solo_length_custom_s": d.get("solo_length_custom_s"),
+            "outro": d.get("outro"),
+            "layers": tuple(d.get("layers") or ()),
+            "duration_s": d.get("duration_s") or 30,
         }
 
+    def _music_selected_layers(self) -> list[str]:
+        out: list[str] = []
+        for name, cb in getattr(self, "mu_layer_checks", {}).items():
+            try:
+                if bool(cb.value):
+                    out.append(name)
+            except Exception:
+                pass
+        return out
+
     def _music_prompt_kwargs(self) -> dict:
-        """Structured fields + persistent notes/exclude (never cleared by rebuild)."""
+        """Structured fields + arrangement + persistent notes/exclude."""
         bpm_raw = (self.mu_bpm.value or "").strip()
         bpm = None
         if bpm_raw:
@@ -649,6 +956,16 @@ class AudioView:
             except ValueError:
                 bpm = None
         vocals = _dd_value(self.mu_vocals) or "Instrumental only"
+
+        def _opt_int(field) -> int | None:
+            try:
+                raw = (field.value or "").strip()
+                if not raw:
+                    return None
+                return int(float(raw))
+            except (TypeError, ValueError, AttributeError):
+                return None
+
         return {
             "genre": _dd_value(self.mu_genre),
             "subgenre": _dd_value(self.mu_sub),
@@ -660,10 +977,58 @@ class AudioView:
             "vocals": vocals,
             "instruments": _dd_value(self.mu_instruments),
             "lyrics": self.mu_lyrics.value or "",
-            # Read live from notes/exclude fields — never reset on structured change
             "custom_notes": self.mu_notes.value or "",
             "exclude": self.mu_exclude.value or "",
+            "intro_energy": _dd_value(self.mu_intro_energy),
+            "intro_length": _dd_value(self.mu_intro_length),
+            "intro_length_custom_s": _opt_int(self.mu_intro_custom),
+            "lift_cue": _dd_value(self.mu_lift),
+            "lift_cue_custom": (self.mu_lift_custom.value or "").strip(),
+            "solo_instrument": _dd_value(self.mu_solo_inst),
+            "solo_start": _dd_value(self.mu_solo_start),
+            "solo_start_custom": (self.mu_solo_start_custom.value or "").strip(),
+            "solo_length": _dd_value(self.mu_solo_length),
+            "solo_length_custom_s": _opt_int(self.mu_solo_len_custom),
+            "outro": _dd_value(self.mu_outro),
+            "layers": self._music_selected_layers(),
+            "duration_s": float(self.mu_dur.value or 30),
         }
+
+    async def _music_arr_visibility(self, e: ft.ControlEvent | None = None) -> None:
+        """Show custom time/length fields only when Custom is selected."""
+        try:
+            intro_len = (_dd_value(self.mu_intro_length) or "").lower()
+            self.mu_intro_custom.visible = "custom" in intro_len
+            lift = (_dd_value(self.mu_lift) or "").lower()
+            self.mu_lift_custom.visible = "custom" in lift
+            solo_raw = (_dd_value(self.mu_solo_inst) or "").strip().lower()
+            solo_none = solo_raw in {
+                "",
+                "(none)",
+                "none",
+                "(none / auto)",
+                "auto",
+            }
+            self.mu_solo_start.visible = not solo_none
+            self.mu_solo_length.visible = not solo_none
+            start = (_dd_value(self.mu_solo_start) or "").lower()
+            slen = (_dd_value(self.mu_solo_length) or "").lower()
+            show_start_c = (not solo_none) and "custom" in start
+            show_len_c = (not solo_none) and "custom" in slen
+            self.mu_solo_start_custom.visible = show_start_c
+            self.mu_solo_len_custom.visible = show_len_c
+            # Whole custom row only when at least one custom field is on
+            try:
+                self.mu_solo_custom_row.visible = show_start_c or show_len_c
+            except Exception:
+                pass
+        except Exception:
+            pass
+        self._apply_music_prompt_rebuild()
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     def _music_is_instrumental(self) -> bool:
         return vocals_is_instrumental(_dd_value(self.mu_vocals))
@@ -703,6 +1068,112 @@ class AudioView:
         self.mu_cost.value = self._music_cost()
         self.page.update()
 
+    async def _music_duration_change(self, e: ft.ControlEvent) -> None:
+        """Duration slider: cost + hard-limit language in the auto-built prompt."""
+        self.mu_cost.value = self._music_cost()
+        n = int(round(float(self.mu_dur.value or 30)))
+        try:
+            self.mu_btn_trim.content = f"Trim to {n}s"
+        except Exception:
+            pass
+        # Rebuild structured prompt so duration clause stays in sync
+        self._apply_music_prompt_rebuild()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _music_update_trim_button(self, *, enable: bool, target_s: float) -> None:
+        n = int(round(float(target_s or 30)))
+        try:
+            self.mu_btn_trim.content = f"Trim to {n}s"
+            self.mu_btn_trim.visible = bool(enable)
+            self.mu_btn_trim.disabled = not bool(enable)
+        except Exception:
+            pass
+
+    async def _trim_music_to_target(self, e: ft.ControlEvent) -> None:
+        """Post-generate hard cut to the duration used for the last music job."""
+        if self.state.is_busy("audio"):
+            return
+        path = self._mu_last_path
+        if not path or not Path(path).is_file():
+            self.mu_status.value = "No music result to trim — Generate first."
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+        target = float(self._mu_last_target_s or self.mu_dur.value or 30)
+        if not self.state.try_busy("audio"):
+            return
+        self.mu_btn_trim.disabled = True
+        self.mu_btn.disabled = True
+        self.mu_progress.start(f"Trimming to {int(round(target))}s…", self.page)
+        self.mu_status.value = f"Trim to {int(round(target))}s…"
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        try:
+            from media_studio.audio_mix import trim_audio_to_duration
+            from media_studio.history import append_history
+            from media_studio.job_context import to_thread_with_job
+
+            out_path, src_dur, note = await to_thread_with_job(
+                self.state,
+                trim_audio_to_duration,
+                path,
+                target,
+                fade_out_s=0.4,
+            )
+            if out_path and Path(out_path).is_file():
+                self._mu_last_path = out_path
+                self.mu_player.set_result(out_path)
+                # Index trimmed file for Library when a new file was written
+                if Path(out_path).resolve() != Path(path).resolve():
+                    try:
+                        append_history(
+                            job_kind="music",
+                            model=_dd_value(self.mu_model) or "music",
+                            prompt=(self.mu_prompt.value or "")[:500],
+                            files=[out_path],
+                            cost_estimate="trim (local)",
+                            notes=[note],
+                            output_dir=self.state.output_dir,
+                            scenario="music",
+                        )
+                    except Exception:
+                        pass
+                done = note
+                self.mu_progress.finish_ok(done, self.page)
+                self.mu_status.value = done
+                # Disable trim when already on target
+                if src_dur is not None and src_dur <= target + 0.25:
+                    self._music_update_trim_button(enable=False, target_s=target)
+                elif "no trim needed" in note.lower():
+                    self._music_update_trim_button(enable=False, target_s=target)
+                else:
+                    self._music_update_trim_button(enable=True, target_s=target)
+            else:
+                err = note or "Trim failed."
+                self.mu_progress.finish_error(err, self.page)
+                self.mu_status.value = err
+        except Exception as exc:
+            from media_studio.errors import friendly_error
+
+            err = friendly_error(exc, context="Trim music")
+            self.mu_progress.finish_error(err, self.page)
+            self.mu_status.value = err
+            traceback.print_exc()
+        finally:
+            self.state.clear_busy("audio")
+            self.apply_key_gates()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
     async def _run_music(self, e: ft.ControlEvent) -> None:
         if self.state.is_busy("audio"):
             return
@@ -711,10 +1182,22 @@ class AudioView:
         if not self.state.try_busy("audio"):
             return
         self.mu_btn.disabled = True
+        try:
+            self.mu_btn_trim.visible = False
+        except Exception:
+            pass
         self.mu_player.clear()
         self.mu_progress.start("Queued…", self.page)
         self.mu_status.value = "Generating music…"
         self.page.update()
+
+        target_s = float(self.mu_dur.value or 30)
+        # Always ensure hard-limit language is in the prompt sent to fal
+        prompt_out = ensure_duration_in_prompt(self.mu_prompt.value, target_s)
+        try:
+            self.mu_prompt.value = prompt_out
+        except Exception:
+            pass
 
         def on_progress(msg: str) -> None:
             self.mu_progress.set_message(classify_progress(msg), self.page)
@@ -725,9 +1208,9 @@ class AudioView:
             r = await to_thread_with_job(
                 self.state,
                 run_music,
-                prompt=self.mu_prompt.value,
+                prompt=prompt_out,
                 model_label=_dd_value(self.mu_model),
-                duration_s=float(self.mu_dur.value or 30),
+                duration_s=target_s,
                 instrumental=self._music_is_instrumental(),
                 output_dir=self.state.output_dir,
                 on_progress=on_progress,
@@ -738,10 +1221,28 @@ class AudioView:
                 self.mu_progress.finish_ok(done, self.page)
                 self.mu_status.value = done
                 self.mu_player.set_result(r.path)
+                self._mu_last_path = r.path
+                self._mu_last_target_s = target_s
+                # Offer trim when result may be longer than target
+                show_trim = True
+                try:
+                    from media_studio.audio_mix import probe_audio_duration_s
+
+                    d = probe_audio_duration_s(r.path)
+                    if d is not None and d <= target_s + 0.25:
+                        show_trim = False
+                        self.mu_status.value = (
+                            f"{done} · already ≤ {int(round(target_s))}s"
+                        )
+                except Exception:
+                    show_trim = True
+                self._music_update_trim_button(enable=show_trim, target_s=target_s)
             else:
                 err = r.status or "Failed."
                 self.mu_progress.finish_error(err, self.page)
                 self.mu_status.value = err
+                self._mu_last_path = None
+                self._music_update_trim_button(enable=False, target_s=target_s)
         except Exception as exc:
             self.mu_progress.finish_error(f"Error: {exc}", self.page)
             self.mu_status.value = f"Error: {exc}"

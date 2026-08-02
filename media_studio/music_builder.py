@@ -230,6 +230,43 @@ INSTRUMENTS: list[str] = with_none([
     "Acoustic / organic",
 ])
 
+# ----- Arrangement / layer builder (optional; ElevenLabs-friendly form language) -----
+INTRO_ENERGY: list[str] = with_none(["Restrained", "Half", "Full"])
+INTRO_LENGTH: list[str] = with_none(["~4s", "~8s", "~16s", "Custom"])
+LIFT_CUE: list[str] = with_none([
+    "After intro",
+    "Around 8s",
+    "Around 16s",
+    "Around 30s",
+    "Mid-track",
+    "Custom time",
+])
+SOLO_INSTRUMENT: list[str] = with_none(["Lead guitar", "Synth lead", "None"])
+SOLO_START: list[str] = with_none([
+    "After lift",
+    "Around 20s",
+    "Around 30s",
+    "Around 45s",
+    "Late track",
+    "Custom time",
+])
+SOLO_LENGTH: list[str] = with_none(["~4s", "~8s", "~12s", "~16s", "Custom"])
+OUTRO_STYLE: list[str] = with_none([
+    "Tight cutoff",
+    "Short fade",
+    "Long fade",
+    "Cold stop",
+])
+# Short band-layer list only (multi-select in UI)
+BAND_LAYERS: list[str] = [
+    "Drums",
+    "Bass",
+    "Rhythm guitar",
+    "Lead",
+    "Keys/pads",
+    "Strings",
+]
+
 DEFAULTS: dict[str, Any] = {
     "genre": "Ambient",
     "subgenre": "Chillout",
@@ -244,6 +281,19 @@ DEFAULTS: dict[str, Any] = {
     "custom_notes": "",
     "exclude": "",
     "instrumental": True,  # derived from vocals for API convenience
+    # Arrangement (all optional)
+    "intro_energy": HELPER_NONE,
+    "intro_length": HELPER_NONE,
+    "intro_length_custom_s": None,
+    "lift_cue": HELPER_NONE,
+    "lift_cue_custom": "",
+    "solo_instrument": HELPER_NONE,
+    "solo_start": HELPER_NONE,
+    "solo_start_custom": "",
+    "solo_length": HELPER_NONE,
+    "solo_length_custom_s": None,
+    "outro": HELPER_NONE,
+    "layers": (),  # tuple of BAND_LAYERS names
 }
 
 
@@ -412,6 +462,213 @@ def _instruments_phrase(instruments: str | None) -> str:
     return mapping.get(inst, f"Instrument focus: {inst.lower()}.")
 
 
+def _custom_seconds(value: Any) -> int | None:
+    try:
+        if value is None or str(value).strip() == "":
+            return None
+        n = int(round(float(value)))
+        return max(1, min(120, n))
+    except (TypeError, ValueError):
+        return None
+
+
+def _layers_list(layers: Any) -> list[str]:
+    if not layers:
+        return []
+    if isinstance(layers, str):
+        parts = [p.strip() for p in layers.replace(";", ",").split(",")]
+        raw = [p for p in parts if p]
+    else:
+        try:
+            raw = [str(x).strip() for x in layers if str(x).strip()]
+        except TypeError:
+            return []
+    allowed = {x.lower(): x for x in BAND_LAYERS}
+    out: list[str] = []
+    for r in raw:
+        key = r.lower()
+        if key in allowed and allowed[key] not in out:
+            out.append(allowed[key])
+    return out
+
+
+def build_arrangement_block(
+    *,
+    intro_energy: str | None = None,
+    intro_length: str | None = None,
+    intro_length_custom_s: int | float | None = None,
+    lift_cue: str | None = None,
+    lift_cue_custom: str | None = None,
+    solo_instrument: str | None = None,
+    solo_start: str | None = None,
+    solo_start_custom: str | None = None,
+    solo_length: str | None = None,
+    solo_length_custom_s: int | float | None = None,
+    outro: str | None = None,
+    layers: Any = None,
+) -> str:
+    """
+    Optional arrangement / form language for ElevenLabs-style music prompts.
+
+    Empty fields → no text (caller omits the whole block if return is empty).
+    """
+    parts: list[str] = []
+
+    # Ensemble layers first (what plays)
+    layer_names = _layers_list(layers)
+    if layer_names:
+        if len(layer_names) == 1:
+            parts.append(f"Ensemble focus: {layer_names[0].lower()} only.")
+        else:
+            listed = ", ".join(n.lower() for n in layer_names[:-1])
+            parts.append(
+                f"Ensemble: {listed}, and {layer_names[-1].lower()} — "
+                "clear parts, cohesive band texture."
+            )
+
+    # Intro
+    intro_bits: list[str] = []
+    if not _noneish(intro_energy):
+        e = (intro_energy or "").strip().lower()
+        intro_bits.append(
+            {
+                "restrained": "restrained, held-back energy",
+                "half": "half energy, not yet full drive",
+                "full": "full energy from the top",
+            }.get(e, f"{e} energy")
+        )
+    if not _noneish(intro_length):
+        ln = (intro_length or "").strip()
+        if ln.lower() == "custom":
+            sec = _custom_seconds(intro_length_custom_s)
+            if sec:
+                intro_bits.append(f"about {sec} seconds")
+        else:
+            intro_bits.append(ln.replace("~", "about ").strip())
+    if intro_bits:
+        parts.append("Intro: " + ", ".join(intro_bits) + ".")
+
+    # Lift — when full energy hits
+    if not _noneish(lift_cue):
+        cue = (lift_cue or "").strip()
+        custom = (lift_cue_custom or "").strip()
+        if cue.lower() == "custom time" and custom:
+            when = custom if custom.lower().startswith(("at ", "after ", "around ")) else f"at {custom}"
+        else:
+            when = {
+                "After intro": "right after the intro",
+                "Around 8s": "around 8 seconds",
+                "Around 16s": "around 16 seconds",
+                "Around 30s": "around 30 seconds",
+                "Mid-track": "mid-track",
+                "Custom time": "at a clear timed cue",
+            }.get(cue, cue.lower())
+        parts.append(
+            f"Lift: full energy and full arrangement hit {when} "
+            "(build cleanly into the lift)."
+        )
+
+    # Solo (optional)
+    solo_inst = "" if _noneish(solo_instrument) else (solo_instrument or "").strip()
+    if solo_inst and solo_inst.lower() != "none":
+        inst_map = {
+            "Lead guitar": "a lead guitar solo",
+            "Synth lead": "a synth lead solo",
+        }
+        solo_name = inst_map.get(solo_inst, f"a {solo_inst.lower()} solo")
+        start_bits: list[str] = []
+        if not _noneish(solo_start):
+            ss = (solo_start or "").strip()
+            sc = (solo_start_custom or "").strip()
+            if ss.lower() == "custom time" and sc:
+                start_bits.append(
+                    sc if sc.lower().startswith(("at ", "after ", "around ")) else f"starting at {sc}"
+                )
+            else:
+                start_bits.append(
+                    {
+                        "After lift": "after the lift",
+                        "Around 20s": "around 20 seconds",
+                        "Around 30s": "around 30 seconds",
+                        "Around 45s": "around 45 seconds",
+                        "Late track": "late in the track",
+                        "Custom time": "at a clear timed cue",
+                    }.get(ss, ss.lower())
+                )
+        len_bits: list[str] = []
+        if not _noneish(solo_length):
+            sl = (solo_length or "").strip()
+            if sl.lower() == "custom":
+                sec = _custom_seconds(solo_length_custom_s)
+                if sec:
+                    len_bits.append(f"about {sec} seconds long")
+            else:
+                len_bits.append(sl.replace("~", "about ").strip() + " long")
+        solo_line = f"Solo: feature {solo_name}"
+        if start_bits:
+            solo_line += f", {start_bits[0]}"
+        if len_bits:
+            solo_line += f", {len_bits[0]}"
+        solo_line += " (supportive bed under the solo, not a full drop-out)."
+        parts.append(solo_line)
+
+    # Outro
+    if not _noneish(outro):
+        o = (outro or "").strip()
+        outro_map = {
+            "Tight cutoff": "Outro: tight cutoff — end cleanly with little or no tail.",
+            "Short fade": "Outro: short natural fade to silence.",
+            "Long fade": "Outro: long gradual fade to silence.",
+            "Cold stop": "Outro: cold stop — hard stop with no fade.",
+        }
+        parts.append(outro_map.get(o, f"Outro: {o.lower()}."))
+
+    if not parts:
+        return ""
+    return " ".join(parts).strip()
+
+
+def duration_hard_limit_phrase(duration_s: int | float | None) -> str:
+    """
+    Hard length language for music models that ignore API duration.
+
+    Empty / invalid → \"\" (caller omits).
+    """
+    try:
+        if duration_s is None or str(duration_s).strip() == "":
+            return ""
+        n = int(round(float(duration_s)))
+    except (TypeError, ValueError):
+        return ""
+    if n < 1:
+        return ""
+    n = max(3, min(180, n))
+    return (
+        f"Total length strictly about {n} seconds; end with a tight cutoff at {n} seconds; "
+        f"do not extend or add a long fade past the target."
+    )
+
+
+def ensure_duration_in_prompt(prompt: str | None, duration_s: int | float | None) -> str:
+    """
+    Ensure hard-limit duration language is present (for freeform / Generate).
+
+    If a total-length constraint already appears, leave the prompt alone.
+    """
+    text = (prompt or "").strip()
+    phrase = duration_hard_limit_phrase(duration_s)
+    if not phrase:
+        return text
+    low = text.lower()
+    if "total length strictly" in low or (
+        "strictly about" in low and "second" in low
+    ):
+        return text
+    if not text:
+        return phrase
+    return f"{text}\n\n{phrase}".strip()
+
+
 def build_structured_music_block(
     *,
     genre: str | None = None,
@@ -425,11 +682,25 @@ def build_structured_music_block(
     instruments: str | None = None,
     lyrics: str | None = None,
     instrumental: bool | None = None,
+    intro_energy: str | None = None,
+    intro_length: str | None = None,
+    intro_length_custom_s: int | float | None = None,
+    lift_cue: str | None = None,
+    lift_cue_custom: str | None = None,
+    solo_instrument: str | None = None,
+    solo_start: str | None = None,
+    solo_start_custom: str | None = None,
+    solo_length: str | None = None,
+    solo_length_custom_s: int | float | None = None,
+    outro: str | None = None,
+    layers: Any = None,
+    duration_s: int | float | None = None,
 ) -> str:
     """
     Auto-built structured portion only (no custom notes / exclude).
 
     ``instrumental`` is accepted for back-compat; if omitted, derived from ``vocals``.
+    Arrangement fields are optional — empty slots add no language.
     """
     g_raw = genre if not _noneish(genre) else None
     g = (g_raw or DEFAULTS["genre"]).strip() if g_raw else ""
@@ -474,6 +745,20 @@ def build_structured_music_block(
     energy_p = _energy_phrase(energy)
     inst_p = _instruments_phrase(instruments)
     vocals_p = _vocals_phrase(vocals_s or None)
+    arr_p = build_arrangement_block(
+        intro_energy=intro_energy,
+        intro_length=intro_length,
+        intro_length_custom_s=intro_length_custom_s,
+        lift_cue=lift_cue,
+        lift_cue_custom=lift_cue_custom,
+        solo_instrument=solo_instrument,
+        solo_start=solo_start,
+        solo_start_custom=solo_start_custom,
+        solo_length=solo_length,
+        solo_length_custom_s=solo_length_custom_s,
+        outro=outro,
+        layers=layers,
+    )
 
     body_parts: list[str] = []
     if era_p:
@@ -488,8 +773,14 @@ def build_structured_music_block(
         body_parts.append(f"Energy: {energy_p}.")
     if inst_p:
         body_parts.append(inst_p if inst_p.endswith(".") else f"{inst_p}.")
+    # Arrangement: ensemble + form over time (ElevenLabs-friendly order)
+    if arr_p:
+        body_parts.append(arr_p)
     if vocals_p:
         body_parts.append(vocals_p)
+    dur_p = duration_hard_limit_phrase(duration_s)
+    if dur_p:
+        body_parts.append(dur_p)
     body_parts.append(
         "Clean professional mix, cohesive arrangement, suitable for background use "
         "in video and media."
@@ -519,6 +810,19 @@ def build_music_prompt(
     custom_notes: str | None = None,
     exclude: str | None = None,
     instrumental: bool | None = None,
+    intro_energy: str | None = None,
+    intro_length: str | None = None,
+    intro_length_custom_s: int | float | None = None,
+    lift_cue: str | None = None,
+    lift_cue_custom: str | None = None,
+    solo_instrument: str | None = None,
+    solo_start: str | None = None,
+    solo_start_custom: str | None = None,
+    solo_length: str | None = None,
+    solo_length_custom_s: int | float | None = None,
+    outro: str | None = None,
+    layers: Any = None,
+    duration_s: int | float | None = None,
 ) -> str:
     """
     Full music prompt = structured block + persistent custom notes + exclude.
@@ -538,6 +842,19 @@ def build_music_prompt(
         instruments=instruments,
         lyrics=lyrics,
         instrumental=instrumental,
+        intro_energy=intro_energy,
+        intro_length=intro_length,
+        intro_length_custom_s=intro_length_custom_s,
+        lift_cue=lift_cue,
+        lift_cue_custom=lift_cue_custom,
+        solo_instrument=solo_instrument,
+        solo_start=solo_start,
+        solo_start_custom=solo_start_custom,
+        solo_length=solo_length,
+        solo_length_custom_s=solo_length_custom_s,
+        outro=outro,
+        layers=layers,
+        duration_s=duration_s,
     )
 
     parts = [structured]
@@ -568,4 +885,16 @@ def clear_builder_values() -> dict[str, Any]:
     d["vocals"] = "Instrumental only"
     d["instruments"] = "(none / auto)"
     d["instrumental"] = True
+    d["intro_energy"] = HELPER_NONE
+    d["intro_length"] = HELPER_NONE
+    d["intro_length_custom_s"] = None
+    d["lift_cue"] = HELPER_NONE
+    d["lift_cue_custom"] = ""
+    d["solo_instrument"] = HELPER_NONE
+    d["solo_start"] = HELPER_NONE
+    d["solo_start_custom"] = ""
+    d["solo_length"] = HELPER_NONE
+    d["solo_length_custom_s"] = None
+    d["outro"] = HELPER_NONE
+    d["layers"] = ()
     return d

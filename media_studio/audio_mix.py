@@ -72,6 +72,184 @@ def _ffmpeg_exe() -> str | None:
     return None
 
 
+def probe_audio_duration_s(path: str | Path) -> float | None:
+    """
+    Best-effort duration in seconds for a local audio file.
+
+    Order: wave (WAV) → mutagen → ffprobe → None.
+    """
+    p = Path(path)
+    if not p.is_file():
+        return None
+    # WAV via stdlib
+    if p.suffix.lower() in (".wav", ".wave"):
+        try:
+            with wave.open(str(p), "rb") as wf:
+                frames = int(wf.getnframes())
+                rate = int(wf.getframerate() or 0)
+                if rate > 0 and frames > 0:
+                    return float(frames) / float(rate)
+        except Exception:
+            pass
+    # mutagen (mp3/m4a/…)
+    try:
+        from mutagen import File as MutagenFile
+
+        mf = MutagenFile(str(p))
+        if mf is not None:
+            info = getattr(mf, "info", None)
+            length = getattr(info, "length", None) if info is not None else None
+            if length is not None and float(length) > 0:
+                return float(length)
+    except Exception:
+        pass
+    # ffprobe next to ffmpeg
+    exe = _ffmpeg_exe()
+    if not exe:
+        return None
+    probe = exe.replace("ffmpeg", "ffprobe")
+    if not Path(probe).is_file():
+        probe = shutil.which("ffprobe") or ""
+    if not probe:
+        return None
+    try:
+        out = subprocess.run(
+            [
+                probe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(p),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        raw = (out.stdout or "").strip().splitlines()
+        if raw:
+            return float(raw[0])
+    except Exception:
+        pass
+    return None
+
+
+def trim_audio_to_duration(
+    source: str | Path,
+    target_s: float,
+    *,
+    fade_out_s: float = 0.4,
+    dest: str | Path | None = None,
+) -> tuple[str, float | None, str]:
+    """
+    Hard-cut audio to ``target_s`` seconds with a short fade-out before the cut.
+
+    Returns ``(output_path, source_duration_or_None, note)``.
+    No-op when source duration is already ≤ target (+0.25s slack).
+    Requires ffmpeg (PATH or imageio-ffmpeg).
+    """
+    src = Path(source)
+    if not src.is_file():
+        raise FileNotFoundError(f"Audio missing: {src}")
+    try:
+        n = float(target_s)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Target duration must be a number of seconds.") from exc
+    n = max(1.0, min(300.0, n))
+    fade = max(0.05, min(2.0, float(fade_out_s or 0.4)))
+
+    src_dur = probe_audio_duration_s(src)
+    if src_dur is not None and src_dur <= n + 0.25:
+        return (
+            str(src.resolve()),
+            src_dur,
+            f"Already ≤ {n:.0f}s ({src_dur:.1f}s) — no trim needed.",
+        )
+
+    if dest is None:
+        stem = f"{src.stem}_trim{int(round(n))}s"
+        # Prefer same extension when ffmpeg can re-encode; WAV fallback uses .wav
+        dest_p = unique_path(src.parent, stem, src.suffix or ".mp3")
+    else:
+        dest_p = Path(dest)
+        dest_p.parent.mkdir(parents=True, exist_ok=True)
+
+    # Fade starts slightly before cut so the end is not clicky
+    fade_start = max(0.0, n - fade)
+    exe = _ffmpeg_exe()
+    if exe:
+        suffix = (src.suffix or ".mp3").lower()
+        if suffix in (".wav", ".wave"):
+            codec_args = ["-c:a", "pcm_s16le"]
+        elif suffix in (".m4a", ".aac"):
+            codec_args = ["-c:a", "aac", "-b:a", "192k"]
+        else:
+            codec_args = ["-c:a", "libmp3lame", "-b:a", "192k"]
+        cmd = [
+            exe,
+            "-y",
+            "-i",
+            str(src),
+            "-t",
+            f"{n:.3f}",
+            "-af",
+            f"afade=t=out:st={fade_start:.3f}:d={fade:.3f}",
+            *codec_args,
+            str(dest_p),
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"ffmpeg missing: {exe}") from exc
+        if proc.returncode != 0 or not dest_p.is_file():
+            err = (proc.stderr or proc.stdout or "").strip()[-400:]
+            raise RuntimeError(f"Trim failed: {err or 'ffmpeg error'}")
+    else:
+        # No system ffmpeg — load via pygame WAV sidecar (same as Mixer) and write WAV
+        try:
+            data, rate = _load_audio_float(src)
+        except Exception as exc:
+            raise RuntimeError(
+                "Trim needs ffmpeg (or imageio-ffmpeg) or a playable audio file "
+                f"for pygame decode: {exc}"
+            ) from exc
+        n_samples = max(1, int(round(n * rate)))
+        if data.shape[0] <= n_samples + int(0.25 * rate):
+            return (
+                str(src.resolve()),
+                src_dur or (data.shape[0] / float(rate)),
+                f"Already ≤ {n:.0f}s — no trim needed.",
+            )
+        cut = data[:n_samples].copy()
+        fade_n = max(1, int(round(fade * rate)))
+        fade_n = min(fade_n, cut.shape[0])
+        if fade_n > 1:
+            ramp = np.linspace(1.0, 0.0, fade_n, dtype=np.float32).reshape(-1, 1)
+            cut[-fade_n:] = cut[-fade_n:] * ramp
+        # Always write WAV when using sample path
+        if dest_p.suffix.lower() not in (".wav", ".wave"):
+            dest_p = unique_path(src.parent, f"{src.stem}_trim{int(round(n))}s", ".wav")
+        write_wav(dest_p, cut, sample_rate=rate)
+
+    out_dur = probe_audio_duration_s(dest_p)
+    note = (
+        f"Trimmed to ~{n:.0f}s"
+        + (f" (was {src_dur:.1f}s)" if src_dur is not None else "")
+        + (f" → {out_dur:.1f}s" if out_dur is not None else "")
+        + f" · fade-out {fade:.1f}s"
+    )
+    return str(dest_p.resolve()), src_dur, note
+
+
 def _configure_pydub_ffmpeg() -> str | None:
     """Point pydub at a real ffmpeg binary if available."""
     exe = _ffmpeg_exe()

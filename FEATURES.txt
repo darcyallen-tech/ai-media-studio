@@ -293,7 +293,8 @@ Keyframe-guided video edit (Aleph frameImages: first | last | timestamp + prompt
 ==============================================================================
 AUDIO
 ==============================================================================
-- Music generator (structured builder)
+- Music generator (structured builder) + arrangement (intro/lift/solo/outro + band layers);
+    target duration in prompt (hard limit language) + post-generate Trim to Ns (ffmpeg)
 - SFX (categories + prompt builder)
 - Layered SFX mixer (v1) — plain Bed / Spot / Accent labels + subtitles;
     Scene Enhance: one scene description → fills all 3 layer prompts (Grok;
