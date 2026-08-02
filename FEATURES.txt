@@ -272,6 +272,12 @@ AUDIO
 ==============================================================================
 - Music generator (structured builder)
 - SFX (categories + prompt builder)
+- Layered SFX mixer (v1) — plain Bed / Spot / Accent labels + subtitles;
+    Scene Enhance: one scene description → fills all 3 layer prompts (Grok;
+    no auto-generate); Generate all = unmuted layers with prompts (sequential);
+    per-slot Generate / Enhance + intent helpers; Bed/Spot: Load from Video → SFX;
+    mute + volume; Bounce mix + optional stems; cost sums layers that will run;
+    MP3 → WAV sidecar for mix (pygame; no system ffmpeg)
 - Ambience (scene builder)
 - Voiceover (tone/emotion; optional character/clone paths)
 - Video → SFX (synced Foley from clip)

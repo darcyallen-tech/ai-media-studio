@@ -126,6 +126,7 @@ class AudioView:
         self.state = state
         self._build_music()
         self._build_sfx()
+        self._build_mixer()
         self._build_ambience()
         self._build_voiceover()
         self._build_clone()
@@ -136,6 +137,7 @@ class AudioView:
         self._audio_panels: dict[str, ft.Control] = {
             "music": self.music_card,
             "sfx": self.sfx_card,
+            "mixer": self.mixer_card,
             "video_sfx": self.vs_card,
             "ambience": self.ambience_card,
             "voiceover": self.voice_card,
@@ -153,6 +155,7 @@ class AudioView:
             [
                 ("music", "Music"),
                 ("sfx", "SFX"),
+                ("mixer", "Mixer"),
                 ("video_sfx", "Video → SFX"),
                 ("ambience", "Ambience"),
                 ("voiceover", "Voiceover"),
@@ -189,6 +192,22 @@ class AudioView:
                 continue
             btn.disabled = not ready
             btn.tooltip = tip
+        # Mixer: Generate needs FAL; Bounce works offline on loaded layers
+        for slot in getattr(self, "mx_slots", []) or []:
+            gb = slot.get("gen_btn")
+            if gb is not None:
+                gb.disabled = not ready
+                gb.tooltip = tip
+        if getattr(self, "mx_bounce_btn", None) is not None:
+            self.mx_bounce_btn.disabled = False
+            self.mx_bounce_btn.tooltip = "Sum unmuted layers × volumes → stereo WAV"
+        if getattr(self, "mx_gen_all_btn", None) is not None:
+            self.mx_gen_all_btn.disabled = not ready
+            self.mx_gen_all_btn.tooltip = (
+                tip
+                if not ready
+                else "Generate every unmuted layer that has a prompt (sequential)"
+            )
         for enh in (
             getattr(self, "mu_enhance", None),
             getattr(self, "sfx_enhance", None),
@@ -196,11 +215,17 @@ class AudioView:
             getattr(self, "amb_enhance", None),
             getattr(self, "vo_enhance", None),
             getattr(self, "cl_enhance", None),
+            getattr(self, "mx_scene_enhance", None),
         ):
             if enh is None:
                 continue
             enh.disabled = not xai
             enh.tooltip = xai_tip
+        for slot in getattr(self, "mx_slots", []) or []:
+            se = slot.get("enhance_btn")
+            if se is not None:
+                se.disabled = not xai
+                se.tooltip = xai_tip
 
     def _require_fal(self, status_ctrl: ft.Text) -> bool:
         from media_studio.secrets_store import has_fal_key
@@ -1021,6 +1046,1203 @@ class AudioView:
                 tight=True,
             ),
         )
+
+    # ----- Layered SFX mini mixer (v1) -----
+
+    # Intent scaffolds — short; Custom injects nothing. User edits freely after.
+    _MX_INTENT_CUSTOM = "Custom (no inject)"
+    _MX_SLOT_META: dict[str, dict] = {
+        "bed": {
+            "title": "Bed",
+            "subtitle": "Background / room tone",
+            "dur_default": 6.0,
+            "vol_default": 0.75,
+            "intents": {
+                _MX_INTENT_CUSTOM: "",
+                "Room tone": (
+                    "Soft continuous room tone / ambient bed for an interior space. "
+                    "Steady, low presence, no musical notes, no sudden events."
+                ),
+                "Outdoor ambience": (
+                    "Soft outdoor ambience bed: light air, distant nature or city wash. "
+                    "Continuous, non-musical, no hard impacts."
+                ),
+                "Soft underscore": (
+                    "Very soft atmospheric underscore bed — subtle texture only, "
+                    "no melody, no beats, loops cleanly under dialogue."
+                ),
+            },
+            "dur_hint": "Longer beds (4–12s) work well for room tone.",
+        },
+        "spot": {
+            "title": "Spot",
+            "subtitle": "Main event (whoosh, door, footsteps…)",
+            "dur_default": 2.5,
+            "vol_default": 0.9,
+            "intents": {
+                _MX_INTENT_CUSTOM: "",
+                "Whoosh / transition": (
+                    "Clean whoosh / transition sweep, one clear motion, "
+                    "no music, no long tail."
+                ),
+                "Door / impact": (
+                    "Practical door or solid impact: latch, close, or soft hit. "
+                    "One clear event, natural room."
+                ),
+                "Footsteps": (
+                    "A few clear footsteps on a hard or soft surface. "
+                    "Natural pace, no music bed."
+                ),
+                "Sting": (
+                    "Short dramatic sting / accent hit for a cut. "
+                    "One-shot, no loop, no melody."
+                ),
+            },
+            "dur_hint": "Spots are usually short (1–4s).",
+        },
+        "accent": {
+            "title": "Accent",
+            "subtitle": "Short sweetener (riser, hit, tail)",
+            "dur_default": 1.5,
+            "vol_default": 0.65,
+            "intents": {
+                _MX_INTENT_CUSTOM: "",
+                "Riser": (
+                    "Short riser / build-up sweetener, 1–2 seconds, "
+                    "no full music bed."
+                ),
+                "Hit": (
+                    "Tight accent hit or tick for punctuation. "
+                    "Very short, clean, no reverb wash."
+                ),
+                "Soft tail": (
+                    "Soft decay / tail to feather an edit. Quiet, short, "
+                    "no new attack."
+                ),
+            },
+            "dur_hint": "Accents stay brief (0.5–3s).",
+        },
+    }
+
+    def _build_mixer(self) -> None:
+        """3-slot Bed / Spot / Accent stem stack — additive to one-shot SFX."""
+        self.mx_slots: list[dict] = []
+        slot_cols: list[ft.Control] = []
+        labels = sfx_labels() or ["ElevenLabs Sound Effects V2"]
+
+        for key, meta in self._MX_SLOT_META.items():
+            title = meta["title"]
+            subtitle = meta["subtitle"]
+            intent_keys = list(meta["intents"].keys())
+            path_text = ft.Text(
+                "Generate from prompt or load existing audio",
+                size=FONT_SM,
+                color=TEXT_MUTED,
+                max_lines=2,
+                selectable=True,
+            )
+            intent_dd = styled_dropdown(
+                label_text="Intent helper",
+                options=intent_keys,
+                value=self._MX_INTENT_CUSTOM,
+                on_select=self._mx_make_intent_handler(key),
+                expand=True,
+            )
+            prompt = ft.TextField(
+                label=f"{title} prompt",
+                hint_text=f"Describe the {title.lower()} — or pick an intent helper",
+                dense=True,
+                filled=True,
+                fill_color=PANEL_ELEVATED,
+                border_color=BORDER,
+                color=TEXT,
+                text_size=FONT_SM,
+                multiline=True,
+                min_lines=1,
+                max_lines=3,
+            )
+            model = styled_dropdown(
+                label_text="SFX model",
+                options=labels,
+                value=labels[0],
+                expand=True,
+                on_select=self._mx_cost_refresh,
+            )
+            dur = ft.Slider(
+                min=0.5,
+                max=12,
+                divisions=23,
+                value=float(meta["dur_default"]),
+                label="Duration {value}s",
+                active_color=ACCENT,
+                on_change=self._mx_cost_refresh,
+            )
+            dur_hint = ft.Text(
+                str(meta.get("dur_hint") or ""),
+                size=11,
+                color=TEXT_MUTED,
+                max_lines=1,
+            )
+            mute = ft.Checkbox(label="Mute", value=False, on_change=self._mx_cost_refresh)
+            vol = ft.Slider(
+                min=0,
+                max=1,
+                divisions=20,
+                value=float(meta["vol_default"]),
+                label="Vol {value}",
+                active_color=ACCENT,
+                width=140,
+            )
+            gen_btn = ft.FilledButton(
+                content="Generate",
+                on_click=self._mx_make_gen_handler(key),
+                style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+                height=34,
+            )
+            enhance_btn = ft.OutlinedButton(
+                content="Enhance",
+                icon=ft.Icons.AUTO_FIX_HIGH,
+                on_click=self._mx_make_slot_enhance_handler(key),
+                style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+                height=34,
+                tooltip="Rewrite this layer prompt for the SFX model (Grok)",
+            )
+            load_btn = ft.OutlinedButton(
+                content="Load audio",
+                icon=ft.Icons.FOLDER_OPEN,
+                on_click=self._mx_make_load_handler(key),
+                style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+                height=34,
+            )
+            play_btn = ft.OutlinedButton(
+                content="Play",
+                icon=ft.Icons.PLAY_ARROW,
+                on_click=self._mx_make_play_handler(key),
+                style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+                height=34,
+            )
+            clear_btn = ft.TextButton(
+                content="Clear",
+                on_click=self._mx_make_clear_handler(key),
+                style=ft.ButtonStyle(color=TEXT_MUTED),
+            )
+            row_btns: list[ft.Control] = [
+                gen_btn,
+                enhance_btn,
+                load_btn,
+                play_btn,
+                clear_btn,
+            ]
+            # Video→SFX feed: Bed (and Spot) — does not replace the Video→SFX tool
+            if key in ("bed", "spot"):
+                vs_btn = ft.OutlinedButton(
+                    content="Load from Video → SFX",
+                    icon=ft.Icons.MOVIE_FILTER_OUTLINED,
+                    on_click=self._mx_make_vsfx_handler(key),
+                    style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+                    height=34,
+                    tooltip=(
+                        "Use the last Video → SFX result, or a recent SFX from Library"
+                    ),
+                )
+                row_btns.insert(2, vs_btn)
+
+            slot = {
+                "key": key,
+                "title": title,
+                "path": None,
+                "path_text": path_text,
+                "prompt": prompt,
+                "intent_dd": intent_dd,
+                "model": model,
+                "dur": dur,
+                "mute": mute,
+                "vol": vol,
+                "gen_btn": gen_btn,
+                "enhance_btn": enhance_btn,
+                "last_cost": 0.0,
+            }
+            self.mx_slots.append(slot)
+            slot_cols.append(
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                title,
+                                size=FONT_SM,
+                                color=TEXT,
+                                weight=ft.FontWeight.W_700,
+                            ),
+                            ft.Text(subtitle, size=11, color=TEXT_MUTED, max_lines=1),
+                            path_text,
+                            intent_dd,
+                            prompt,
+                            ft.Row([model], spacing=0),
+                            dur,
+                            dur_hint,
+                            ft.Row(
+                                [mute, ft.Text("Vol", size=FONT_SM, color=TEXT_MUTED), vol],
+                                spacing=8,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            ft.Row(row_btns, spacing=6, wrap=True),
+                        ],
+                        spacing=6,
+                        tight=True,
+                    ),
+                    bgcolor=PANEL_ELEVATED,
+                    border=ft.Border.all(1, BORDER),
+                    border_radius=8,
+                    padding=10,
+                )
+            )
+
+        self.mx_export_stems = ft.Checkbox(
+            label="Also export separate stem files",
+            value=False,
+        )
+        self.mx_cost = ft.Text(
+            self._mx_cost_label(),
+            size=FONT_SM,
+            color=TEXT,
+            weight=ft.FontWeight.W_600,
+        )
+        self.mx_status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=4)
+        self.mx_progress = JobProgress()
+        self.mx_player = AudioResultBar(self.page)
+        self.mx_bounce_btn = ft.FilledButton(
+            content="Bounce mix",
+            icon=ft.Icons.MERGE_TYPE,
+            on_click=self._mx_bounce,
+            style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+        )
+        self.mx_play_mix_btn = ft.OutlinedButton(
+            content="Play mix",
+            icon=ft.Icons.PLAY_ARROW,
+            on_click=self._mx_play_mix,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+        )
+        self.mx_gen_all_btn = ft.FilledButton(
+            content="Generate all",
+            icon=ft.Icons.PLAYLIST_PLAY,
+            on_click=self._mx_generate_all,
+            style=ft.ButtonStyle(bgcolor=ACCENT, color=TEXT),
+            tooltip="Generate unmuted layers that have a prompt (one after another)",
+        )
+        self.mx_session_cost = 0.0  # sum of generate costs this session
+
+        # Scene Enhance — one description → fill all three layer prompts
+        self.mx_scene = ft.TextField(
+            label="Scene / what should this sound like?",
+            hint_text=(
+                "e.g. Quiet suburban exterior, soft wind, distant car pass, "
+                "short whoosh for a quick cut"
+            ),
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            multiline=True,
+            min_lines=2,
+            max_lines=4,
+        )
+        self.mx_scene_hint = ft.Text(
+            "Rewrites Bed, Spot, and Accent prompts from this description. "
+            "You can still edit each slot after. Does not generate audio.",
+            size=11,
+            color=TEXT_MUTED,
+            max_lines=2,
+        )
+        self.mx_scene_enhance = ft.OutlinedButton(
+            content="Enhance all layers",
+            icon=ft.Icons.AUTO_FIX_HIGH,
+            on_click=self._mx_scene_enhance_all,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=40,
+            tooltip=(
+                "Grok splits the scene into Bed / Spot / Accent prompts "
+                "(xAI key required). Does not run Generate."
+            ),
+        )
+
+        self.mixer_card = ft.Container(
+            bgcolor=PANEL,
+            border=ft.Border.all(1, BORDER),
+            border_radius=8,
+            padding=12,
+            content=ft.Column(
+                [
+                    section_title("Layered SFX mixer"),
+                    ft.Text(
+                        "Stack up to 3 sound layers, set volumes, Bounce a stereo mix. "
+                        "Not a DAW — no EQ or automation.",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                        max_lines=2,
+                    ),
+                    label("Scene", muted=True),
+                    self.mx_scene,
+                    self.mx_scene_hint,
+                    ft.Row([self.mx_scene_enhance], spacing=8),
+                    ft.Divider(height=1, color=BORDER),
+                    *slot_cols,
+                    ft.Divider(height=1, color=BORDER),
+                    label("Mix master", muted=True),
+                    ft.Text(
+                        "Generate all = unmuted layers with a non-empty prompt "
+                        "(skips muted / empty).",
+                        size=11,
+                        color=TEXT_MUTED,
+                        max_lines=2,
+                    ),
+                    self.mx_export_stems,
+                    _cost_box(self.mx_cost),
+                    ft.Row(
+                        [
+                            self.mx_gen_all_btn,
+                            self.mx_play_mix_btn,
+                            self.mx_bounce_btn,
+                        ],
+                        spacing=8,
+                        wrap=True,
+                    ),
+                    self.mx_progress.control,
+                    self.mx_status,
+                    self.mx_player.control,
+                ],
+                spacing=8,
+                tight=True,
+            ),
+        )
+
+    def _mx_slot(self, key: str) -> dict | None:
+        for s in getattr(self, "mx_slots", []) or []:
+            if s.get("key") == key:
+                return s
+        return None
+
+    def _mx_slots_ready_to_generate(self) -> list[dict]:
+        """Unmuted slots with a non-empty prompt (rule for Generate all)."""
+        ready: list[dict] = []
+        for s in getattr(self, "mx_slots", []) or []:
+            prompt = (s.get("prompt").value or "").strip() if s.get("prompt") else ""
+            muted = bool(s.get("mute") and s["mute"].value)
+            if prompt and not muted:
+                ready.append(s)
+        return ready
+
+    def _mx_cost_label(self) -> str:
+        from media_studio.audio_registry import estimate_audio_cost
+        from media_studio.pricing import format_job_cost
+
+        # Prefer sum of actual generates this session
+        session = float(getattr(self, "mx_session_cost", 0.0) or 0)
+        # Pending Generate-all estimate (unmuted + prompt)
+        pending = self._mx_slots_ready_to_generate()
+        pending_total = 0.0
+        for s in pending:
+            spec = find_audio(_dd_value(s["model"]), SFX_MODELS)
+            if not spec:
+                continue
+            dur = float(s["dur"].value or 3)
+            pending_total += float(estimate_audio_cost(spec, duration_s=dur))
+        if pending_total > 0:
+            n = len(pending)
+            names = "+".join(s["title"] for s in pending)
+            base = format_job_cost(
+                pending_total,
+                unit=f"{n} layer{'s' if n != 1 else ''} ({names})",
+                model="Generate all",
+            )
+            if session > 0:
+                return f"{base} · session so far ${session:.2f}"
+            return base
+        if session > 0:
+            return format_job_cost(
+                session,
+                unit="generates this session",
+                model="SFX mixer",
+            )
+        return "Est. cost: — (add prompts on unmuted layers)"
+
+    async def _mx_cost_refresh(self, e: ft.ControlEvent) -> None:
+        self.mx_cost.value = self._mx_cost_label()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _mx_set_slot_path(
+        self, key: str, path: str | None, *, note: str | None = None
+    ) -> None:
+        slot = self._mx_slot(key)
+        if not slot:
+            return
+        if path and Path(path).is_file():
+            try:
+                abs_path = str(Path(path).expanduser().resolve())
+            except OSError:
+                abs_path = str(Path(path))
+            # Prefer WAV sidecar for mix/bounce (avoids ffmpeg WinError 2 on MP3)
+            mix_path = abs_path
+            try:
+                from media_studio.audio_mix import ensure_wav_for_mix
+
+                mix_path = ensure_wav_for_mix(abs_path)
+            except Exception:
+                # Keep original for single-file Play; bounce will re-try decode
+                mix_path = abs_path
+            slot["path"] = mix_path
+            slot["source_path"] = abs_path  # original (may be mp3) for reference
+            display = Path(abs_path).name
+            if Path(mix_path).suffix.lower() == ".wav" and mix_path != abs_path:
+                display = f"{display} → mix WAV"
+            slot["path_text"].value = note or f"{slot['title']}: {display}"
+            slot["path_text"].color = TEXT
+        else:
+            slot["path"] = None
+            slot["source_path"] = None
+            slot["path_text"].value = "Generate from prompt or load existing audio"
+            slot["path_text"].color = TEXT_MUTED
+        self.mx_status.value = note or ""
+        self.mx_status.color = TEXT_MUTED
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _mx_make_gen_handler(self, key: str):
+        async def _h(_e: ft.ControlEvent) -> None:
+            await self._mx_generate_slot(key)
+
+        return _h
+
+    def _mx_make_load_handler(self, key: str):
+        async def _h(_e: ft.ControlEvent) -> None:
+            await self._mx_load_slot(key)
+
+        return _h
+
+    def _mx_make_play_handler(self, key: str):
+        async def _h(_e: ft.ControlEvent) -> None:
+            await self._mx_play_slot(key)
+
+        return _h
+
+    def _mx_make_clear_handler(self, key: str):
+        async def _h(_e: ft.ControlEvent) -> None:
+            title = (self._mx_slot(key) or {}).get("title") or key.title()
+            self._mx_set_slot_path(key, None, note=f"{title} cleared.")
+
+        return _h
+
+    def _mx_make_intent_handler(self, key: str):
+        async def _h(_e: ft.ControlEvent) -> None:
+            await self._mx_on_intent(key)
+
+        return _h
+
+    def _mx_make_vsfx_handler(self, key: str):
+        async def _h(_e: ft.ControlEvent) -> None:
+            await self._mx_load_from_video_sfx(key)
+
+        return _h
+
+    def _mx_make_slot_enhance_handler(self, key: str):
+        async def _h(_e: ft.ControlEvent) -> None:
+            await self._mx_enhance_slot(key)
+
+        return _h
+
+    async def _mx_enhance_slot(self, key: str) -> None:
+        """Per-slot Enhance — fine-tune one layer prompt only."""
+        slot = self._mx_slot(key)
+        if not slot:
+            return
+        role = {
+            "bed": "continuous background / room tone / ambience bed",
+            "spot": "main one-shot SFX event (whoosh, door, pass-by, footsteps…)",
+            "accent": "brief sweetener only (riser, hit, soft tail) — keep minimal",
+        }.get(key, "SFX layer")
+        await run_prompt_enhance(
+            page=self.page,
+            state=self.state,
+            prompt_field=slot["prompt"],
+            get_model=lambda: _dd_value(slot["model"]),
+            get_extra_context=lambda: {
+                "workspace": "sfx_mixer_layer",
+                "layer": key,
+                "guidance": (
+                    f"Rewrite as a single text-to-SFX prompt for the {role}. "
+                    "No music unless the user clearly asks for music. "
+                    "Keep short, concrete, model-friendly. Output only the prompt text."
+                ),
+            },
+            status_ctrl=self.mx_status,
+            job_progress=self.mx_progress,
+            enhance_btn=slot.get("enhance_btn"),
+            busy_controls=[slot.get("gen_btn"), self.mx_scene_enhance],
+            context_label=f"{slot['title']} layer prompt",
+            busy_scope="enhance",
+        )
+        # Prefer scene as source of truth: leave intent dropdown alone
+        self.apply_key_gates()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _mx_parse_scene_layers(text: str) -> dict[str, str]:
+        """
+        Parse Grok output into bed/spot/accent prompts.
+
+        Accepts labeled lines:
+          BED: ...
+          SPOT: ...
+          ACCENT: ...
+        or markdown **Bed** blocks. Missing accent may be empty.
+        """
+        import re
+
+        raw = (text or "").strip()
+        out = {"bed": "", "spot": "", "accent": ""}
+        if not raw:
+            return out
+
+        # Normalize
+        t = raw.replace("\r\n", "\n")
+        # Split on role headers
+        pattern = re.compile(
+            r"(?im)^\s*(?:\*\*|__|#+\s*)?(bed|spot|accent|background|main|sweetener)"
+            r"(?:\s*layer)?(?:\s*prompt)?\s*(?:\*\*|__)?\s*[:\-–—]\s*"
+        )
+        parts = pattern.split(t)
+        # parts: [preamble, label1, body1, label2, body2, ...]
+        if len(parts) >= 3:
+            i = 1
+            while i + 1 < len(parts):
+                label = (parts[i] or "").strip().lower()
+                body = (parts[i + 1] or "").strip()
+                # Trim body at next accidental section
+                body = re.split(
+                    r"(?im)^\s*(?:bed|spot|accent)\s*[:\-]", body
+                )[0].strip()
+                body = body.strip("*_ \n\t\"'")
+                key = {
+                    "bed": "bed",
+                    "background": "bed",
+                    "spot": "spot",
+                    "main": "spot",
+                    "accent": "accent",
+                    "sweetener": "accent",
+                }.get(label)
+                if key and body:
+                    out[key] = body
+                i += 2
+
+        # Fallback: three non-empty paragraphs
+        if not out["bed"] and not out["spot"]:
+            paras = [p.strip() for p in re.split(r"\n\s*\n", t) if p.strip()]
+            if len(paras) >= 2:
+                out["bed"] = paras[0][:500]
+                out["spot"] = paras[1][:500]
+                if len(paras) >= 3:
+                    out["accent"] = paras[2][:400]
+            elif len(paras) == 1:
+                # Single block — put as spot, soft bed
+                out["spot"] = paras[0][:500]
+                out["bed"] = (
+                    "Soft continuous room tone or light ambience matching the scene. "
+                    "Steady, non-musical, no hard events."
+                )
+
+        # Clean residual labels / markdown from bodies
+        for k, v in list(out.items()):
+            v = re.sub(
+                r"(?im)^\s*(?:\*\*|__|#+\s*)?(bed|spot|accent|background|main|sweetener)"
+                r"(?:\s*layer)?(?:\s*prompt)?(?:\*\*|__)?\s*[:\-–—]\s*",
+                "",
+                v,
+            ).strip()
+            v = v.strip("*_ \n\t\"'")
+            out[k] = v[:600]
+        return out
+
+    async def _mx_scene_enhance_all(self, e: ft.ControlEvent) -> None:
+        """One scene description → fill Bed / Spot / Accent prompts (no audio)."""
+        scene = (self.mx_scene.value or "").strip()
+        if not scene:
+            self.mx_status.value = (
+                "Describe the scene first (what the whole mix should sound like)."
+            )
+            self.mx_status.color = "#e57373"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+
+        from media_studio.secrets_store import has_xai_key
+
+        if not has_xai_key():
+            self.mx_status.value = (
+                "xAI API key required for Scene Enhance — open Settings."
+            )
+            self.mx_status.color = "#e57373"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+
+        if self.state.is_busy("enhance") or self.state.is_busy("audio"):
+            return
+        if not self.state.try_busy("enhance"):
+            return
+
+        self.mx_scene_enhance.disabled = True
+        for s in self.mx_slots:
+            if s.get("enhance_btn") is not None:
+                s["enhance_btn"].disabled = True
+        self.mx_progress.start("Enhancing all layers from scene…", self.page)
+        self.mx_status.value = "Scene Enhance — Grok writing Bed / Spot / Accent…"
+        self.mx_status.color = TEXT_MUTED
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+        def on_progress(msg: str) -> None:
+            self.mx_progress.set_message(classify_progress(msg), self.page)
+
+        # Seed prompt for Grok — scene is source of truth
+        model_label = None
+        try:
+            model_label = _dd_value(self.mx_slots[0]["model"]) if self.mx_slots else None
+        except Exception:
+            model_label = None
+
+        user_seed = (
+            "Scene description (source of truth):\n"
+            f"{scene}\n\n"
+            "Split this into THREE text-to-SFX layer prompts for a mini mixer.\n"
+            "Output EXACTLY this format (labels required, one block each):\n\n"
+            "BED: <continuous background / room tone / ambience only>\n"
+            "SPOT: <main event SFX — whoosh, door, pass-by, footsteps, etc.>\n"
+            "ACCENT: <brief sweetener only if helpful; else leave minimal or empty>\n\n"
+            "Rules:\n"
+            "- No music beds unless the scene clearly asks for music.\n"
+            "- Keep each line short and concrete for SFX models (duration-friendly).\n"
+            "- Bed = steady/non-event; Spot = main one-shot; Accent = tiny sweetener.\n"
+            "- Do not invent unrelated locations. Do not add Generate instructions."
+        )
+
+        try:
+            from media_studio.job_context import to_thread_with_job
+            from media_studio.services import enhance_prompt
+
+            # Progress via thread wrapper if available
+            result = await to_thread_with_job(
+                self.state,
+                enhance_prompt,
+                prompt=user_seed,
+                model_choice=model_label or "",
+                output_dir=self.state.output_dir,
+                extra_context={
+                    "workspace": "sfx_mixer_scene",
+                    "guidance": (
+                        "Return only BED:/SPOT:/ACCENT: labeled SFX prompts. "
+                        "No markdown essay. Scene text is source of truth."
+                    ),
+                },
+            )
+            # enhance_prompt may not use on_progress — ignore
+            _ = on_progress
+
+            if not result.ok or not (result.optimized_prompt or "").strip():
+                err = result.status or "Scene Enhance failed."
+                self.mx_progress.finish_error(err, self.page)
+                self.mx_status.value = err
+                self.mx_status.color = "#e57373"
+            else:
+                parsed = self._mx_parse_scene_layers(result.optimized_prompt)
+                filled = 0
+                for s in self.mx_slots:
+                    k = s["key"]
+                    text = (parsed.get(k) or "").strip()
+                    if text:
+                        s["prompt"].value = text
+                        filled += 1
+                        # Reset intent to Custom — scene is source of truth
+                        try:
+                            if s.get("intent_dd") is not None:
+                                s["intent_dd"].value = self._MX_INTENT_CUSTOM
+                        except Exception:
+                            pass
+                if filled == 0:
+                    # Put whole rewrite on spot as last resort
+                    self._mx_slot("spot")["prompt"].value = (
+                        result.optimized_prompt.strip()[:600]
+                    )
+                    filled = 1
+                done = (
+                    f"Scene Enhance filled {filled} layer prompt(s). "
+                    "Edit any slot, then Generate each (not auto-run)."
+                )
+                self.mx_progress.finish_ok(done, self.page)
+                self.mx_status.value = done
+                self.mx_status.color = TEXT_MUTED
+        except Exception as exc:
+            self.mx_progress.finish_error(str(exc), self.page)
+            self.mx_status.value = f"Scene Enhance error: {exc}"
+            self.mx_status.color = "#e57373"
+        finally:
+            self.state.clear_busy("enhance")
+            self.apply_key_gates()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+    async def _mx_on_intent(self, key: str) -> None:
+        """Inject a short prompt scaffold from the intent helper (editable after)."""
+        slot = self._mx_slot(key)
+        meta = self._MX_SLOT_META.get(key) or {}
+        if not slot:
+            return
+        intent_dd = slot.get("intent_dd")
+        choice = _dd_value(intent_dd) if intent_dd is not None else self._MX_INTENT_CUSTOM
+        scaffolds: dict = meta.get("intents") or {}
+        scaffold = scaffolds.get(choice or "", "") or ""
+        if not scaffold:
+            # Custom — leave prompt alone
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+        cur = (slot["prompt"].value or "").strip()
+        stockish = (
+            not cur
+            or cur in scaffolds.values()
+            or any(
+                cur.startswith(s[:36]) for s in scaffolds.values() if s
+            )
+        )
+        if stockish:
+            slot["prompt"].value = scaffold
+            self.mx_status.value = (
+                f"{slot['title']} intent: {choice} — edit the prompt as needed."
+            )
+            self.mx_status.color = TEXT_MUTED
+        else:
+            self.mx_status.value = (
+                f"Prompt looks custom — intent “{choice}” not applied. "
+                "Clear the prompt or pick intent first."
+            )
+            self.mx_status.color = TEXT_MUTED
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _mx_find_video_sfx_audio(self) -> tuple[str | None, str]:
+        """
+        Prefer last Video → SFX result in-session, else recent Library audio
+        tagged as video SFX / sfx.
+        """
+        # 1) Live Video → SFX player path
+        try:
+            vs = getattr(self, "vs_player", None)
+            p = getattr(vs, "path", None) if vs is not None else None
+            if p and Path(p).is_file():
+                return str(Path(p).resolve()), "last Video → SFX result"
+        except Exception:
+            pass
+        # 2) History: video_sfx / sfx audio files
+        try:
+            from media_studio.history import first_audio_path, load_history
+
+            for entry in load_history(self.state.output_dir):
+                kind = (getattr(entry, "job_kind", "") or "").lower()
+                notes = " ".join(getattr(entry, "notes", None) or []).lower()
+                model = (getattr(entry, "model", "") or "").lower()
+                is_vsfx = (
+                    "video" in kind
+                    or "vsfx" in kind
+                    or "video" in notes
+                    or "foley" in notes
+                    or "mirelo" in model
+                    or "sonilo" in model
+                    or "mmaudio" in model
+                    or "kling" in model and "audio" in model
+                )
+                is_sfx = kind in ("sfx", "audio", "audio-sfx") or "sfx" in notes
+                if not (is_vsfx or is_sfx):
+                    continue
+                ap = first_audio_path(entry)
+                if ap and Path(ap).is_file():
+                    label = "Library Video → SFX" if is_vsfx else "Library SFX"
+                    return str(Path(ap).resolve()), f"{label}: {Path(ap).name}"
+        except Exception:
+            pass
+        return None, ""
+
+    async def _mx_load_from_video_sfx(self, key: str) -> None:
+        """Feed last Video→SFX / Library SFX into a mixer layer (Bed/Spot)."""
+        path, how = self._mx_find_video_sfx_audio()
+        if not path:
+            self.mx_status.value = (
+                "No Video → SFX audio yet — run Video → SFX first, "
+                "or Load audio from disk."
+            )
+            self.mx_status.color = "#e57373"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+        title = (self._mx_slot(key) or {}).get("title") or key
+        self._mx_set_slot_path(
+            key, path, note=f"{title} ← {how}"
+        )
+
+    async def _mx_load_slot(self, key: str) -> None:
+        try:
+            files = await pick_audio(self.page, dialog_title=f"Mixer · {key} audio")
+        except Exception as exc:
+            self.mx_status.value = f"Picker error: {exc}"
+            self.mx_status.color = "#e57373"
+            self.page.update()
+            return
+        if not files or not files[0].path:
+            return
+        self._mx_set_slot_path(key, files[0].path)
+
+    async def _mx_play_slot(self, key: str) -> None:
+        from media_studio.flet_audio_player import mixer_play
+
+        slot = self._mx_slot(key)
+        if not slot or not slot.get("path"):
+            self.mx_status.value = f"No audio on {key} — generate or load first."
+            self.mx_status.color = "#e57373"
+            self.page.update()
+            return
+        vol = float(slot["vol"].value or 0.85)
+        msg = mixer_play(slot["path"], volume=vol)
+        self.mx_status.value = msg
+        self.mx_status.color = TEXT_MUTED
+        self.page.update()
+
+    async def _mx_generate_slot(
+        self, key: str, *, manage_busy: bool = True, batch_label: str | None = None
+    ) -> bool:
+        """
+        Generate one layer. On success replaces that slot's audio only.
+
+        ``manage_busy=False`` when called from Generate all (outer holds busy).
+        Returns True if the slot got a new path.
+        """
+        slot = self._mx_slot(key)
+        if not slot:
+            return False
+        if manage_busy and self.state.is_busy("audio"):
+            return False
+        if manage_busy and not self._require_fal(self.mx_status):
+            return False
+        prompt = (slot["prompt"].value or "").strip()
+        if not prompt:
+            if manage_busy:
+                self.mx_status.value = f"Enter a {slot['title']} prompt, then Generate."
+                self.mx_status.color = "#e57373"
+                self.page.update()
+            return False
+        if manage_busy and not self.state.try_busy("audio"):
+            return False
+        if slot.get("gen_btn") is not None:
+            slot["gen_btn"].disabled = True
+        label = batch_label or f"Generating {slot['title']}…"
+        if manage_busy:
+            self.mx_progress.start(label, self.page)
+        else:
+            self.mx_progress.set_message(label, self.page)
+        self.mx_status.value = label
+        self.mx_status.color = TEXT_MUTED
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+        def on_progress(msg: str) -> None:
+            self.mx_progress.set_message(classify_progress(msg), self.page)
+
+        ok = False
+        try:
+            from media_studio.job_context import to_thread_with_job
+            from media_studio.audio_registry import estimate_audio_cost
+
+            r = await to_thread_with_job(
+                self.state,
+                run_sfx,
+                prompt=prompt,
+                model_label=_dd_value(slot["model"]),
+                duration_s=float(slot["dur"].value or 3),
+                loop=False,
+                output_dir=self.state.output_dir,
+                on_progress=on_progress if manage_busy else None,
+            )
+            if r.ok and r.path:
+                # Only replace audio on success (keep prior file until then)
+                self._mx_set_slot_path(
+                    key, r.path, note=r.status or f"{slot['title']} ready"
+                )
+                try:
+                    spec = find_audio(_dd_value(slot["model"]), SFX_MODELS)
+                    if spec:
+                        c = estimate_audio_cost(
+                            spec, duration_s=float(slot["dur"].value or 3)
+                        )
+                        self.mx_session_cost = float(self.mx_session_cost or 0) + c
+                        slot["last_cost"] = c
+                except Exception:
+                    pass
+                self.mx_cost.value = self._mx_cost_label()
+                if manage_busy:
+                    self.mx_progress.finish_ok(r.status or "OK", self.page)
+                self.mx_status.color = TEXT_MUTED
+                ok = True
+            else:
+                err = r.status or "Generate failed."
+                if manage_busy:
+                    self.mx_progress.finish_error(err, self.page)
+                self.mx_status.value = f"{slot['title']}: {err}"
+                self.mx_status.color = "#e57373"
+        except Exception as exc:
+            if manage_busy:
+                self.mx_progress.finish_error(str(exc), self.page)
+            self.mx_status.value = f"{slot['title']} error: {exc}"
+            self.mx_status.color = "#e57373"
+        finally:
+            if manage_busy:
+                self.state.clear_busy("audio")
+                self.apply_key_gates()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+        return ok
+
+    async def _mx_generate_all(self, e: ft.ControlEvent) -> None:
+        """
+        Sequential Generate for every unmuted slot with a non-empty prompt.
+
+        Does not clear existing audio until each slot's generate succeeds.
+        """
+        if self.state.is_busy("audio"):
+            return
+        if not self._require_fal(self.mx_status):
+            return
+        ready = self._mx_slots_ready_to_generate()
+        if not ready:
+            self.mx_status.value = (
+                "Nothing to generate — unmute layers and add prompts first."
+            )
+            self.mx_status.color = "#e57373"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+        if not self.state.try_busy("audio"):
+            return
+
+        self.mx_gen_all_btn.disabled = True
+        for s in self.mx_slots:
+            if s.get("gen_btn") is not None:
+                s["gen_btn"].disabled = True
+        n = len(ready)
+        names = ", ".join(s["title"] for s in ready)
+        self.mx_cost.value = self._mx_cost_label()
+        self.mx_progress.start(f"Generate all 0/{n}… ({names})", self.page)
+        self.mx_status.value = f"Generate all: starting {n} layer(s)…"
+        self.mx_status.color = TEXT_MUTED
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+        ok_n = 0
+        fail_n = 0
+        try:
+            for i, s in enumerate(ready):
+                title = s["title"]
+                key = s["key"]
+                self.mx_status.value = f"Generate all ({i + 1}/{n}): {title}…"
+                self.mx_progress.set_message(
+                    f"Generating {title}… ({i + 1}/{n})", self.page
+                )
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+                ok = await self._mx_generate_slot(
+                    key,
+                    manage_busy=False,
+                    batch_label=f"Generate all ({i + 1}/{n}): {title}…",
+                )
+                if ok:
+                    ok_n += 1
+                else:
+                    fail_n += 1
+            if fail_n == 0:
+                done = f"Generate all complete — {ok_n}/{n} layers ready."
+                self.mx_progress.finish_ok(done, self.page)
+                self.mx_status.value = done
+                self.mx_status.color = TEXT_MUTED
+            elif ok_n == 0:
+                err = f"Generate all failed — 0/{n} layers."
+                self.mx_progress.finish_error(err, self.page)
+                self.mx_status.value = err
+                self.mx_status.color = "#e57373"
+            else:
+                done = (
+                    f"Generate all finished — {ok_n} ok, {fail_n} failed "
+                    f"(existing audio kept on failures)."
+                )
+                self.mx_progress.finish_ok(done, self.page)
+                self.mx_status.value = done
+                self.mx_status.color = TEXT_MUTED
+            self.mx_cost.value = self._mx_cost_label()
+        finally:
+            self.state.clear_busy("audio")
+            self.apply_key_gates()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+    def _mx_collect_layers(self):
+        from media_studio.audio_mix import MixLayer, ensure_wav_for_mix
+
+        layers: list = []
+        for s in self.mx_slots:
+            p = s.get("path") or s.get("source_path")
+            if not p:
+                continue
+            try:
+                abs_p = str(Path(p).expanduser().resolve())
+            except OSError:
+                abs_p = str(p)
+            if not Path(abs_p).is_file():
+                continue
+            # Always hand absolute WAV (or resolvable path) to bounce
+            try:
+                wav = ensure_wav_for_mix(abs_p)
+            except Exception:
+                wav = abs_p
+            layers.append(
+                MixLayer(
+                    name=str(s["key"]),
+                    path=str(wav),
+                    volume=float(s["vol"].value or 0.85),
+                    muted=bool(s["mute"].value),
+                )
+            )
+        return layers
+
+    async def _mx_bounce(self, e: ft.ControlEvent) -> None:
+        if self.state.is_busy("audio"):
+            return
+        layers = self._mx_collect_layers()
+        active = [L for L in layers if not L.muted]
+        if not active:
+            self.mx_status.value = (
+                "Load or generate at least one unmuted layer, then Bounce."
+            )
+            self.mx_status.color = "#e57373"
+            self.page.update()
+            return
+        if not self.state.try_busy("audio"):
+            return
+        self.mx_bounce_btn.disabled = True
+        self.mx_progress.start("Bouncing mix…", self.page)
+        self.mx_status.value = "Bouncing mix…"
+        self.mx_status.color = TEXT_MUTED
+        self.page.update()
+        try:
+            from media_studio.audio_mix import bounce_mix
+            from media_studio.job_context import to_thread_with_job
+
+            result = await to_thread_with_job(
+                self.state,
+                bounce_mix,
+                layers,
+                output_dir=self.state.output_dir,
+                export_stems=bool(self.mx_export_stems.value),
+                name_hint="sfx_mix",
+            )
+            if result.ok and result.mix_path:
+                note = result.status or "Mix ready"
+                if result.stem_paths:
+                    note += f" · stems: {len(result.stem_paths)}"
+                self.mx_player.set_result(result.mix_path, note=note)
+                self.mx_progress.finish_ok(note, self.page)
+                self.mx_status.value = note
+                self.mx_status.color = TEXT_MUTED
+                try:
+                    from media_studio.history import append_history
+
+                    files = [result.mix_path] + list(result.stem_paths or [])
+                    append_history(
+                        job_kind="audio",
+                        model="SFX mixer",
+                        prompt="layered sfx mix",
+                        files=files,
+                        cost_estimate=self.mx_cost.value,
+                        notes=["mixer", "bounce"],
+                        output_dir=self.state.output_dir,
+                        scenario="audio_mixer",
+                    )
+                except Exception:
+                    pass
+            else:
+                err = result.status or "Bounce failed."
+                self.mx_progress.finish_error(err, self.page)
+                self.mx_status.value = err
+                self.mx_status.color = "#e57373"
+        except Exception as exc:
+            self.mx_progress.finish_error(str(exc), self.page)
+            self.mx_status.value = f"Error: {exc}"
+            self.mx_status.color = "#e57373"
+        finally:
+            self.state.clear_busy("audio")
+            self.apply_key_gates()
+            self.page.update()
+
+    async def _mx_play_mix(self, e: ft.ControlEvent) -> None:
+        """Bounce to a temp mix if needed, then play."""
+        # Prefer last bounced result
+        if self.mx_player.path and Path(self.mx_player.path).is_file():
+            from media_studio.flet_audio_player import mixer_play
+
+            msg = mixer_play(self.mx_player.path, volume=0.9)
+            self.mx_status.value = msg
+            self.page.update()
+            return
+        # Quick bounce then play
+        await self._mx_bounce(e)
+        if self.mx_player.path and Path(self.mx_player.path).is_file():
+            from media_studio.flet_audio_player import mixer_play
+
+            msg = mixer_play(self.mx_player.path, volume=0.9)
+            self.mx_status.value = msg
+            try:
+                self.page.update()
+            except Exception:
+                pass
 
     def _sfx_kwargs(self) -> dict:
         return {

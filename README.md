@@ -152,6 +152,10 @@ Dashboards:
 - **Denoise / Clean** — Topaz Nyx / Artemis (control-driven).
 - **Slow Mo / Interpolate** — RIFE (default) or FILM; 2×–5×.
 
+### Audio highlights
+
+- **Layered SFX mixer** — Bed / Spot / Accent with plain labels + intent helpers; generate or load; **Load from Video → SFX** into a layer; mute + volume; **Bounce mix** (optional stems); Send to Resolve. Additive (not a DAW).
+
 Full tool and model lists: **FEATURES.txt**.
 
 ---

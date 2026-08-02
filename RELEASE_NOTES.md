@@ -12,6 +12,13 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### Audio — Layered SFX mixer (v1)
+- New **Mixer** pill: Bed / Spot / Accent (plain labels + subtitles; not a DAW)
+- **Scene Enhance** — one scene box → Grok fills Bed/Spot/Accent prompts (no auto Generate)
+- **Generate all** — sequential Generate for unmuted layers with prompts; keeps old audio until a slot succeeds
+- Per-slot Generate / Enhance + intent helpers; **Load from Video → SFX** on Bed/Spot
+- Bounce mix + optional stems; MP3 via pygame WAV sidecars; cost sums pending layers
+
 ### Library
 - **Bulk Assign to Job / Listing** — multi-select cards (checkbox), bulk bar with Assign to ▾ (New / existing jobs / Clear); same metadata + optional move under `jobs/<name>/` as single-card Assign
 - **Bulk Send to Resolve** — same bulk bar; each selected item uses Tier A send (bin / optional track+marker); mixed image+video OK; continues on failures; snack “N sent, M skipped”
