@@ -40,6 +40,7 @@ from media_studio.vfx_registry import (
     default_vfx_preset,
     find_vfx_preset,
     format_vfx_cost,
+    is_custom_preset,
     model_is_t2v,
     model_is_video_edit,
     model_notes,
@@ -171,7 +172,10 @@ class VfxView:
             content="Rebuild from preset",
             on_click=self._rebuild_prompt,
             style=ft.ButtonStyle(color=TEXT_MUTED),
-            tooltip="Replace prompt with lock + preset inject + intensity language",
+            tooltip=(
+                "Replace prompt with lock + preset inject + intensity language. "
+                "Custom: leaves your prompt as-is (no template)."
+            ),
         )
 
         self.source_label = ft.Text(
@@ -377,9 +381,12 @@ class VfxView:
     def _on_mode(self, mode_id: str) -> None:
         self._mode = mode_id if mode_id in ("in_scene", "element") else "in_scene"
         self._sync_mode_visibility()
-        # Re-inject preset language for the new mode
+        # Re-inject preset language for the new mode (Custom: leave user text alone)
         preset = find_vfx_preset(_dd(self.preset_dd)) or default_vfx_preset()
-        self._apply_preset_to_prompt(preset, force=True)
+        if is_custom_preset(preset):
+            self._last_preset_key = preset.key
+        else:
+            self._apply_preset_to_prompt(preset, force=True)
         self.cost_text.value = self._cost_label()
         try:
             self.page.update()
@@ -408,14 +415,48 @@ class VfxView:
     async def _on_preset(self, e: ft.ControlEvent | None = None) -> None:
         preset = find_vfx_preset(_dd(self.preset_dd)) or default_vfx_preset()
         self.preset_notes.value = preset.notes or ""
-        self._apply_preset_to_prompt(preset, force=True)
+        if is_custom_preset(preset):
+            # Custom: empty / user-written only — do not wipe existing freeform text
+            # with a template; clear only if current text looks like a pack inject.
+            cur = (self.prompt.value or "").strip()
+            if self._looks_like_preset_inject(cur):
+                self.prompt.value = ""
+            self._last_preset_key = "custom"
+            self.status.value = "Custom — write your effect vision (no pack inject)."
+        else:
+            self._apply_preset_to_prompt(preset, force=True)
         try:
             self.page.update()
         except Exception:
             pass
 
+    def _looks_like_preset_inject(self, text: str) -> bool:
+        """True if prompt is mostly auto-generated pack language (safe to clear)."""
+        if not text:
+            return False
+        markers = (
+            "In-scene VFX:",
+            "Element plate VFX",
+            "Integrate realistic fire",
+            "Isolated fire element",
+            "Integrate volumetric smoke",
+            "Isolated smoke / dust",
+            "Integrate an energy",
+            "Isolated energy / power-surge",
+            "Integrate weather into the plate",
+            "Isolated weather particles",
+            "Integrate debris / impact",
+            "Isolated debris / impact",
+            "Integrate optical lens flare",
+            "Isolated lens flare",
+        )
+        return any(m in text for m in markers)
+
     def _apply_preset_to_prompt(self, preset, *, force: bool = False) -> None:
-        """Inject preset language; keep short user notes if any."""
+        """Inject preset language; Custom leaves user text alone."""
+        if is_custom_preset(preset):
+            self._last_preset_key = "custom"
+            return
         free = ""
         cur = (self.prompt.value or "").strip()
         # If user typed something beyond auto inject, try to preserve trailing notes
@@ -432,6 +473,14 @@ class VfxView:
 
     async def _rebuild_prompt(self, e: ft.ControlEvent | None = None) -> None:
         preset = find_vfx_preset(_dd(self.preset_dd)) or default_vfx_preset()
+        if is_custom_preset(preset):
+            # Leave as-is — no injected template
+            self.status.value = "Custom — no pack template (prompt left as-is)."
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
         self._apply_preset_to_prompt(preset, force=True)
         self.status.value = f"Prompt rebuilt from {preset.label}."
         try:
@@ -558,18 +607,27 @@ class VfxView:
         mode = self._mode
         preset = find_vfx_preset(_dd(self.preset_dd))
         model = _dd(self.model_dd)
+        custom = is_custom_preset(preset)
 
         def _extra() -> dict[str, Any]:
-            return {
-                "workspace": "vfx",
-                "mode": mode,
-                "preset": preset.key if preset else None,
-                "model": model,
-                "strength": float(self.strength.value or 0.7),
-                "duration_s": self._duration(),
-                "has_source": bool(self._source_path),
-                "element_black_plate": bool(self.use_black.value) if mode == "element" else False,
-                "guidance": (
+            if custom:
+                guidance = (
+                    "Custom VFX — treat the user prompt as the creative vision. "
+                    "Rewrite for the selected fal video model with concrete physics "
+                    "(mass, velocity, temperature, light interaction) where useful. "
+                    "Do NOT force a named pack category (fire/smoke/energy/etc.) "
+                    "unless the user already wrote it. "
+                    + (
+                        "Element plates: pure black / clean isolation for Screen or Add "
+                        "composite in Resolve — no environment, no floor, no vignette."
+                        if mode == "element"
+                        else "In-scene: integrate into the existing plate; preserve "
+                        "geometry and lighting direction."
+                    )
+                    + " Do not invent unsupported API fields."
+                )
+            else:
+                guidance = (
                     "Rewrite for VFX generation on fal. "
                     + (
                         "Element plate: pure black background, isolated effect for "
@@ -579,8 +637,26 @@ class VfxView:
                         "preserve geometry and lighting direction."
                     )
                     + " Keep physics-aware language (temperature, velocity, density). "
-                    "Do not invent unsupported API fields."
-                ),
+                    + (
+                        f"Honor the selected pack ({preset.label}). "
+                        if preset
+                        else ""
+                    )
+                    + "Do not invent unsupported API fields."
+                )
+            return {
+                "workspace": "vfx",
+                "mode": mode,
+                "preset": "custom" if custom else (preset.key if preset else None),
+                "custom_vision": custom,
+                "model": model,
+                "strength": float(self.strength.value or 0.7),
+                "duration_s": self._duration(),
+                "has_source": bool(self._source_path),
+                "element_black_plate": bool(self.use_black.value)
+                if mode == "element"
+                else False,
+                "guidance": guidance,
             }
 
         await run_prompt_enhance(
@@ -593,7 +669,7 @@ class VfxView:
             job_progress=self.job_progress,
             enhance_btn=self.btn_enhance,
             busy_controls=[self.btn_generate],
-            context_label="vfx prompt",
+            context_label="vfx custom vision" if custom else "vfx prompt",
             allow_empty_with_context=True,
             busy_scope="vfx",
         )
@@ -619,7 +695,12 @@ class VfxView:
             self.page.update()
             return
         if not (self.prompt.value or "").strip():
-            self.status.value = "Pick a preset or enter a prompt."
+            preset = find_vfx_preset(_dd(self.preset_dd))
+            self.status.value = (
+                "Custom: type your effect vision first."
+                if is_custom_preset(preset)
+                else "Pick a preset or enter a prompt."
+            )
             self.page.update()
             return
 

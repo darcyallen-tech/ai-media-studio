@@ -26,6 +26,8 @@ class VfxPreset:
     inject_in_scene: str
     inject_element: str
     notes: str = ""
+    # Custom = user-written only; no physics / lock template injection
+    is_custom: bool = False
 
 
 VFX_PRESETS: dict[str, VfxPreset] = {
@@ -100,17 +102,19 @@ VFX_PRESETS: dict[str, VfxPreset] = {
         key="debris",
         label="Debris / impact",
         inject_in_scene=(
-            "Integrate debris / impact FX into the plate: shattered fragments with "
-            "plausible mass and velocity, dust burst at impact point, secondary bounce "
-            "and settle, contact shadows under larger chunks, matching gravity and "
-            "light direction. Do not invent a new set — keep the existing plate."
+            "Integrate debris / impact FX into the plate: short-burst impact framing "
+            "(hit peak then settle), shattered fragments with plausible mass and velocity, "
+            "dust burst at impact point, secondary bounce, contact shadows under larger "
+            "chunks, matching gravity and light direction. Do not invent a new set — "
+            "keep the existing plate."
         ),
         inject_element=(
-            "Isolated debris / impact burst on pure black for Screen/Add: fragments and "
-            "dust cloud with clear silhouette, pure black void, no floor plane, ready "
-            "for composite over action plates."
+            "Isolated debris / impact burst on pure black for Screen/Add: short-burst "
+            "hit framing (peak then settle), fragments and dust cloud with clear "
+            "silhouette, pure black void, no floor plane, ready for composite over "
+            "action plates."
         ),
-        notes="Mass, velocity, bounce, contact shadows.",
+        notes="Short-burst hit · mass, velocity, bounce, contact shadows.",
     ),
     "lens": VfxPreset(
         key="lens",
@@ -128,11 +132,26 @@ VFX_PRESETS: dict[str, VfxPreset] = {
         ),
         notes="Flare geometry, ghosts, veiling glare.",
     ),
+    # Last item — user-written vision only
+    "custom": VfxPreset(
+        key="custom",
+        label="Custom",
+        inject_in_scene="",
+        inject_element="",
+        notes=(
+            "Your prompt only — no automatic physics pack. "
+            "Enhance rewrites for the model (isolation vs in-scene) without a preset category."
+        ),
+        is_custom=True,
+    ),
 }
 
 
 def vfx_preset_labels() -> list[str]:
-    return [p.label for p in VFX_PRESETS.values()]
+    """Ordered labels; Custom is always last."""
+    labels = [p.label for p in VFX_PRESETS.values() if not p.is_custom]
+    labels.append(VFX_PRESETS["custom"].label)
+    return labels
 
 
 def find_vfx_preset(label_or_key: str | None) -> VfxPreset | None:
@@ -141,10 +160,16 @@ def find_vfx_preset(label_or_key: str | None) -> VfxPreset | None:
     raw = label_or_key.strip().lower()
     if raw in VFX_PRESETS:
         return VFX_PRESETS[raw]
+    if raw in ("custom", "custom effect", "freeform"):
+        return VFX_PRESETS["custom"]
     for p in VFX_PRESETS.values():
         if p.label.lower() == raw or p.key == raw:
             return p
     return None
+
+
+def is_custom_preset(preset: VfxPreset | None) -> bool:
+    return bool(preset is not None and getattr(preset, "is_custom", False))
 
 
 def default_vfx_preset() -> VfxPreset:
@@ -268,9 +293,20 @@ def assemble_vfx_prompt(
     """
     Build the full prompt. Preset inject is prepended; user text stays editable source.
 
+    Custom preset: user text only (no lock / physics inject). Strength can still
+    add a light intensity line when user text is non-empty.
+
     strength 0–1 → mild / medium / strong language.
     """
-    bits: list[str] = []
+    user = (user_prompt or "").strip()
+    custom = is_custom_preset(preset)
+
+    if custom:
+        # No automatic physics, mode-lock, or intensity templates — user vision only.
+        # (Enhance may add model-ready physics / isolation when the user asks for it.)
+        return user
+
+    bits = []
     if mode == "element":
         bits.append(ELEMENT_LOCK)
     else:
@@ -278,7 +314,8 @@ def assemble_vfx_prompt(
 
     if preset is not None:
         inject = preset.inject_element if mode == "element" else preset.inject_in_scene
-        bits.append(inject)
+        if inject:
+            bits.append(inject)
 
     # Strength language
     s = max(0.0, min(1.0, float(strength)))
@@ -287,12 +324,18 @@ def assemble_vfx_prompt(
     elif s < 0.67:
         bits.append("Effect intensity: medium — clearly readable, balanced with the plate.")
     else:
-        bits.append("Effect intensity: strong / dramatic — bold but still photoreal.")
+        bits.append(
+            "Effect intensity: strong / dramatic — bold but still photoreal"
+            + (
+                "; for impact/debris prefer short-burst hit then settle."
+                if preset and preset.key == "debris"
+                else "."
+            )
+        )
 
     if duration_s is not None and duration_s > 0:
         bits.append(f"Clip length about {int(round(duration_s))} seconds of continuous effect motion.")
 
-    user = (user_prompt or "").strip()
     if user:
         bits.append(user)
     return " ".join(bits).strip()
@@ -307,13 +350,16 @@ def inject_preset_only(
     """
     When user picks a preset, rebuild prompt from preset + optional free notes.
 
-    Strips previous auto injects by replacing with a clean composition:
-    lock + preset + user freeform (if not already the inject text).
+    Custom: return existing user text unchanged (no template).
     """
+    if is_custom_preset(preset):
+        return (existing_user or "").strip()
     free = (existing_user or "").strip()
     # Drop if free is only prior inject noise — keep short custom notes
     for p in VFX_PRESETS.values():
-        if free and (free == p.inject_in_scene or free == p.inject_element):
+        if free and p.inject_in_scene and (
+            free == p.inject_in_scene or free == p.inject_element
+        ):
             free = ""
             break
     return assemble_vfx_prompt(

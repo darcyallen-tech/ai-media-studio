@@ -39,6 +39,7 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - **In-scene** — integrate fire, smoke, energy, weather, debris, lens FX into a still or clip
 - **Element plates** — isolated FX on pure black for Resolve **Screen / Add** composite
 - Preset packs inject physics-aware prompt language (editable); strength + duration + model picker
+- **Custom** preset — user-written vision only (no pack inject); Enhance rewrites model-ready without forcing a category
 - Models: Grok Imagine 1.5, Kling I2V, Seedance, H3, Veo Fast, video-edit models
 - Est. cost under Generate (Studio chrome); Library / Resolve handoff
 

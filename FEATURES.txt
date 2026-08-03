@@ -47,7 +47,8 @@ Sub-tabs:
 
 Effect preset packs (physics-aware prompt inject; prompt stays fully editable):
   Fire / heat haze · Smoke / dust · Energy / power surge · Rain / snow / fog ·
-  Debris / impact · Lens flare / light leak
+  Debris / impact · Lens flare / light leak · **Custom** (user-written only; no
+  pack inject; Enhance rewrites for model + In-scene/Element without forcing a category)
 
 Shared controls:
   Source still or clip · Strength / intensity · Duration · Resolution ·
