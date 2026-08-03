@@ -61,6 +61,51 @@ def section_title(text: str) -> ft.Text:
     return ft.Text(text, size=FONT_MD, color=TEXT, weight=ft.FontWeight.W_700)
 
 
+def make_estimated_cost_box(
+    cost_text: ft.Text | None = None,
+    *,
+    initial: str = "Est. cost: —",
+) -> tuple[ft.Text, ft.Container]:
+    """
+    Studio-standard Estimated cost chrome.
+
+    Place the returned box **directly under** the primary Generate button.
+    Style: bordered ACCENT panel, "Estimated cost" caption, bold job-total line
+    (``Est. cost: $X.XX · {summary} ({model})`` via format_job_cost).
+    """
+    if cost_text is None:
+        cost_text = ft.Text(
+            initial,
+            size=FONT_LG,
+            color=TEXT,
+            weight=ft.FontWeight.W_700,
+            text_align=ft.TextAlign.CENTER,
+        )
+    else:
+        try:
+            cost_text.size = FONT_LG
+            cost_text.color = TEXT
+            cost_text.weight = ft.FontWeight.W_700
+            cost_text.text_align = ft.TextAlign.CENTER
+            if not (cost_text.value or "").strip():
+                cost_text.value = initial
+        except Exception:
+            pass
+    box = ft.Container(
+        content=ft.Column(
+            [label("Estimated cost"), cost_text],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=2,
+            tight=True,
+        ),
+        bgcolor=PANEL_ELEVATED,
+        border=ft.Border.all(1, ACCENT),
+        border_radius=6,
+        padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+    )
+    return cost_text, box
+
+
 def panel(content: ft.Control, *, expand: bool | int | None = None, padding: int = 10) -> ft.Container:
     return ft.Container(
         content=content,

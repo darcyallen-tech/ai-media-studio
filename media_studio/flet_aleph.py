@@ -39,6 +39,7 @@ from media_studio.flet_theme import (
     TEXT_MUTED,
     PillNav,
     label,
+    make_estimated_cost_box,
     section_title,
     styled_dropdown,
 )
@@ -571,13 +572,13 @@ class FrameEditorView:
             on_status=lambda m: setattr(self.status, "value", m),
             show_pack_buttons=False,
         )
-        self.cost_text = ft.Text(
-            format_aleph_cost(None),
-            size=FONT_SM,
-            color=TEXT,
-            weight=ft.FontWeight.W_600,
-            max_lines=2,
+        self.cost_text, self.cost_box = make_estimated_cost_box(
+            initial=format_aleph_cost(None)
         )
+        try:
+            self.cost_text.max_lines = 3
+        except Exception:
+            pass
         self.btn_generate = ft.FilledButton(
             content="Generate (Aleph 2.0)",
             on_click=self._run,
@@ -781,13 +782,12 @@ class FrameEditorView:
             self.prompt_favs.root,
             self.btn_enhance,
         ]
-        # Sticky footer — Generate reachable without extreme scroll
+        # Sticky footer — Generate then Studio-standard Est. cost chrome
         left_footer = ft.Column(
             [
                 ft.Divider(height=1, color=BORDER),
-                label("Est. cost", muted=True),
-                self.cost_text,
                 self.btn_generate,
+                self.cost_box,
                 self.job_progress.control,
                 self.status,
             ],

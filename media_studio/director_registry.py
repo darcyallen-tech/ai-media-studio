@@ -82,7 +82,26 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
             "optional native audio. Up to 6 shots, total ≤15s."
         ),
     ),
+    "kling o3 standard multi-shot": DirectorModelSpec(
+        key="kling o3 standard multi-shot",
+        label="Kling O3 Standard · Multi-Shot",
+        endpoint="fal-ai/kling-video/o3/standard/text-to-video",
+        i2v_endpoint="fal-ai/kling-video/o3/standard/image-to-video",
+        max_shots=6,
+        min_duration_s=3,
+        max_duration_s=15,
+        cost_per_second=0.084,
+        cost_per_second_audio=0.126,
+        default_generate_audio=False,
+        notes=(
+            "Kling O3 Standard multi-shot — multi_prompt storyboard, cheaper than Pro. "
+            "Up to 6 shots, total ≤15s. Seedance / Wan / H3 are single-clip (not multi-shot)."
+        ),
+    ),
 }
+
+# Seedance / Wan / MiniMax H3 remain single-clip Vision/Studio models — they do not
+# expose Kling-style multi_prompt storyboard APIs, so they stay out of DIRECTOR_MODELS.
 
 CAMERA_PRESETS: tuple[str, ...] = (
     "Push in",
@@ -134,7 +153,8 @@ STYLE_PACKS: dict[str, str] = {
 
 # Phase 2 polish (prompt-level; model filter stays multi-shot only)
 AUDIO_STYLES: tuple[str, ...] = ("No music", "Soft bed only", "Full score")
-TRANSITION_PREFS: tuple[str, ...] = ("Hard cut", "Soft dissolve", "Match cut")
+# Per-gap (or global default) between Shot N and Shot N+1
+TRANSITION_PREFS: tuple[str, ...] = ("Hard cut", "Soft dissolve", "Continuous")
 OUTPUT_MODES: tuple[str, ...] = (
     "Single multi-shot clip",
     "Clip pack + shot list",
@@ -155,13 +175,35 @@ AUDIO_STYLE_LANG: dict[str, str] = {
     ),
 }
 
+# Global summary language (when all gaps share one mode)
 TRANSITION_LANG: dict[str, str] = {
     "Hard cut": "Transitions: hard cuts between shots — clean edit points, no dissolve.",
     "Soft dissolve": (
         "Transitions: soft dissolves / gentle blends between shots where natural."
     ),
-    "Match cut": (
-        "Transitions: match cuts — graphic or motion continuity across shot boundaries."
+    "Continuous": (
+        "Transitions: continuous action across shot boundaries — no hard cut; "
+        "treat ordered ref stills as motion keyframes through the sequence."
+    ),
+}
+
+# Language for a single gap (Shot N → Shot N+1), used in brief + multi_prompt
+GAP_TRANSITION_LANG: dict[str, str] = {
+    "Hard cut": "hard cut — clean edit point into the next shot",
+    "Soft dissolve": "soft dissolve / gentle blend into the next shot",
+    "Continuous": (
+        "continuous action (no cut) — seamless motion; prior and next ref stills "
+        "act as motion keyframes"
+    ),
+}
+
+# Incoming prompt language woven into shot N+1 when gap N→N+1 is set
+GAP_INCOMING_PROMPT: dict[str, str] = {
+    "Hard cut": "Hard cut from the previous shot — new clear edit beat.",
+    "Soft dissolve": "Soft dissolve from the previous shot into this beat.",
+    "Continuous": (
+        "Continuous action from the previous shot with no cut — keep motion and "
+        "subject continuity; use ref stills as motion keyframes into this beat."
     ),
 }
 
@@ -169,6 +211,16 @@ ENERGY_CURVE_LANG = (
     "Energy arc: open restrained, build to a mid-piece peak, then resolve cleanly "
     "— do not stay at peak for the whole clip."
 )
+
+
+def normalize_transition(value: str | None) -> str:
+    raw = (value or "Hard cut").strip()
+    if raw in TRANSITION_PREFS:
+        return raw
+    # Legacy label from earlier Phase 2
+    if raw.lower() in {"match cut", "match-cut"}:
+        return "Hard cut"
+    return "Hard cut"
 
 
 @dataclass
@@ -195,7 +247,10 @@ class DirectorPolish:
     same_character: bool = True
     same_location: bool = True
     same_time_of_day: bool = True
+    # Global default applied to new gaps / "apply to all"
     transition: str = "Hard cut"
+    # Per-gap modes between Shot i and Shot i+1 (length = n_shots - 1)
+    gap_transitions: list[str] = field(default_factory=list)
     energy_curve: bool = False
     vision_notes: str = ""  # Enhance-only creative notes
     output_mode: str = "Single multi-shot clip"
@@ -224,9 +279,38 @@ class DirectorPolish:
             out.append(f"SFX notes: {sfx}")
         return out
 
+    def gap_at(self, gap_index: int) -> str:
+        """Transition mode for gap after shot ``gap_index`` (0 = between 1 and 2)."""
+        if 0 <= gap_index < len(self.gap_transitions):
+            return normalize_transition(self.gap_transitions[gap_index])
+        return normalize_transition(self.transition)
+
     def transition_line(self) -> str:
-        key = (self.transition or "Hard cut").strip()
-        return TRANSITION_LANG.get(key) or TRANSITION_LANG["Hard cut"]
+        """Single summary line (global or mixed per-gap)."""
+        if not self.gap_transitions:
+            key = normalize_transition(self.transition)
+            return TRANSITION_LANG.get(key) or TRANSITION_LANG["Hard cut"]
+        keys = [self.gap_at(i) for i in range(len(self.gap_transitions))]
+        if keys and all(k == keys[0] for k in keys):
+            return TRANSITION_LANG.get(keys[0]) or TRANSITION_LANG["Hard cut"]
+        parts = [
+            f"shots {i + 1}→{i + 2}: {self.gap_at(i)}"
+            for i in range(len(self.gap_transitions))
+        ]
+        return "Transitions: " + "; ".join(parts) + "."
+
+    def gap_lines(self) -> list[str]:
+        """Per-gap lines for assembled brief / Enhance."""
+        if not self.gap_transitions:
+            key = normalize_transition(self.transition)
+            short = GAP_TRANSITION_LANG.get(key) or GAP_TRANSITION_LANG["Hard cut"]
+            return [f"Default transition (all gaps): {short}."]
+        lines: list[str] = []
+        for i in range(len(self.gap_transitions)):
+            key = self.gap_at(i)
+            short = GAP_TRANSITION_LANG.get(key) or GAP_TRANSITION_LANG["Hard cut"]
+            lines.append(f"Between Shot {i + 1} and Shot {i + 2}: {short}.")
+        return lines
 
     def prompt_blocks(self, *, generate_audio: bool = False) -> list[str]:
         """Blocks woven into master / multi_prompt (not raw vision notes)."""
@@ -298,6 +382,7 @@ def validate_shots(
     total_duration_s: float,
     max_shots: int = 6,
     allow_overlap: bool = False,
+    polish: DirectorPolish | None = None,
 ) -> list[str]:
     """Return human-readable errors (empty = valid)."""
     errors: list[str] = []
@@ -353,6 +438,24 @@ def validate_shots(
             f"Shot lengths sum to {shot_sum:.0f}s but total duration is {total:.0f}s. "
             "Shorten shots or raise total duration."
         )
+    # Continuous gaps: still need valid ordered times (above) + ref stills as keyframes
+    if polish is not None and len(shots) >= 2:
+        n_gaps = len(shots) - 1
+        for g in range(n_gaps):
+            mode = polish.gap_at(g)
+            if mode != "Continuous":
+                continue
+            a, b = shots[g], shots[g + 1]
+            if not (a.ref_path and Path(a.ref_path).is_file()):
+                errors.append(
+                    f"Continuous between Shot {g + 1} and {g + 2}: "
+                    f"assign a ref still on Shot {g + 1} (motion keyframe)."
+                )
+            if not (b.ref_path and Path(b.ref_path).is_file()):
+                errors.append(
+                    f"Continuous between Shot {g + 1} and {g + 2}: "
+                    f"assign a ref still on Shot {g + 2} (motion keyframe)."
+                )
     return errors
 
 
@@ -415,12 +518,20 @@ def assemble_director_brief(
     if style:
         lines.append(f"Style pack: {style}")
     if polish is not None:
-        for block in polish.prompt_blocks(generate_audio=generate_audio):
-            lines.append(block)
-        # Vision notes stay out of model dump — listed only as Enhance context tag
+        # Continuity / energy / audio without repeating every gap (gaps sit between shots)
+        cont = polish.continuity_line()
+        if cont:
+            lines.append(cont)
+        if polish.energy_curve:
+            lines.append(ENERGY_CURVE_LANG)
+        for al in polish.audio_lines(generate_audio=generate_audio):
+            lines.append(al)
         vn = (polish.vision_notes or "").strip()
         if vn:
             lines.append(f"Vision notes (Enhance): {vn}")
+        # If only one shot, still note default transition once
+        if len(shots) < 2:
+            lines.append(polish.transition_line())
     for i, sh in enumerate(shots):
         cam = sh.camera or "Static"
         t0 = float(sh.start_s)
@@ -429,6 +540,11 @@ def assemble_director_brief(
         lines.append(
             f"Shot {i + 1} ({t0:g}–{t1:g}s, {cam}): {action}"
         )
+        # Per-gap transition line after each shot except the last
+        if polish is not None and i < len(shots) - 1:
+            key = polish.gap_at(i)
+            short = GAP_TRANSITION_LANG.get(key) or GAP_TRANSITION_LANG["Hard cut"]
+            lines.append(f"  → {key} into Shot {i + 2}: {short}")
     return "\n".join(lines).strip()
 
 
@@ -444,14 +560,19 @@ def multi_prompt_from_shots(
     fal multi_prompt payload: [{prompt, duration}, …].
 
     Duration is integer seconds (shot length), string enum for API.
-    Master + polish continuity is woven into shot 1; later shots continue scene.
+    Master + polish continuity is woven into shot 1; later shots get per-gap
+    cut / dissolve / continuous language from polish.gap_transitions.
     """
+    # Master expansion uses summary transition line (not every gap twice)
     master_txt = expand_master_with_polish(
         master or "", polish, generate_audio=generate_audio
     )
-    cont = polish.continuity_line() if polish else "Continuity: same location, characters, and overall tone across all shots."
+    cont = (
+        polish.continuity_line()
+        if polish
+        else "Continuity: same location, characters, and overall tone across all shots."
+    )
     cont_short = cont or "Keep overall tone continuous across shots."
-    # Short continue line for shots 2+
     cont_bits: list[str] = []
     if polish is None or polish.same_character:
         cont_bits.append("characters")
@@ -468,12 +589,20 @@ def multi_prompt_from_shots(
     out: list[dict[str, str]] = []
     for i, sh in enumerate(shots):
         body = assemble_shot_prompt(sh, index=i, style_pack=style_pack)
-        if i == 0 and master_txt:
-            prompt = f"{master_txt.rstrip('.')}. {cont_short} {body}"
-        elif i == 0:
-            prompt = f"{cont_short} {body}" if cont_short else body
+        if i == 0:
+            if master_txt:
+                prompt = f"{master_txt.rstrip('.')}. {cont_short} {body}"
+            else:
+                prompt = f"{cont_short} {body}" if cont_short else body
         else:
-            prompt = f"{continue_line} {body}" if master_txt or cont_bits else body
+            gap_key = polish.gap_at(i - 1) if polish else "Hard cut"
+            gap_lang = GAP_INCOMING_PROMPT.get(gap_key) or GAP_INCOMING_PROMPT["Hard cut"]
+            # Continuous keeps stronger motion language; cut is a clear edit
+            if gap_key == "Continuous":
+                bridge = f"{gap_lang} {continue_line}"
+            else:
+                bridge = f"{gap_lang} {continue_line}"
+            prompt = f"{bridge} {body}"
         dur = max(1, int(round(float(sh.end_s) - float(sh.start_s))))
         dur = min(15, max(1, dur))
         out.append({"prompt": prompt.strip(), "duration": str(dur)})
@@ -502,7 +631,7 @@ def format_shot_list_text(
     if aspect_ratio:
         lines.append(f"Aspect: {aspect_ratio}")
     if polish is not None:
-        lines.append(f"Transition: {polish.transition}")
+        lines.append(f"Default transition: {normalize_transition(polish.transition)}")
         lines.append(f"Output mode: {polish.output_mode}")
         cont = polish.continuity_line()
         if cont:
@@ -521,6 +650,8 @@ def format_shot_list_text(
         lines.append(f"Shot {i + 1} ({t0:g}–{t1:g}s) · {cam}")
         lines.append(f"  Action: {action}")
         lines.append(f"  Ref still: {ref}")
+        if polish is not None and i < len(shots) - 1:
+            lines.append(f"  → Transition into Shot {i + 2}: {polish.gap_at(i)}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

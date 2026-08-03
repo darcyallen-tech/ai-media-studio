@@ -28,6 +28,7 @@ from media_studio.flet_theme import (
     TEXT_MUTED,
     dropdown_options,
     label,
+    make_estimated_cost_box,
     panel,
     section_title,
     styled_dropdown,
@@ -205,9 +206,8 @@ class DualMediaToolCard:
             show_pack_buttons=False,
         )
         self.extra = extra_controls or []
-        self.cost_text = ft.Text(
-            self._cost(), size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600
-        )
+        self.cost_text, self.cost_box = make_estimated_cost_box(initial="Est. cost: —")
+        self.cost_text.value = self._cost()
         self.status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=4)
         self.job_progress = JobProgress()
         self.btn = ft.FilledButton(
@@ -280,8 +280,8 @@ class DualMediaToolCard:
                     *[ft.Row([ctrl], spacing=0) for ctrl in self.extra],
                     self.prompt,
                     self.prompt_favs.root,
-                    self.cost_text,
                     ft.Row([self.btn_enhance, self.btn], spacing=8, wrap=True),
+                    self.cost_box,
                     self.job_progress.control,
                     self.status,
                 ],

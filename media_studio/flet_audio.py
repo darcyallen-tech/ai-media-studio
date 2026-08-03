@@ -63,6 +63,7 @@ from media_studio.flet_theme import (
     TEXT_MUTED,
     PillNav,
     label,
+    make_estimated_cost_box,
     section_title,
     styled_dropdown,
 )
@@ -120,13 +121,9 @@ def _dd_value(dd: ft.Dropdown) -> str | None:
 
 
 def _cost_box(text_ctrl: ft.Text) -> ft.Container:
-    return ft.Container(
-        content=text_ctrl,
-        bgcolor=PANEL_ELEVATED,
-        border=ft.Border.all(1, ACCENT),
-        border_radius=6,
-        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
-    )
+    """Studio-standard Estimated cost chrome (caption + ACCENT border)."""
+    _, box = make_estimated_cost_box(text_ctrl)
+    return box
 
 
 class AudioView:
@@ -893,8 +890,8 @@ class AudioView:
                     label("Duration (seconds) — used when model supports it", muted=True),
                     self.mu_dur,
                     self.mu_dur_hint,
-                    _cost_box(self.mu_cost),
                     ft.Row([self.mu_enhance, self.mu_btn, self.mu_btn_trim], spacing=8),
+                    _cost_box(self.mu_cost),
                     self.mu_progress.control,
                     self.mu_status,
                     self.mu_player.control,
@@ -1500,8 +1497,8 @@ class AudioView:
                     self.sfx_prompt_favs.root,
                     ft.Row([self.sfx_model, self.sfx_count, self.sfx_loop], spacing=8),
                     self.sfx_dur,
-                    _cost_box(self.sfx_cost),
                     ft.Row([self.sfx_enhance, self.sfx_btn], spacing=8),
+                    _cost_box(self.sfx_cost),
                     self.sfx_progress.control,
                     self.sfx_status,
                     label("Results", muted=True),
@@ -1537,8 +1534,8 @@ class AudioView:
                     self.vs_prompt,
                     self.vs_prompt_favs.root,
                     self.vs_char_hint,
-                    _cost_box(self.vs_cost),
                     ft.Row([self.vs_enhance, self.vs_btn], spacing=8),
+                    _cost_box(self.vs_cost),
                     self.vs_progress.control,
                     self.vs_status,
                     self.vs_player.control,
@@ -1899,7 +1896,6 @@ class AudioView:
                         max_lines=2,
                     ),
                     self.mx_export_stems,
-                    _cost_box(self.mx_cost),
                     ft.Row(
                         [
                             self.mx_gen_all_btn,
@@ -1909,6 +1905,7 @@ class AudioView:
                         spacing=8,
                         wrap=True,
                     ),
+                    _cost_box(self.mx_cost),
                     self.mx_progress.control,
                     self.mx_status,
                     self.mx_player.control,
@@ -3415,8 +3412,8 @@ class AudioView:
                     self.amb_prompt,
                     self.amb_prompt_favs.root,
                     ft.Row([self.amb_model], spacing=8),
-                    _cost_box(self.amb_cost),
                     ft.Row([self.amb_enhance, self.amb_btn], spacing=8),
+                    _cost_box(self.amb_cost),
                     self.amb_progress.control,
                     self.amb_status,
                     self.amb_player.control,
@@ -3674,8 +3671,8 @@ class AudioView:
                         spacing=8,
                         vertical_alignment=ft.CrossAxisAlignment.END,
                     ),
-                    _cost_box(self.vo_cost),
                     ft.Row([self.vo_enhance, self.vo_btn], spacing=8),
+                    _cost_box(self.vo_cost),
                     self.vo_progress.control,
                     self.vo_status,
                     self.vo_player.control,
@@ -3861,8 +3858,8 @@ class AudioView:
                     self.cl_preview_text,
                     self.cl_noise,
                     ft.Row([self.cl_model], spacing=0),
-                    _cost_box(self.cl_cost),
                     ft.Row([self.cl_enhance, self.cl_btn], spacing=8),
+                    _cost_box(self.cl_cost),
                     self.cl_progress.control,
                     self.cl_status,
                     self.cl_player.control,

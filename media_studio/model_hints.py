@@ -174,6 +174,14 @@ _BEST_FOR: dict[str, BestFor] = {
         "O3 director multi-shot + optional audio",
         "Kling O3 Pro multi-shot / director path for structured storyboards.",
     ),
+    "kling o3 standard multi-shot": BestFor(
+        "O3 Standard multi-shot, cheaper iteration",
+        "Kling O3 Standard multi_prompt storyboard — same shot structure as Pro, lower $/s.",
+    ),
+    "kling o3 standard · multi-shot": BestFor(
+        "O3 Standard multi-shot, cheaper iteration",
+        "Kling O3 Standard multi_prompt storyboard — same shot structure as Pro, lower $/s.",
+    ),
     # --- Creative Vision I2I labels ---
     "flux 2 pro (edit)": BestFor(
         "furniture / architecture lock, photoreal edits",

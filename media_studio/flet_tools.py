@@ -21,6 +21,7 @@ from media_studio.flet_theme import (
     PillNav,
     dropdown_options,
     label,
+    make_estimated_cost_box,
     panel,
     section_title,
     styled_dropdown,
@@ -228,7 +229,8 @@ class _ToolCard:
             visible=show_strength,
         )
         self.extra = extra_controls or []
-        self.cost_text = ft.Text(self._cost(), size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600)
+        self.cost_text, self.cost_box = make_estimated_cost_box(initial="Est. cost: —")
+        self.cost_text.value = self._cost()
         self.status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=3)
         self.job_progress = JobProgress()
         self.result = ft.Image(src="", fit=ft.BoxFit.CONTAIN, width=220, height=140, visible=False)
@@ -310,8 +312,8 @@ class _ToolCard:
                     ),
                     *[ft.Row([ctrl], spacing=0) for ctrl in self.extra],
                     self.strength if show_strength else ft.Container(height=0),
-                    self.cost_text,
                     action_row,
+                    self.cost_box,
                     self.job_progress.control,
                     self.status,
                 ],
@@ -645,9 +647,8 @@ class _RestoreCard:
             color=TEXT_MUTED,
         )
 
-        self.cost_text = ft.Text(
-            self._cost(), size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600
-        )
+        self.cost_text, self.cost_box = make_estimated_cost_box(initial="Est. cost: —")
+        self.cost_text.value = self._cost()
         self.status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=4)
         self.job_progress = JobProgress()
 
@@ -749,8 +750,8 @@ class _RestoreCard:
                     self.prompt_favs.root,
                     self.strength,
                     self.strength_hint,
-                    self.cost_text,
                     ft.Row([self.btn_enhance, self.btn], spacing=8, wrap=True),
+                    self.cost_box,
                     self.job_progress.control,
                     self.status,
                 ],
@@ -1266,9 +1267,8 @@ class _ReAspectCard:
             on_status=lambda m: setattr(self.status, "value", m),
             show_pack_buttons=False,
         )
-        self.cost_text = ft.Text(
-            self._cost(), size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600
-        )
+        self.cost_text, self.cost_box = make_estimated_cost_box(initial="Est. cost: —")
+        self.cost_text.value = self._cost()
         self.status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=4)
         self.job_progress = JobProgress()
         self.result = ft.Image(
@@ -1352,8 +1352,8 @@ class _ReAspectCard:
                     ft.Row([self.model_dd], spacing=0),
                     self.prompt,
                     self.prompt_favs.root,
-                    self.cost_text,
                     ft.Row([self.btn_enhance, self.btn], spacing=8, wrap=True),
+                    self.cost_box,
                     self.job_progress.control,
                     self.status,
                 ],
@@ -1722,9 +1722,8 @@ class _UpscaleCard:
             expand=True,
         )
         self.target_dd.visible = False  # video mode only; toggled in _refresh_models
-        self.cost_text = ft.Text(
-            self._cost(), size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600
-        )
+        self.cost_text, self.cost_box = make_estimated_cost_box(initial="Est. cost: —")
+        self.cost_text.value = self._cost()
         self.status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=4)
         self.job_progress = JobProgress()
         self.btn = ft.FilledButton(
@@ -1789,8 +1788,8 @@ class _UpscaleCard:
                     self.model_notes,
                     ft.Row([self.up_factor], spacing=0),
                     ft.Row([self.target_dd], spacing=0),
-                    self.cost_text,
                     self.btn,
+                    self.cost_box,
                     self.job_progress.control,
                     self.status,
                 ],

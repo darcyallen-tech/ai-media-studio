@@ -29,12 +29,13 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 ### Director tab (multi-shot)
 - New main tab **Director** (peer to Studio / Creative Vision / Frame Editor)
-- Master brief + total duration/aspect/style pack; multi-shot models only (Kling V3 Pro/Standard, O3 Pro)
+- Master brief + total duration/aspect/style pack; multi-shot models only (Kling V3 Pro/Standard, O3 Pro/Standard)
+- **Est. cost** chrome matches Studio (bordered block under Generate; live on model / duration / audio)
 - Ordered shot list (up to model max, typically 6): start/end times, camera presets, per-shot action, optional ref still with **thumbnail** (~64px) + filename
 - Fail-safes: times within total duration, no overlap, clear Generate blocks
 - Enhance rewrites master + per-shot language; Generate → single multi-shot clip; Library + Resolve
 - **Library Send to ▾** nested: Director ▶ Shot 1…N (dynamic), Creative Vision ▶, Tools ▶ — short top-level list; sending a still to Shot K sets that ref + thumbnail, focuses Director, highlights the row
-- **Phase 2 polish**: audio style (No music / Soft bed / Full score) + SFX notes; continuity toggles; transition preference; energy curve; Enhance-only vision notes; output mode (clip or clip + shot-list sidecar for Resolve)
+- **Phase 2 polish**: audio style (No music / Soft bed / Full score) + SFX notes; continuity toggles; **per-gap transitions** (Hard cut / Soft dissolve / Continuous) with global default + control between Shot N→N+1; energy curve; Enhance-only vision notes; output mode (clip or clip + shot-list sidecar for Resolve)
 
 ### Music — Arrangement builder
 - Optional **Arrangement** block: intro energy/length, lift cue, solo instrument/start/length, outro style, band layers (drums/bass/…)
@@ -47,6 +48,10 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - **Generate all** — sequential Generate for unmuted layers with prompts; busy lock always cleared on error; keeps old audio until success
 - Per-slot Generate / Enhance + intent helpers; **Load from Video → SFX** on Bed/Spot
 - Bounce mix + optional stems; MP3 via pygame WAV sidecars; cost sums pending layers
+
+### Cost chrome (all Generate surfaces)
+- Shared **Estimated cost** panel (Studio pattern): ACCENT border, caption + bold job-total line, placed **directly under** the primary Generate button
+- Applied on Studio Image/Video, Director, Creative Vision, Tools, Frame Editor, Audio
 
 ### Library
 - **Bulk Assign to Job / Listing** — multi-select cards (checkbox), bulk bar with Assign to ▾ (New / existing jobs / Clear); same metadata + optional move under `jobs/<name>/` as single-card Assign

@@ -29,6 +29,7 @@ from media_studio.flet_theme import (
     PillNav,
     dropdown_options,
     label,
+    make_estimated_cost_box,
     panel,
     section_title,
     styled_dropdown,
@@ -81,14 +82,7 @@ def _dd(dd: ft.Dropdown) -> str | None:
     return dd.value
 
 
-def _cost_box(text: ft.Text) -> ft.Container:
-    return ft.Container(
-        content=text,
-        bgcolor=PANEL_ELEVATED,
-        border=ft.Border.all(1, BORDER),
-        border_radius=6,
-        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
-    )
+# Studio-standard cost chrome (imported at use sites via make_estimated_cost_box)
 
 
 class CreativeVisionView:
@@ -137,11 +131,8 @@ class CreativeVisionView:
             self.model_dd.value if hasattr(self, "model_dd") else None,
             dropdown=self.model_dd,
         )
-        self.cost_text = ft.Text(
-            self._cost_label(),
-            size=FONT_SM,
-            color=TEXT,
-            weight=ft.FontWeight.W_600,
+        self.cost_text, self.cost_box = make_estimated_cost_box(
+            initial="Est. cost: —"
         )
 
         # Duration / aspect / resolution
@@ -653,6 +644,7 @@ class CreativeVisionView:
         self.send_host = ft.Container(visible=False)
 
         self.state.on_keys_changed(self.apply_key_gates)
+        self.cost_text.value = self._cost_label()
         self.apply_key_gates()
         self._apply_mode_visibility()
         self._sync_model_ui()
@@ -686,7 +678,6 @@ class CreativeVisionView:
             self.strength,
             self.gen_audio,
             self.native_stereo_note,
-            _cost_box(self.cost_text),
             ft.Divider(height=1, color=BORDER),
             self.helpers_title,
             ft.Row([self.shot_dd, self.lens_dd], spacing=8),
@@ -697,8 +688,9 @@ class CreativeVisionView:
             self.creative_direction,
             self.creative_direction_hint,
             self.negative,
-            # Generate/Enhance above frames / libraries
+            # Generate then Est. cost chrome (Studio pattern)
             ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
+            self.cost_box,
             self.job_progress.control,
             self.status,
             ft.Divider(height=1, color=BORDER),

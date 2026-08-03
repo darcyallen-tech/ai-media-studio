@@ -44,15 +44,20 @@ from a master brief + ordered shot list (not for editing existing plates).
 
 - Master: global prompt, total duration (model max, e.g. 3–15s), aspect, style pack
   (None | Cinematic | Marvel-style | Documentary | Luxury RE), multi-shot model only
-- Models (start): Kling V3 Pro / Standard Multi-Shot, Kling O3 Pro Multi-Shot (Director)
+- Models (multi-shot only): Kling V3 Pro / Standard Multi-Shot, Kling O3 Pro /
+  Standard Multi-Shot (Director). Seedance / Wan / H3 stay single-clip (not listed).
+- Est. cost: Studio-style bordered block directly under Generate; live on model /
+  duration / audio
 - Shot list 2–6 rows (hard-capped by model): start/end time, camera preset
   (Push in / Orbit / Crane / Static / Pan / Tilt / Handheld…), per-shot action,
   optional ref still (upload / Previously used / From Resolve) with ~64px thumbnail
   + filename (Clear ref; empty state “No ref still”)
 - Phase 2 polish (prompt-level): audio intent (Generate audio + No music | Soft bed |
   Full score + optional SFX notes); continuity toggles (Same character / location /
-  time of day); transition (Hard cut | Soft dissolve | Match cut); optional energy
-  curve (restrained → peak → resolve); vision notes (Enhance-only tone/refs);
+  time of day); per-gap transition (Hard cut | Soft dissolve | Continuous — no cut,
+  refs as motion keyframes) with global default applied to all gaps + control between
+  Shot N and N+1; Continuous fail-safe needs ordered times + ref stills on both sides;
+  optional energy curve (restrained → peak → resolve); vision notes (Enhance-only);
   output Single multi-shot clip (default) or Clip pack + shot-list .txt sidecar
 - Fail-safes: times inside [0, duration], no overlaps, min 1s per shot, required
   action prompts; Generate blocked with clear messages

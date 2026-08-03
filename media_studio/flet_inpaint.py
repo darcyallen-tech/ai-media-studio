@@ -32,6 +32,7 @@ from media_studio.flet_theme import (
     TEXT,
     TEXT_MUTED,
     label,
+    make_estimated_cost_box,
     section_title,
     styled_dropdown,
 )
@@ -348,9 +349,8 @@ class InpaintCard:
             tight=True,
             visible=False,
         )
-        self.cost_text = ft.Text(
-            self._cost(), size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600
-        )
+        self.cost_text, self.cost_box = make_estimated_cost_box(initial="Est. cost: —")
+        self.cost_text.value = self._cost()
         self.status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=4)
         self.job_progress = JobProgress()
         self.btn = ft.FilledButton(
@@ -627,8 +627,8 @@ class InpaintCard:
                     self.num_dd,
                     self.strength,
                     self.ref_section,
-                    self.cost_text,
                     ft.Row([self.btn_enhance, self.btn], spacing=8, wrap=True),
+                    self.cost_box,
                     self.job_progress.control,
                     self.status,
                 ],

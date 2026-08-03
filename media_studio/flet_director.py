@@ -26,11 +26,9 @@ from media_studio.director_registry import (
     estimate_director_cost,
     find_director_model,
     format_director_cost,
+    normalize_transition,
     validate_shots,
 )
-
-# Ref-still thumbnail size on shot rows (px)
-_REF_THUMB = 64
 from media_studio.director_service import run_director
 from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_image
@@ -48,6 +46,7 @@ from media_studio.flet_theme import (
     TEXT_MUTED,
     dropdown_options,
     label,
+    make_estimated_cost_box,
     section_title,
     styled_dropdown,
 )
@@ -56,6 +55,9 @@ from media_studio.helper_none import HELPER_NONE
 
 if TYPE_CHECKING:
     from media_studio.flet_app import StudioState
+
+# Ref-still thumbnail size on shot rows (px)
+_REF_THUMB = 64
 
 
 def _dd(dd: ft.Dropdown) -> str | None:
@@ -153,11 +155,17 @@ class DirectorView:
             on_change=self._on_polish_change,
         )
         self.transition_dd = styled_dropdown(
-            label_text="Transition",
+            label_text="Default transition (all gaps)",
             options=list(TRANSITION_PREFS),
             value="Hard cut",
-            on_select=self._on_polish_change,
+            on_select=self._on_global_transition,
             expand=True,
+        )
+        self.transition_hint = ft.Text(
+            "Hard cut · Soft dissolve · Continuous (no cut — refs as motion keyframes). "
+            "Per-gap control sits between shot rows; default applies to every gap.",
+            size=FONT_SM,
+            color=TEXT_MUTED,
         )
         self.energy_curve = ft.Checkbox(
             label="Energy curve (restrained → peak → resolve)",
@@ -185,11 +193,8 @@ class DirectorView:
             on_select=self._on_polish_change,
             expand=True,
         )
-        self.cost_text = ft.Text(
-            self._cost_label(),
-            size=FONT_SM,
-            color=TEXT,
-            weight=ft.FontWeight.W_600,
+        self.cost_text, self.cost_box = make_estimated_cost_box(
+            initial="Est. cost: —"
         )
 
         self.master = ft.TextField(
@@ -285,6 +290,7 @@ class DirectorView:
         self._add_shot_row(start=5, end=10, camera="Orbit")
         self._sync_shots_meta()
         self._rebuild_assembled_text()
+        self.cost_text.value = self._cost_label()
         self.apply_key_gates()
 
     # ----- layout -----
@@ -318,15 +324,9 @@ class DirectorView:
                 wrap=True,
             ),
             ft.Row([self.transition_dd, self.output_mode_dd], spacing=8),
+            self.transition_hint,
             self.energy_curve,
             self.vision_notes,
-            ft.Container(
-                content=self.cost_text,
-                bgcolor=PANEL_ELEVATED,
-                border=ft.Border.all(1, BORDER),
-                border_radius=6,
-                padding=ft.Padding.symmetric(horizontal=10, vertical=6),
-            ),
             self.master,
             ft.Divider(height=1, color=BORDER),
             label("Shots (ordered, non-overlapping)", muted=True),
@@ -338,6 +338,7 @@ class DirectorView:
             self.resolve_strip.root,
             self.assembled,
             ft.Row([self.btn_rebuild, self.btn_enhance, self.btn_generate], spacing=8),
+            self.cost_box,
             self.job_progress.control,
             self.status,
         ]
@@ -470,15 +471,43 @@ class DirectorView:
         except Exception:
             pass
 
+    async def _on_global_transition(self, e: ft.ControlEvent | None = None) -> None:
+        """Apply default transition to every per-gap control."""
+        val = normalize_transition(_dd(self.transition_dd))
+        for i, row in enumerate(self._shots[:-1]):
+            gap_dd = row.get("gap_dd")
+            if gap_dd is not None:
+                try:
+                    gap_dd.value = val
+                except Exception:
+                    pass
+        self._rebuild_assembled_text()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _collect_gap_transitions(self) -> list[str]:
+        """Modes between Shot i and Shot i+1 (length n-1)."""
+        default = normalize_transition(_dd(self.transition_dd))
+        gaps: list[str] = []
+        for row in self._shots[:-1]:
+            gap_dd = row.get("gap_dd")
+            if gap_dd is not None:
+                gaps.append(normalize_transition(_dd(gap_dd)))
+            else:
+                gaps.append(default)
+        return gaps
+
     def _collect_polish(self) -> DirectorPolish:
-        gen_audio = bool(self.gen_audio.value) if self.gen_audio.visible else False
         return DirectorPolish(
             audio_style=_dd(self.audio_style_dd) or "Soft bed only",
             sfx_note=(self.sfx_note.value or "").strip(),
             same_character=bool(self.cont_character.value),
             same_location=bool(self.cont_location.value),
             same_time_of_day=bool(self.cont_time.value),
-            transition=_dd(self.transition_dd) or "Hard cut",
+            transition=normalize_transition(_dd(self.transition_dd)),
+            gap_transitions=self._collect_gap_transitions(),
             energy_curve=bool(self.energy_curve.value),
             vision_notes=(self.vision_notes.value or "").strip(),
             output_mode=_dd(self.output_mode_dd) or OUTPUT_MODES[0],
@@ -508,12 +537,12 @@ class DirectorView:
 
     def _trim_shots_to_max(self) -> None:
         cap = self._current_spec().max_shots
+        changed = False
         while len(self._shots) > cap:
-            removed = self._shots.pop()
-            try:
-                self.shots_host.controls.remove(removed["card"])
-            except Exception:
-                pass
+            self._shots.pop()
+            changed = True
+        if changed:
+            self._reindex_shots()
 
     def _sync_shots_meta(self) -> None:
         spec = self._current_spec()
@@ -708,10 +737,77 @@ class DirectorView:
             "btn_ref": btn_ref,
             "btn_clear_ref": btn_clear_ref,
             "btn_remove": btn_remove,
+            "gap_dd": None,
+            "gap_label": None,
+            "gap_host": None,
         }
         self._shots.append(row)
-        self.shots_host.controls.append(card)
         self._reindex_shots()
+
+    def _ensure_gap_control(self, row: dict[str, Any], after_index: int) -> None:
+        """Gap control after shot ``after_index`` (between N and N+1)."""
+        default = normalize_transition(_dd(self.transition_dd))
+        if row.get("gap_dd") is None:
+            gap_label = ft.Text(
+                f"Between Shot {after_index + 1} → {after_index + 2}",
+                size=FONT_SM,
+                color=TEXT_MUTED,
+                weight=ft.FontWeight.W_600,
+            )
+            gap_dd = styled_dropdown(
+                label_text="Transition",
+                options=list(TRANSITION_PREFS),
+                value=default,
+                on_select=self._on_polish_change,
+                expand=True,
+            )
+            gap_host = ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.SOUTH, size=16, color=TEXT_MUTED),
+                        gap_label,
+                        gap_dd,
+                    ],
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                bgcolor=PANEL,
+                border=ft.Border(
+                    left=ft.BorderSide(3, ACCENT),
+                    top=ft.BorderSide(1, BORDER),
+                    right=ft.BorderSide(1, BORDER),
+                    bottom=ft.BorderSide(1, BORDER),
+                ),
+                border_radius=6,
+                padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+            )
+            row["gap_dd"] = gap_dd
+            row["gap_label"] = gap_label
+            row["gap_host"] = gap_host
+        else:
+            try:
+                row["gap_label"].value = (
+                    f"Between Shot {after_index + 1} → {after_index + 2}"
+                )
+            except Exception:
+                pass
+
+    def _refresh_shots_host(self) -> None:
+        """Rebuild shots column: Shot · gap · Shot · gap · Shot."""
+        controls: list[ft.Control] = []
+        n = len(self._shots)
+        for i, row in enumerate(self._shots):
+            controls.append(row["card"])
+            if i < n - 1:
+                self._ensure_gap_control(row, i)
+                host = row.get("gap_host")
+                if host is not None:
+                    controls.append(host)
+            else:
+                # Last shot has no outgoing gap
+                row["gap_dd"] = row.get("gap_dd")
+                # Keep widgets if re-added later; just omit from host
+        self.shots_host.controls = controls
 
     def _reindex_shots(self) -> None:
         for i, row in enumerate(self._shots):
@@ -722,6 +818,9 @@ class DirectorView:
                 row["btn_remove"].on_click = self._make_remove_shot(i)
             except Exception:
                 pass
+            if i < len(self._shots) - 1:
+                self._ensure_gap_control(row, i)
+        self._refresh_shots_host()
         self._sync_shots_meta()
 
     async def _add_shot(self, e: ft.ControlEvent) -> None:
@@ -754,11 +853,7 @@ class DirectorView:
                 self.page.update()
                 return
             if 0 <= index < len(self._shots):
-                row = self._shots.pop(index)
-                try:
-                    self.shots_host.controls.remove(row["card"])
-                except Exception:
-                    pass
+                self._shots.pop(index)
             self._reindex_shots()
             self._rebuild_assembled_text()
             try:
@@ -948,6 +1043,8 @@ class DirectorView:
         def _extra() -> dict[str, Any]:
             cont = polish.continuity_line() or "Continuity toggles off — do not force locks."
             vision = (polish.vision_notes or "").strip()
+            gap_plan = polish.gap_lines()
+            gap_text = " ".join(gap_plan) if gap_plan else polish.transition_line()
             return {
                 "workspace": "director",
                 "mode": "multi_shot",
@@ -956,7 +1053,9 @@ class DirectorView:
                 "style_pack": style,
                 "master_brief": (self.master.value or "").strip(),
                 "continuity": cont,
-                "transition": polish.transition,
+                "transition_default": polish.transition,
+                "gap_transitions": list(polish.gap_transitions),
+                "transition_plan": gap_plan,
                 "energy_curve": bool(polish.energy_curve),
                 "audio_generate": gen_audio,
                 "audio_style": polish.audio_style if gen_audio else None,
@@ -970,6 +1069,9 @@ class DirectorView:
                         "camera": s.camera,
                         "action": s.action,
                         "has_ref": bool(s.ref_path),
+                        "transition_into_next": (
+                            polish.gap_at(i) if i < len(shots) - 1 else None
+                        ),
                     }
                     for i, s in enumerate(shots)
                 ],
@@ -979,7 +1081,10 @@ class DirectorView:
                     "(2) clear per-shot action language with camera moves. "
                     "Preserve shot order and timing intent. "
                     f"Honor continuity flags: {cont} "
-                    f"Transition preference: {polish.transition}. "
+                    f"Per-gap transitions (emit clear cut vs soft dissolve vs continuous "
+                    f"action language): {gap_text} "
+                    "Continuous = no cut, seamless motion, ref stills as motion keyframes; "
+                    "Hard cut = clean edit; Soft dissolve = gentle blend. "
                     + (
                         "Include restrained→peak→resolve energy language in the master. "
                         if polish.energy_curve
@@ -1045,11 +1150,13 @@ class DirectorView:
         spec = self._current_spec()
         shots = self._collect_shots()
         total = self._total_duration()
+        polish = self._collect_polish()
         errs = validate_shots(
             shots,
             total_duration_s=total,
             max_shots=spec.max_shots,
             allow_overlap=False,
+            polish=polish,
         )
         if errs:
             self.status.value = "Cannot Generate — " + " · ".join(errs)
@@ -1102,7 +1209,6 @@ class DirectorView:
         def on_progress(msg: str) -> None:
             self.job_progress.set_message(classify_progress(msg), self.page)
 
-        polish = self._collect_polish()
         try:
             from media_studio.job_context import to_thread_with_job
 

@@ -24,6 +24,7 @@ from media_studio.flet_theme import (
     TEXT,
     TEXT_MUTED,
     label,
+    make_estimated_cost_box,
     panel,
     section_title,
     styled_dropdown,
@@ -287,23 +288,8 @@ class StudioVideoView:
             hint_text="0 = beginning",
         )
 
-        self.cost_text = ft.Text(
-            self._estimate(),
-            size=FONT_LG,
-            color=TEXT,
-            weight=ft.FontWeight.W_700,
-            text_align=ft.TextAlign.CENTER,
-        )
-        self.cost_box = ft.Container(
-            content=ft.Column(
-                [label("Estimated cost"), self.cost_text],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                spacing=2,
-            ),
-            bgcolor=PANEL_ELEVATED,
-            border=ft.Border.all(1, ACCENT),
-            border_radius=6,
-            padding=ft.Padding.symmetric(horizontal=10, vertical=8),
+        self.cost_text, self.cost_box = make_estimated_cost_box(
+            initial=self._estimate()
         )
         self.job_text = ft.Text(
             describe_job_kind(self.model_dd.value, None, None),
@@ -605,8 +591,8 @@ class StudioVideoView:
             self.gen_audio,
             self.job_text,
             ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
-            self.job_progress.control,
             self.cost_box,
+            self.job_progress.control,
             self.status_text,
             self.job_log.control,
         ]

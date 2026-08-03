@@ -119,6 +119,7 @@ Dashboards:
 | **Studio** | Image (scenarios, Region edit, compare) · Video (Received / Blank / Camera Lock) |
 | **Tools** | Image \| Video tools + large result viewer (upscale, **Inpaint**, **Denoise**, **Slow Mo**, cleanup, sky, …) |
 | **Creative Vision** | **Text → Image**, **Image → Image**, Text → Video, Image → Video, Bridge / Connect |
+| **Director** | Multi-shot storyboard: master brief, ordered shots, camera presets, ref stills per shot, cut/continuous transitions |
 | **Frame Editor** | Aleph 2.0 keyframe edit via **Runware** + optional fal 1080p proxy |
 | **Audio** | Music, SFX, Ambience, VO, Voice clone, **Video → SFX** |
 | **Library** | History; filters including **From Resolve**; Send to Studio / Tools / Frame Editor / Resolve |

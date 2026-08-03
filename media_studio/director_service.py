@@ -76,6 +76,7 @@ def run_director(
         total_duration_s=float(duration_s),
         max_shots=spec.max_shots,
         allow_overlap=False,
+        polish=polish,
     )
     if errs:
         return DirectorResult(
