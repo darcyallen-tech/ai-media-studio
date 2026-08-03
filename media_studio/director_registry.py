@@ -18,6 +18,8 @@ class DirectorModelSpec:
     endpoint: str
     # image-to-video multi-shot uses start_image_url when any shot has a still
     i2v_endpoint: str | None = None
+    # Optional pure T2V when no shot refs (Grok Imagine)
+    t2v_endpoint: str | None = None
     max_shots: int = 6
     min_duration_s: int = 3
     max_duration_s: int = 15
@@ -27,12 +29,18 @@ class DirectorModelSpec:
     default_aspect: str = "16:9"
     cost_per_second: float = 0.112  # ballpark @ no-audio / standard
     cost_per_second_audio: float | None = 0.168
+    cost_per_second_by_resolution: dict[str, float] = field(default_factory=dict)
+    cost_fixed_per_ref: float = 0.0
+    resolution_choices: tuple[str, ...] = ()
+    default_resolution: str | None = None
     supports_audio: bool = True
     default_generate_audio: bool = True
     notes: str = ""
     # fal multi_prompt shot duration is integer seconds as string
     shot_min_s: int = 1
     shot_max_s: int = 15
+    # "kling_multi" = multi_prompt; "grok_imagine" = single clip from refs + brief
+    engine: str = "kling_multi"
 
 
 DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
@@ -96,6 +104,35 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         notes=(
             "Kling O3 Standard multi-shot — multi_prompt storyboard, cheaper than Pro. "
             "Up to 6 shots, total ≤15s. Seedance / Wan / H3 are single-clip (not multi-shot)."
+        ),
+    ),
+    "grok imagine 1.5 director": DirectorModelSpec(
+        key="grok imagine 1.5 director",
+        label="Grok Imagine 1.5 · Reference storyboard",
+        endpoint="xai/grok-imagine-video/v1.5/reference-to-video",
+        i2v_endpoint="xai/grok-imagine-video/v1.5/image-to-video",
+        t2v_endpoint="xai/grok-imagine-video/v1.5/text-to-video",
+        max_shots=7,
+        min_duration_s=1,
+        max_duration_s=15,
+        allowed_durations=tuple(range(1, 16)),
+        default_duration_s=8,
+        aspect_choices=("16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16"),
+        default_aspect="16:9",
+        cost_per_second=0.08,
+        cost_per_second_audio=None,
+        cost_per_second_by_resolution={"480p": 0.08, "720p": 0.14, "1080p": 0.25},
+        cost_fixed_per_ref=0.01,
+        resolution_choices=("480p", "720p", "1080p"),
+        default_resolution="720p",
+        supports_audio=False,  # native audio always
+        default_generate_audio=False,
+        engine="grok_imagine",
+        notes=(
+            "Grok Imagine Video 1.5 — one clip from master + ordered shot refs (up to 7). "
+            "0 refs → T2V; 1 ref → I2V; 2+ refs → R2V with <IMAGE_n> tags. "
+            "Strong reference consistency, native audio, motion quality. "
+            "Est. $0.08–0.25/s by resolution + $0.01/ref. Not Kling multi_prompt."
         ),
     ),
 }
@@ -353,12 +390,22 @@ def estimate_director_cost(
     *,
     duration_s: float,
     generate_audio: bool = False,
+    resolution: str | None = None,
+    num_refs: int = 0,
 ) -> float:
     rate = spec.cost_per_second
     if generate_audio and spec.cost_per_second_audio is not None:
         rate = spec.cost_per_second_audio
+    by_res = getattr(spec, "cost_per_second_by_resolution", None) or {}
+    if by_res:
+        res = (resolution or spec.default_resolution or "720p").strip().lower()
+        rate = by_res.get(res, rate)
     secs = max(1.0, float(duration_s or spec.default_duration_s))
-    return round(rate * secs, 3)
+    total = (rate or 0.0) * secs
+    fixed = float(getattr(spec, "cost_fixed_per_ref", 0) or 0)
+    if fixed and num_refs > 0:
+        total += fixed * int(num_refs)
+    return round(total, 3)
 
 
 def format_director_cost(
@@ -366,14 +413,23 @@ def format_director_cost(
     *,
     duration_s: float,
     generate_audio: bool = False,
+    resolution: str | None = None,
+    num_refs: int = 0,
 ) -> str:
     from media_studio.pricing import format_job_cost
 
     amt = estimate_director_cost(
-        spec, duration_s=duration_s, generate_audio=generate_audio
+        spec,
+        duration_s=duration_s,
+        generate_audio=generate_audio,
+        resolution=resolution,
+        num_refs=num_refs,
     )
     secs = int(round(float(duration_s or 0)))
-    return format_job_cost(amt, unit=f"{secs}s", model=spec.label)
+    unit = f"{secs}s"
+    if num_refs:
+        unit = f"{secs}s · {num_refs} ref"
+    return format_job_cost(amt, unit=unit, model=spec.label)
 
 
 def validate_shots(
@@ -690,6 +746,96 @@ def write_shot_list_sidecar(
         return None
 
 
+def build_grok_imagine_director_arguments(
+    spec: DirectorModelSpec,
+    *,
+    master: str,
+    shots: list[DirectorShot],
+    duration_s: int | float,
+    aspect_ratio: str | None = None,
+    style_pack: str | None = None,
+    polish: DirectorPolish | None = None,
+    ref_image_urls: list[str] | None = None,
+    resolution: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """
+    Grok Imagine Video 1.5 Director path: one clip from brief + ordered refs.
+
+    0 refs → T2V · 1 ref → I2V · 2+ refs → R2V with <IMAGE_n> tags.
+    """
+    brief = assemble_director_brief(
+        master=master or "",
+        shots=shots,
+        style_pack=style_pack,
+        polish=polish,
+        generate_audio=False,
+    )
+    prompt = expand_master_with_polish(
+        master or "", polish, generate_audio=False
+    )
+    if brief:
+        # Prefer full assembled brief for a single-pass model
+        prompt = brief if not prompt else f"{prompt}\n{brief}"
+    prompt = (prompt or "").strip()
+    if not prompt:
+        raise ValueError("Enter a master brief or shot actions for Grok Imagine Director.")
+
+    try:
+        total = int(round(float(duration_s)))
+    except (TypeError, ValueError):
+        total = int(spec.default_duration_s)
+    total = max(spec.min_duration_s, min(spec.max_duration_s, total))
+
+    urls = [u for u in (ref_image_urls or []) if u][: max(1, int(spec.max_shots or 7))]
+    res = (resolution or spec.default_resolution or "720p").strip()
+    if spec.resolution_choices and res not in spec.resolution_choices:
+        res = spec.default_resolution or "720p"
+    ar = (aspect_ratio or spec.default_aspect or "16:9").strip()
+
+    if len(urls) >= 2:
+        endpoint = spec.endpoint  # reference-to-video
+        # R2V: 480p/720p only on fal
+        if res not in ("480p", "720p"):
+            res = "720p" if res == "1080p" else (spec.default_resolution or "480p")
+            if res not in ("480p", "720p"):
+                res = "480p"
+        tags = ", ".join(f"<IMAGE_{i}>" for i in range(len(urls)))
+        if "<image_0>" not in prompt.lower():
+            prompt = (
+                prompt.rstrip(".")
+                + f". Use {tags} as ordered visual keyframes / style refs "
+                f"matching Shot 1…{len(urls)}."
+            )
+        args: dict[str, Any] = {
+            "prompt": prompt,
+            "reference_image_urls": urls,
+            "duration": total,
+            "resolution": res,
+            "aspect_ratio": ar,
+        }
+        return endpoint, args
+
+    if len(urls) == 1:
+        endpoint = spec.i2v_endpoint or spec.endpoint
+        args = {
+            "prompt": prompt,
+            "image_url": urls[0],
+            "duration": total,
+            "resolution": res if res in ("480p", "720p", "1080p") else "720p",
+        }
+        return endpoint, args
+
+    # No refs — pure T2V
+    endpoint = spec.t2v_endpoint or spec.endpoint
+    args = {
+        "prompt": prompt,
+        "duration": total,
+        "resolution": res if res in ("480p", "720p", "1080p") else "720p",
+        "aspect_ratio": ar,
+    }
+    return endpoint, args
+
+
 def build_director_arguments(
     spec: DirectorModelSpec,
     *,
@@ -702,13 +848,28 @@ def build_director_arguments(
     start_image_url: str | None = None,
     negative_prompt: str | None = None,
     polish: DirectorPolish | None = None,
+    ref_image_urls: list[str] | None = None,
+    resolution: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
     Returns (endpoint, arguments) for fal subscribe.
 
-    Uses multi_prompt + shot_type=customize. Total duration = sum of shot durs
-    (also sent as duration string for API).
+    Kling: multi_prompt + shot_type=customize.
+    Grok Imagine: single clip T2V / I2V / R2V from shot refs.
     """
+    if (getattr(spec, "engine", None) or "kling_multi") == "grok_imagine":
+        return build_grok_imagine_director_arguments(
+            spec,
+            master=master,
+            shots=shots,
+            duration_s=duration_s,
+            aspect_ratio=aspect_ratio,
+            style_pack=style_pack,
+            polish=polish,
+            ref_image_urls=ref_image_urls,
+            resolution=resolution,
+        )
+
     use_audio = (
         bool(generate_audio)
         if generate_audio is not None

@@ -392,10 +392,20 @@ class DirectorView:
         try:
             spec = self._current_spec()
             audio = bool(self.gen_audio.value) if spec.supports_audio else False
+            n_refs = sum(
+                1
+                for row in self._shots
+                if row.get("ref_path") and Path(str(row["ref_path"])).is_file()
+            )
+            res = None
+            if getattr(spec, "default_resolution", None):
+                res = spec.default_resolution
             return format_director_cost(
                 spec,
                 duration_s=self._total_duration(),
                 generate_audio=audio,
+                resolution=res,
+                num_refs=n_refs if (getattr(spec, "engine", "") == "grok_imagine") else 0,
             )
         except Exception:
             return "Est. cost: —"
@@ -943,6 +953,11 @@ class DirectorView:
                     empty.visible = True
                 except Exception:
                     pass
+        # Grok Imagine Director cost scales with ref count
+        try:
+            self.cost_text.value = self._cost_label()
+        except Exception:
+            pass
 
     def receive_shot_ref(self, index: int, path: str) -> int:
         """

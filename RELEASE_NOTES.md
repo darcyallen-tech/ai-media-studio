@@ -27,6 +27,13 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - fal endpoints: `minimax/h3/text-to-video`, `image-to-video` (`end_image_url`), `reference-to-video`
 - Does not wire Flux 3 or Seedance 2.5; existing Kling / Seedance 2.0 / Aleph / Veo paths unchanged
 
+### Grok Imagine Video 1.5 (fal) — first-class video
+- **Studio Video**: I2V + R2V (up to 7 stills; `<IMAGE_n>` tags); **Creative Vision**: T2V + I2V + Reference pack
+- **Director**: Grok Imagine 1.5 · Reference storyboard (ordered shot refs → T2V / I2V / R2V single clip)
+- Best-for: strong reference consistency, native audio, motion quality
+- Pricing: $0.08/s @480p · $0.14/s @720p · $0.25/s @1080p (I2V/T2V) + $0.01 per ref image
+- fal: `xai/grok-imagine-video/v1.5/{image,text,reference}-to-video`
+
 ### Director tab (multi-shot)
 - New main tab **Director** (peer to Studio / Creative Vision / Frame Editor)
 - Master brief + total duration/aspect/style pack; multi-shot models only (Kling V3 Pro/Standard, O3 Pro/Standard)

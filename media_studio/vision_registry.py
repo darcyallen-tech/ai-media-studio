@@ -690,6 +690,54 @@ T2V_MODELS: dict[str, VisionModelSpec] = {
         duration_as_int=True,
         native_stereo_audio=True,
     ),
+    "grok imagine 1.5 t2v": VisionModelSpec(
+        key="grok imagine 1.5 t2v",
+        label="Grok Imagine 1.5 · Text→Video",
+        mode="text_to_video",
+        endpoint="xai/grok-imagine-video/v1.5/text-to-video",
+        cost_estimate_usd=0.84,  # 6s × $0.14 @720p
+        cost_per_second=0.14,
+        notes=(
+            "xAI Grok Imagine Video 1.5 T2V — strong motion quality + native audio. "
+            "1–15s · 480p/720p/1080p. Est. $0.08/s @480p, $0.14/s @720p, $0.25/s @1080p."
+        ),
+        duration_choices=tuple(str(i) for i in range(1, 16)),
+        default_duration="6",
+        aspect_choices=("16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16"),
+        default_aspect="16:9",
+        resolution_choices=("480p", "720p", "1080p"),
+        default_resolution="720p",
+        supports_audio=False,  # native audio always
+        supports_negative=False,
+        duration_as_int=True,
+        native_stereo_audio=True,
+    ),
+    "grok imagine 1.5 reference": VisionModelSpec(
+        key="grok imagine 1.5 reference",
+        label="Grok Imagine 1.5 · Reference pack",
+        mode="text_to_video",
+        endpoint="xai/grok-imagine-video/v1.5/reference-to-video",
+        cost_estimate_usd=0.66,  # 8s × 0.08 + ~0.02 refs
+        cost_per_second=0.08,
+        notes=(
+            "Grok Imagine 1.5 R2V — 1–7 reference stills; tag <IMAGE_0>… in the prompt. "
+            "Native audio. 1–15s · 480p/720p. Est. $0.08/s @480p, $0.14/s @720p + $0.01/ref. "
+            "Also on Studio Video → R2V."
+        ),
+        duration_choices=tuple(str(i) for i in range(1, 16)),
+        default_duration="8",
+        aspect_choices=("16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16"),
+        default_aspect="16:9",
+        resolution_choices=("480p", "720p"),
+        default_resolution="480p",
+        supports_audio=False,
+        supports_negative=False,
+        max_refs=7,
+        duration_as_int=True,
+        native_stereo_audio=True,
+        prompt_citation_style="angle",
+        image_field="reference_image_urls",
+    ),
     "minimax h3 omni": VisionModelSpec(
         key="minimax h3 omni",
         label="MiniMax H3 · Omni reference",
@@ -825,6 +873,30 @@ I2V_MODELS: dict[str, VisionModelSpec] = {
         supports_end_frame=True,
         duration_as_int=True,
         native_stereo_audio=True,
+    ),
+    "grok imagine 1.5 i2v": VisionModelSpec(
+        key="grok imagine 1.5 i2v",
+        label="Grok Imagine 1.5 · Image→Video",
+        mode="image_to_video",
+        endpoint="xai/grok-imagine-video/v1.5/image-to-video",
+        cost_estimate_usd=0.85,  # 6s × 0.14 + 0.01
+        cost_per_second=0.14,
+        notes=(
+            "xAI Grok Imagine Video 1.5 I2V — animate a still with strong motion + native audio. "
+            "1–15s · 480p/720p/1080p. Est. $0.08/s @480p, $0.14/s @720p, $0.25/s @1080p + $0.01 image."
+        ),
+        duration_choices=tuple(str(i) for i in range(1, 16)),
+        default_duration="6",
+        aspect_choices=("auto",),
+        default_aspect="auto",
+        resolution_choices=("480p", "720p", "1080p"),
+        default_resolution="720p",
+        supports_audio=False,
+        supports_negative=False,
+        supports_end_frame=False,
+        duration_as_int=True,
+        native_stereo_audio=True,
+        image_field="image_url",
     ),
 }
 
@@ -1179,6 +1251,8 @@ def build_vision_arguments(
             or "seedance" in ep
             or "hailuo" in ep
             or is_h3
+            or "grok-imagine-video" in ep
+            or getattr(spec, "duration_as_int", False)
         ):
             dur = dur.replace("s", "").strip()
         if spec.duration_choices and dur not in spec.duration_choices:
@@ -1193,6 +1267,7 @@ def build_vision_arguments(
             args[spec.duration_param] = dur
 
     aspect = (aspect_ratio or spec.default_aspect or "").strip()
+    is_grok_v = "grok-imagine-video" in ep
 
     if is_h3:
         res = resolution or spec.default_resolution or "2K"
@@ -1205,6 +1280,13 @@ def build_vision_arguments(
         if "image-to-video" not in ep:
             if aspect and aspect not in ("", "—"):
                 args["aspect_ratio"] = aspect
+    elif is_grok_v:
+        res = resolution or spec.default_resolution
+        if res and spec.resolution_choices:
+            args["resolution"] = res
+        # I2V: no aspect_ratio; T2V / R2V: send aspect
+        if "image-to-video" not in ep and aspect and aspect not in ("", "auto", "—"):
+            args["aspect_ratio"] = aspect
     elif "hailuo" in ep:
         res = resolution or spec.default_resolution
         if res:
@@ -1308,9 +1390,25 @@ def build_vision_arguments(
                 raise ValueError(
                     "Reference pack model needs at least one reference still."
                 )
-            args["image_urls"] = urls[: max(1, spec.max_refs)]
+            field = (spec.image_field or "image_urls").strip() or "image_urls"
+            # Grok Imagine 1.5 R2V uses reference_image_urls + <IMAGE_n> tags
+            if "reference-to-video" in ep and "image_url" not in field:
+                field = "reference_image_urls"
+            args[field] = urls[: max(1, spec.max_refs)]
+            style = (getattr(spec, "prompt_citation_style", None) or "").lower()
+            low = text.lower()
+            if style == "angle" and "<image_0>" not in low:
+                n = min(len(args[field]), 7)
+                tags = ", ".join(f"<IMAGE_{i}>" for i in range(n))
+                args["prompt"] = (
+                    text.rstrip(".")
+                    + f". Use {tags} as visual reference(s) for subject and style."
+                )
         elif ref_urls and "reference-to-video" in spec.endpoint:
-            args["image_urls"] = list(ref_urls)[:8]
+            if "grok-imagine-video" in ep:
+                args["reference_image_urls"] = list(ref_urls)[:7]
+            else:
+                args["image_urls"] = list(ref_urls)[:8]
 
     # Clean empty optionals
     for k in list(args.keys()):

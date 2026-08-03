@@ -44,8 +44,10 @@ from a master brief + ordered shot list (not for editing existing plates).
 
 - Master: global prompt, total duration (model max, e.g. 3–15s), aspect, style pack
   (None | Cinematic | Marvel-style | Documentary | Luxury RE), multi-shot model only
-- Models (multi-shot only): Kling V3 Pro / Standard Multi-Shot, Kling O3 Pro /
-  Standard Multi-Shot (Director). Seedance / Wan / H3 stay single-clip (not listed).
+- Models (multi-shot / reference): Kling V3 Pro / Standard Multi-Shot, Kling O3 Pro /
+  Standard Multi-Shot; **Grok Imagine 1.5 · Reference storyboard** (single clip from
+  ordered shot refs via T2V/I2V/R2V — not Kling multi_prompt). Seedance / Wan / H3
+  stay single-clip outside Director.
 - Est. cost: Studio-style bordered block directly under Generate; live on model /
   duration / audio
 - Shot list 2–6 rows (hard-capped by model): start/end time, camera preset
@@ -160,8 +162,10 @@ Secondary workspaces: Received, Blank Canvas, Camera Lock (map → I2V / V2V)
 - Recently from Resolve (clips / stills from handoff history)
 - Camera-lock style prompts for furniture / day-night / etc.
 - Models: Kling family, Seedance 2.0 I2V/V2V/reference, MiniMax H3 I2V + Omni
-  Reference (still + optional motion plate as Video 1), others on fal
+  Reference (still + optional motion plate as Video 1), **Grok Imagine Video 1.5**
+  I2V + R2V (up to 7 stills), others on fal
 - MiniMax H3: 5–15s · 2K · ~$0.26/s; native stereo on output
+- Grok Imagine 1.5: 1–15s · 480p–1080p; native audio; ~$0.08–0.25/s + $0.01/ref
 - Grok Enhance on video prompts (modality-aware citations for R2V / first–last I2V)
 - Duration / resolution guidance, cost estimate (job total)
 - Export: Show in folder, Send to Resolve, Library
@@ -256,7 +260,7 @@ Modes (left → right):
 
   Text → Video (T2V)
     e.g. Veo 3.1 / Veo 3.1 Fast / Reference pack, Luma Ray 2,
-         MiniMax H3 T2V, MiniMax H3 Omni reference
+         MiniMax H3 T2V, MiniMax H3 Omni reference, **Grok Imagine 1.5 T2V / Reference pack**
     Veo on fal: ~$0.40/s standard, ~$0.15/s Fast (totals = rate × duration)
     MiniMax H3 (Hailuo-03) on fal (minimax/h3/*):
       - T2V: prompt · duration 5–15s · aspect · 2K · native stereo
@@ -264,11 +268,17 @@ Modes (left → right):
         3 audio (≤12 files); cite Image 1 / Video 1 / Audio 1 in prompt
       - Est. ~$0.26/s @2K (+ ref image/video surcharges per fal docs)
       - Native stereo always on output (Send to Resolve / Library as video+audio)
+    Grok Imagine Video 1.5 on fal (xai/grok-imagine-video/v1.5/*):
+      - T2V / I2V / R2V (1–7 stills; tag <IMAGE_0>…); native audio; 1–15s
+      - Est. $0.08/s @480p · $0.14/s @720p · $0.25/s @1080p + $0.01/ref image
+      - Also Studio Video I2V/R2V + Director reference storyboard
 
   Image → Video (I2V)
-    Start still → motion (Veo, Kling O3 Pro, Seedance 2.0, Hailuo 02, MiniMax H3, …)
+    Start still → motion (Veo, Kling O3 Pro, Seedance 2.0, Hailuo 02, MiniMax H3,
+      Grok Imagine 1.5, …)
     MiniMax H3 I2V: first frame still; optional last-frame still (first→last
       transitions: day→night, porch→interior); 5–15s · 2K · native stereo
+    Grok Imagine 1.5 I2V: start still + motion prompt; native audio; 480p–1080p
 
   Bridge / Connect
     Start frame + end frame → in-between (Veo first→last, Hailuo start+end)

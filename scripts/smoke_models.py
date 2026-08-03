@@ -69,6 +69,9 @@ def main() -> None:
     gi2v = resolve_video_model("grok imagine 1.5 i2v")
     assert gi2v and gi2v.endpoint == "xai/grok-imagine-video/v1.5/image-to-video"
     assert gi2v.task == "image_to_video"
+    gir = resolve_video_model("grok imagine 1.5 reference")
+    assert gir and gir.endpoint == "xai/grok-imagine-video/v1.5/reference-to-video"
+    assert gir.max_ref_images == 7 and gir.ref_image_field == "reference_image_urls"
 
     assert resolve_job_kind(None, has_image=True, has_video=True) == "video"
     assert resolve_job_kind(None, has_image=True, has_video=False) == "image"
@@ -121,6 +124,12 @@ def main() -> None:
     assert est_gi2v.startswith("Est. cost:")
     # 5 * 0.14 + 0.01 = 0.71
     assert "0.71" in est_gi2v
+    est_gi2v_1080 = live_estimate_cost(
+        model_choice="grok imagine 1.5 i2v",
+        parameters_json='{"duration": "5", "resolution": "1080p"}',
+    )
+    # 5 * 0.25 + 0.01 = 1.26
+    assert "1.26" in est_gi2v_1080
     print(
         "live estimates:",
         est,
@@ -134,6 +143,8 @@ def main() -> None:
         est_gev,
         "|",
         est_gi2v,
+        "|",
+        est_gi2v_1080,
     )
 
     # Defaults unchanged

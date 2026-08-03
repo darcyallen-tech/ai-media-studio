@@ -135,6 +135,7 @@ Dashboards:
 - Frame Editor ↔ Vision: **I2I source**, Start / End / I2V; I2I results pin back as **Frame Editor · keyframe**.
 - Cost labels are **job totals** (e.g. Veo standard ~$0.40/s × duration, Fast ~$0.15/s × duration on fal).
 - **MiniMax H3 (Hailuo-03)** — T2V · I2V first/last frame · **Omni reference** (up to 9 stills + 3 clips + 3 audio; cite Image 1 / Video 1 / Audio 1). Native stereo · 2K · ~$0.26/s. Also in Studio Video model list.
+- **Grok Imagine Video 1.5** (fal) — T2V · I2V · R2V (up to 7 stills, `<IMAGE_n>` tags); native audio; also Director reference storyboard. Est. ~$0.08–0.25/s by resolution + $0.01/ref.
 
 ### Frame Editor highlights
 

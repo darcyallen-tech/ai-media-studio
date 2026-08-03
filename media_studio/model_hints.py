@@ -182,6 +182,47 @@ _BEST_FOR: dict[str, BestFor] = {
         "O3 Standard multi-shot, cheaper iteration",
         "Kling O3 Standard multi_prompt storyboard — same shot structure as Pro, lower $/s.",
     ),
+    "grok imagine 1.5": BestFor(
+        "strong reference consistency, native audio, motion quality",
+        "xAI Grok Imagine Video 1.5 — I2V / T2V / R2V (up to 7 stills). "
+        "Native audio; $0.08–0.25/s by resolution + $0.01/ref image.",
+    ),
+    "grok imagine 1.5 i2v": BestFor(
+        "strong reference consistency, native audio, motion quality",
+        "Grok Imagine 1.5 image-to-video from a start still.",
+    ),
+    "video · grok imagine 1.5 – image-to-video": BestFor(
+        "strong reference consistency, native audio, motion quality",
+        "Grok Imagine 1.5 image-to-video from a start still.",
+    ),
+    "grok imagine 1.5 t2v": BestFor(
+        "strong reference consistency, native audio, motion quality",
+        "Grok Imagine 1.5 text-to-video with native audio.",
+    ),
+    "grok imagine 1.5 · text→video": BestFor(
+        "strong reference consistency, native audio, motion quality",
+        "Grok Imagine 1.5 text-to-video with native audio.",
+    ),
+    "grok imagine 1.5 reference": BestFor(
+        "strong reference consistency, native audio, motion quality",
+        "Grok Imagine 1.5 R2V — up to 7 stills; tag <IMAGE_0>… in the prompt.",
+    ),
+    "video · grok imagine 1.5 – reference-to-video": BestFor(
+        "strong reference consistency, native audio, motion quality",
+        "Grok Imagine 1.5 R2V — up to 7 stills; tag <IMAGE_0>… in the prompt.",
+    ),
+    "grok imagine 1.5 · reference pack": BestFor(
+        "strong reference consistency, native audio, motion quality",
+        "Grok Imagine 1.5 R2V — up to 7 stills; tag <IMAGE_0>… in the prompt.",
+    ),
+    "grok imagine 1.5 director": BestFor(
+        "strong reference consistency, native audio, motion quality",
+        "Director via Grok Imagine 1.5 — ordered shot refs as R2V/I2V/T2V single clip.",
+    ),
+    "grok imagine 1.5 · reference storyboard": BestFor(
+        "strong reference consistency, native audio, motion quality",
+        "Director via Grok Imagine 1.5 — ordered shot refs as R2V/I2V/T2V single clip.",
+    ),
     # --- Creative Vision I2I labels ---
     "flux 2 pro (edit)": BestFor(
         "furniture / architecture lock, photoreal edits",

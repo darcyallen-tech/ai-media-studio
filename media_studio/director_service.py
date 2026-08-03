@@ -88,16 +88,34 @@ def run_director(
 
     notes: list[str] = []
     start_url: str | None = None
-    # Prefer first shot with a ref still as start frame (I2V multi-shot)
-    for sh in shots:
-        if sh.ref_path and Path(sh.ref_path).is_file():
-            try:
-                progress(f"Uploading shot ref: {Path(sh.ref_path).name}")
-                start_url = upload_file(Path(sh.ref_path), on_progress=progress)
-                notes.append(f"Start frame from shot ref: {Path(sh.ref_path).name}")
+    ref_urls: list[str] = []
+    is_grok = (getattr(spec, "engine", None) or "") == "grok_imagine"
+
+    if is_grok:
+        # Upload all shot ref stills in order (up to model max, typically 7)
+        cap = max(1, int(spec.max_shots or 7))
+        for sh in shots:
+            if len(ref_urls) >= cap:
                 break
-            except Exception as exc:
-                notes.append(f"Skip ref upload: {exc}")
+            if sh.ref_path and Path(sh.ref_path).is_file():
+                try:
+                    progress(f"Uploading shot ref: {Path(sh.ref_path).name}")
+                    url = upload_file(Path(sh.ref_path), on_progress=progress)
+                    ref_urls.append(url)
+                    notes.append(f"Ref {len(ref_urls)}: {Path(sh.ref_path).name}")
+                except Exception as exc:
+                    notes.append(f"Skip ref upload: {exc}")
+    else:
+        # Prefer first shot with a ref still as start frame (I2V multi-shot)
+        for sh in shots:
+            if sh.ref_path and Path(sh.ref_path).is_file():
+                try:
+                    progress(f"Uploading shot ref: {Path(sh.ref_path).name}")
+                    start_url = upload_file(Path(sh.ref_path), on_progress=progress)
+                    notes.append(f"Start frame from shot ref: {Path(sh.ref_path).name}")
+                    break
+                except Exception as exc:
+                    notes.append(f"Skip ref upload: {exc}")
 
     try:
         endpoint, arguments = build_director_arguments(
@@ -111,6 +129,7 @@ def run_director(
             start_image_url=start_url,
             negative_prompt=negative_prompt,
             polish=polish,
+            ref_image_urls=ref_urls or None,
         )
     except ValueError as exc:
         return DirectorResult(
@@ -121,7 +140,12 @@ def run_director(
             notes=notes,
         )
 
-    progress(f"{spec.label} · multi-shot × {len(shots)}")
+    kind = (
+        f"Grok Imagine · {len(ref_urls)} ref(s)"
+        if is_grok
+        else f"multi-shot × {len(shots)}"
+    )
+    progress(f"{spec.label} · {kind}")
     progress(f"Endpoint: {endpoint}")
     progress("Running Director on fal…")
 
