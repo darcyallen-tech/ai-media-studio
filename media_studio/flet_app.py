@@ -1,7 +1,8 @@
 """
 Flet desktop shell for AI Media Studio.
 
-Tabs: Studio (Image/Video) · Tools · Creative Vision · Frame Editor · Audio · Library.
+Tabs: Studio (Image/Video) · Tools · Creative Vision · Director · Frame Editor ·
+Audio · Library.
 Providers: fal (main), xAI (Enhance), Runware (Frame Editor / Aleph).
 """
 
@@ -70,6 +71,7 @@ from media_studio.scene_builder import (
 from media_studio.flet_aleph import FrameEditorView
 from media_studio.flet_audio import AudioView
 from media_studio.flet_dialogs import close_dialog, show_dialog, show_snack
+from media_studio.flet_director import DirectorView
 from media_studio.flet_library import LibraryView
 from media_studio.flet_pickers import pick_image
 from media_studio.flet_progress import CollapsibleJobLog, JobProgress, classify_progress
@@ -3509,6 +3511,7 @@ def main(page: ft.Page) -> None:
     studio_video = StudioVideoView(page, state)
     tools_view = ToolsView(page, state)
     vision_view = CreativeVisionView(page, state)
+    director_view = DirectorView(page, state)
     frame_editor_view = FrameEditorView(page, state)
     audio_view = AudioView(page, state)
     library_view = LibraryView(page, state)
@@ -3517,6 +3520,7 @@ def main(page: ft.Page) -> None:
     state.library_view = library_view
     state.tools_view = tools_view
     state.vision_view = vision_view  # type: ignore[attr-defined]
+    state.director_view = director_view  # type: ignore[attr-defined]
     state.frame_editor_view = frame_editor_view  # type: ignore[attr-defined]
     # Soft tool defaults for the restored app scenario (no tool auto-switch)
     try:
@@ -4301,7 +4305,7 @@ def main(page: ft.Page) -> None:
         tight=False,
     )
 
-    # Tab order: Studio · Tools · Creative Vision · Frame Editor · Audio · Library
+    # Tab order: Studio · Tools · Creative Vision · Director · Frame Editor · Audio · Library
     main_tabs = build_tabs(
         [
             ("Studio", ft.Icons.DASHBOARD, studio_shell),
@@ -4310,6 +4314,11 @@ def main(page: ft.Page) -> None:
                 "Creative Vision",
                 ft.Icons.AUTO_AWESOME,
                 _tab_body(vision_view.build()),
+            ),
+            (
+                "Director",
+                ft.Icons.MOVIE_CREATION,
+                _tab_body(director_view.build()),
             ),
             (
                 "Frame Editor",
@@ -4368,9 +4377,9 @@ def main(page: ft.Page) -> None:
     def switch_to_library() -> None:
         """Select Library tab and refresh list."""
         try:
-            main_tabs.selected_index = 5
+            main_tabs.selected_index = 6
             try:
-                main_tabs.move_to(5)
+                main_tabs.move_to(6)
             except Exception:
                 pass
             library_view.refresh()
@@ -4409,12 +4418,28 @@ def main(page: ft.Page) -> None:
         except Exception:
             pass
 
+    def switch_to_director() -> None:
+        """Select Director multi-shot tab."""
+        try:
+            main_tabs.selected_index = 3
+            try:
+                main_tabs.move_to(3)
+            except Exception:
+                pass
+            try:
+                director_view.apply_key_gates()
+            except Exception:
+                pass
+            page.update()
+        except Exception:
+            pass
+
     def switch_to_audio(panel_id: str | None = None) -> None:
         """Select Audio tab; optionally open a pill (music / sfx / …)."""
         try:
-            main_tabs.selected_index = 4
+            main_tabs.selected_index = 5
             try:
-                main_tabs.move_to(4)
+                main_tabs.move_to(5)
             except Exception:
                 pass
             if panel_id:
@@ -4447,9 +4472,9 @@ def main(page: ft.Page) -> None:
         source video, stills stage as handoff (load clip next).
         """
         try:
-            main_tabs.selected_index = 3
+            main_tabs.selected_index = 4
             try:
-                main_tabs.move_to(3)
+                main_tabs.move_to(4)
             except Exception:
                 pass
             fe = frame_editor_view
@@ -4492,13 +4517,19 @@ def main(page: ft.Page) -> None:
     def _on_main_tab_change(e: ft.ControlEvent) -> None:
         try:
             idx = getattr(main_tabs, "selected_index", None)
-            if idx == 5:  # Library
+            if idx == 6:  # Library
                 library_view.refresh()
                 page.update()
-            elif idx == 3:  # Frame Editor — key banner + From Resolve strip
+            elif idx == 4:  # Frame Editor — key banner + From Resolve strip
                 try:
                     frame_editor_view.apply_key_gates()
                     frame_editor_view.refresh_resolve_strip()
+                    page.update()
+                except Exception:
+                    pass
+            elif idx == 3:  # Director
+                try:
+                    director_view.apply_key_gates()
                     page.update()
                 except Exception:
                     pass
@@ -4523,6 +4554,7 @@ def main(page: ft.Page) -> None:
     state.switch_to_library = switch_to_library  # type: ignore[attr-defined]
     state.switch_to_tools = switch_to_tools
     state.switch_to_vision = switch_to_vision  # type: ignore[attr-defined]
+    state.switch_to_director = switch_to_director  # type: ignore[attr-defined]
     state.switch_to_audio = switch_to_audio  # type: ignore[attr-defined]
     state.switch_to_frame_editor = switch_to_frame_editor  # type: ignore[attr-defined]
     state.audio_view = audio_view  # type: ignore[attr-defined]

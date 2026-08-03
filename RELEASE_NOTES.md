@@ -27,6 +27,15 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - fal endpoints: `minimax/h3/text-to-video`, `image-to-video` (`end_image_url`), `reference-to-video`
 - Does not wire Flux 3 or Seedance 2.5; existing Kling / Seedance 2.0 / Aleph / Veo paths unchanged
 
+### Director tab (multi-shot)
+- New main tab **Director** (peer to Studio / Creative Vision / Frame Editor)
+- Master brief + total duration/aspect/style pack; multi-shot models only (Kling V3 Pro/Standard, O3 Pro)
+- Ordered shot list (up to model max, typically 6): start/end times, camera presets, per-shot action, optional ref still with **thumbnail** (~64px) + filename
+- Fail-safes: times within total duration, no overlap, clear Generate blocks
+- Enhance rewrites master + per-shot language; Generate → single multi-shot clip; Library + Resolve
+- **Library Send to ▾** nested: Director ▶ Shot 1…N (dynamic), Creative Vision ▶, Tools ▶ — short top-level list; sending a still to Shot K sets that ref + thumbnail, focuses Director, highlights the row
+- **Phase 2 polish**: audio style (No music / Soft bed / Full score) + SFX notes; continuity toggles; transition preference; energy curve; Enhance-only vision notes; output mode (clip or clip + shot-list sidecar for Resolve)
+
 ### Music — Arrangement builder
 - Optional **Arrangement** block: intro energy/length, lift cue, solo instrument/start/length, outro style, band layers (drums/bass/…)
 - Merges into the auto-built editable Music prompt (ElevenLabs-friendly form language); Enhance keeps structure

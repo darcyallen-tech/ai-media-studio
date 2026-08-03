@@ -3,6 +3,11 @@ Shared Send-to destination matrix (Phase C).
 
 One logical menu across Library, Tools results, Creative Vision, etc.
 Destinations appear only when the media type allows them.
+
+Nested layout (desktop Flet MenuBar / SubmenuButton flyouts):
+  Studio Image · Studio Video · Region · Director ▶ · Creative Vision ▶ ·
+  Frame Editor · Tools ▶ · Resolve
+Director / Creative Vision / Tools open a flyout to the right.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import flet as ft
 
-from media_studio.flet_theme import BORDER, FONT_SM, PANEL_ELEVATED, TEXT
+from media_studio.flet_theme import BORDER, FONT_SM, PANEL_ELEVATED, TEXT, TEXT_MUTED
 
 if TYPE_CHECKING:
     pass
@@ -46,12 +51,29 @@ _VIDEO_TOOLS: list[tuple[str, str]] = [
 ]
 
 
-def _item(label: str, handler: Callable) -> ft.PopupMenuItem:
-    return ft.PopupMenuItem(content=label, on_click=handler)
+def _item(label: str, handler: Callable) -> ft.MenuItemButton:
+    """Leaf menu entry (cascading MenuBar / SubmenuButton)."""
+    return ft.MenuItemButton(
+        content=ft.Text(label, size=FONT_SM, color=TEXT),
+        on_click=handler,
+        style=ft.ButtonStyle(color=TEXT),
+    )
 
 
-def _sep() -> ft.PopupMenuItem:
-    return ft.PopupMenuItem()
+def _submenu(label: str, children: list[ft.Control]) -> ft.SubmenuButton:
+    """Flyout that opens to the right (Director / Creative Vision / Tools)."""
+    return ft.SubmenuButton(
+        content=ft.Text(label, size=FONT_SM, color=TEXT),
+        trailing=ft.Icon(ft.Icons.ARROW_RIGHT, size=16, color=TEXT_MUTED),
+        controls=list(children),
+        style=ft.ButtonStyle(color=TEXT),
+        menu_style=ft.MenuStyle(
+            bgcolor=PANEL_ELEVATED,
+            elevation=4,
+            side=ft.BorderSide(1, BORDER),
+            padding=ft.Padding.symmetric(horizontal=4, vertical=4),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -335,9 +357,58 @@ def send_to_resolve(
     return _click
 
 
+def send_to_director(
+    state: Any,
+    path: str,
+    *,
+    shot_index: int = 0,
+    status_cb: Callable[[str], None] | None = None,
+) -> Callable:
+    """
+    Send a Library (or other) still into Director as Shot K ref still.
+
+    Creates Shot 1 if the Director has no rows yet. Focuses the Director tab
+    and highlights the target shot row.
+    """
+
+    async def _click(_e: ft.ControlEvent) -> None:
+        dv = getattr(state, "director_view", None)
+        assigned = shot_index
+        if dv is not None and hasattr(dv, "receive_shot_ref"):
+            assigned = int(dv.receive_shot_ref(shot_index, path) or shot_index)
+        elif dv is not None and hasattr(dv, "_set_shot_ref"):
+            # Fallback if receive API missing
+            shots = getattr(dv, "_shots", None) or []
+            if not shots and hasattr(dv, "_add_shot_row"):
+                dv._add_shot_row(start=0, end=5)
+            idx = max(0, min(shot_index, max(0, len(getattr(dv, "_shots", []) or []) - 1)))
+            dv._set_shot_ref(idx, path)
+            assigned = idx
+        switch = getattr(state, "switch_to_director", None)
+        if switch:
+            switch()
+        msg = f"Sent to Director · Shot {assigned + 1}: {Path(path).name}"
+        if status_cb:
+            status_cb(msg)
+
+    return _click
+
+
 # ---------------------------------------------------------------------------
-# Build menu items
+# Build menu items (nested flyouts)
 # ---------------------------------------------------------------------------
+
+
+def _director_shot_count(state: Any) -> int:
+    """Number of currently defined Director shot rows (0 if no view)."""
+    dv = getattr(state, "director_view", None)
+    if dv is None:
+        return 0
+    shots = getattr(dv, "_shots", None)
+    try:
+        return len(shots) if shots is not None else 0
+    except Exception:
+        return 0
 
 
 def vision_still_menu_items(
@@ -346,39 +417,72 @@ def vision_still_menu_items(
     *,
     job_name: str | None = None,
     status_cb: Callable[[str], None] | None = None,
+    short_labels: bool = True,
 ) -> list[ft.Control]:
-    """Creative Vision still targets with clear labels."""
+    """Creative Vision still targets (for CV flyout or flat lists)."""
+    if short_labels:
+        labels = [
+            ("Image → Image (source)", "i2i"),
+            ("Image → Image (add as ref)", "i2i_ref"),
+            ("Start frame", "start"),
+            ("End frame", "end"),
+            ("I2V source", "i2v"),
+        ]
+    else:
+        labels = [
+            ("Creative Vision · Image → Image (source)", "i2i"),
+            ("Creative Vision · Image → Image (add as ref)", "i2i_ref"),
+            ("Creative Vision · Start frame", "start"),
+            ("Creative Vision · End frame", "end"),
+            ("Creative Vision · I2V source", "i2v"),
+        ]
     return [
         _item(
-            "Creative Vision · Image → Image (source)",
+            lab,
             send_to_vision(
-                state, path, role="i2i", job_name=job_name, status_cb=status_cb
+                state, path, role=role, job_name=job_name, status_cb=status_cb
             ),
-        ),
+        )
+        for lab, role in labels
+    ]
+
+
+def director_shot_menu_items(
+    state: Any,
+    path: str,
+    *,
+    status_cb: Callable[[str], None] | None = None,
+) -> list[ft.Control]:
+    """
+    Dynamic Director targets: Shot 1 … Shot N for currently defined rows.
+    If no shots yet, offer Shot 1 (receive creates it).
+    """
+    n = _director_shot_count(state)
+    if n <= 0:
+        n = 1
+    return [
         _item(
-            "Creative Vision · Image → Image (add as ref)",
-            send_to_vision(
-                state, path, role="i2i_ref", job_name=job_name, status_cb=status_cb
-            ),
-        ),
+            f"Shot {i + 1}",
+            send_to_director(state, path, shot_index=i, status_cb=status_cb),
+        )
+        for i in range(n)
+    ]
+
+
+def tools_menu_items(
+    state: Any,
+    path: str,
+    *,
+    as_video: bool,
+    status_cb: Callable[[str], None] | None = None,
+) -> list[ft.Control]:
+    tools = _VIDEO_TOOLS if as_video else _IMAGE_TOOLS
+    return [
         _item(
-            "Creative Vision · Start frame",
-            send_to_vision(
-                state, path, role="start", job_name=job_name, status_cb=status_cb
-            ),
-        ),
-        _item(
-            "Creative Vision · End frame",
-            send_to_vision(
-                state, path, role="end", job_name=job_name, status_cb=status_cb
-            ),
-        ),
-        _item(
-            "Creative Vision · I2V source",
-            send_to_vision(
-                state, path, role="i2v", job_name=job_name, status_cb=status_cb
-            ),
-        ),
+            lab,
+            send_to_tool(state, tid, path, as_video=as_video, status_cb=status_cb),
+        )
+        for lab, tid in tools
     ]
 
 
@@ -395,16 +499,19 @@ def build_send_menu_items(
     include_audio_vsfx: bool = True,
     include_resolve: bool = True,
     include_region: bool = True,
+    include_director: bool = True,
 ) -> list[ft.Control]:
     """
-    Destination matrix for a still and/or video path.
+    Nested destination matrix for a still and/or video path.
 
-    Image still:
-      Studio Image, Studio Video (ref), Region, Image tools,
-      Frame Editor · keyframe, Creative Vision · Start/End/I2V, Resolve
-    Video:
-      Studio Video (source), Video tools, Frame Editor source, Creative Vision,
-      Audio Video→SFX, Resolve
+    Top-level (stills) stays short:
+      Studio Image · Studio Video · Region · Director ▶ · Creative Vision ▶ ·
+      Frame Editor · Tools ▶ · Resolve
+
+    Flyouts:
+      Director → Shot 1…N (dynamic from Director rows)
+      Creative Vision → I2I source / add ref / start / end / I2V
+      Tools → Upscale, Object Remove, …
     """
     items: list[ft.Control] = []
     img = image_path if image_path and Path(image_path).is_file() else None
@@ -414,79 +521,82 @@ def build_send_menu_items(
         if status_cb:
             status_cb(msg)
 
-    def _err(msg: str, is_err: bool = True) -> None:
+    def _resolve_cb(msg: str, is_err: bool = True) -> None:
         if status_cb_err:
             status_cb_err(msg, is_err)
         elif status_cb:
             status_cb(msg)
 
     if img:
-        items.append(_item("Studio Image (source)", send_to_image(state, img, status_cb=_ok)))
+        items.append(_item("Studio Image", send_to_image(state, img, status_cb=_ok)))
         items.append(
-            _item("Studio Video (reference still)", send_to_video_ref(state, img, status_cb=_ok))
+            _item("Studio Video", send_to_video_ref(state, img, status_cb=_ok))
         )
         if include_region:
-            items.append(_item("Region edit", send_to_region(state, img, status_cb=_ok)))
-        if include_tools:
-            items.append(_sep())
-            for lab, tid in _IMAGE_TOOLS:
-                items.append(
-                    _item(
-                        f"Tools · {lab}",
-                        send_to_tool(state, tid, img, as_video=False, status_cb=_ok),
-                    )
-                )
-        if include_frame_editor:
-            items.append(_sep())
+            items.append(_item("Region", send_to_region(state, img, status_cb=_ok)))
+        if include_director:
             items.append(
-                _item(
-                    "Frame Editor · keyframe",
-                    send_to_frame_editor(state, img, as_video=False, status_cb=_ok),
+                _submenu(
+                    "Director",
+                    director_shot_menu_items(state, img, status_cb=_ok),
                 )
             )
         if include_vision:
-            items.append(_sep())
-            items.extend(vision_still_menu_items(state, img, status_cb=_ok))
+            items.append(
+                _submenu(
+                    "Creative Vision",
+                    vision_still_menu_items(state, img, status_cb=_ok),
+                )
+            )
+        if include_frame_editor:
+            items.append(
+                _item(
+                    "Frame Editor",
+                    send_to_frame_editor(state, img, as_video=False, status_cb=_ok),
+                )
+            )
+        if include_tools:
+            items.append(
+                _submenu(
+                    "Tools",
+                    tools_menu_items(state, img, as_video=False, status_cb=_ok),
+                )
+            )
         if include_resolve:
-            items.append(_sep())
             items.append(
                 _item(
                     "Resolve",
-                    send_to_resolve(state, img, status_cb=status_cb_err or (lambda m, e: _ok(m))),
+                    send_to_resolve(state, img, status_cb=_resolve_cb),
                 )
             )
 
     if vid:
-        if items:
-            items.append(_sep())
+        # Video destinations keep a short top-level list (no Director shot refs).
         items.append(
             _item(
-                "Studio Video (source clip)",
+                "Studio Video",
                 send_to_video_source(state, vid, status_cb=_ok),
             )
         )
-        if include_tools:
-            items.append(_sep())
-            for lab, tid in _VIDEO_TOOLS:
-                items.append(
-                    _item(
-                        f"Tools · {lab}",
-                        send_to_tool(state, tid, vid, as_video=True, status_cb=_ok),
-                    )
-                )
-        if include_frame_editor:
-            items.append(_sep())
-            items.append(
-                _item(
-                    "Frame Editor (Aleph source)",
-                    send_to_frame_editor(state, vid, as_video=True, status_cb=_ok),
-                )
-            )
         if include_vision:
             items.append(
                 _item(
                     "Creative Vision",
                     send_to_vision(state, vid, as_video=True, status_cb=_ok),
+                )
+            )
+        if include_frame_editor:
+            items.append(
+                _item(
+                    "Frame Editor",
+                    send_to_frame_editor(state, vid, as_video=True, status_cb=_ok),
+                )
+            )
+        if include_tools:
+            items.append(
+                _submenu(
+                    "Tools",
+                    tools_menu_items(state, vid, as_video=True, status_cb=_ok),
                 )
             )
         if include_audio_vsfx:
@@ -497,11 +607,10 @@ def build_send_menu_items(
                 )
             )
         if include_resolve:
-            items.append(_sep())
             items.append(
                 _item(
                     "Resolve",
-                    send_to_resolve(state, vid, status_cb=status_cb_err or (lambda m, e: _ok(m))),
+                    send_to_resolve(state, vid, status_cb=_resolve_cb),
                 )
             )
 
@@ -511,27 +620,79 @@ def build_send_menu_items(
 def make_send_menu_button(
     items: list[ft.Control],
     *,
-    tooltip: str = "Send to Studio, Tools, Frame Editor, Audio, or Resolve",
+    tooltip: str = "Send to Studio, Director, Creative Vision, Tools, Frame Editor, or Resolve",
 ) -> ft.Control | None:
+    """
+    Build the Send to control.
+
+    Prefer cascading MenuBar + SubmenuButton (hover/click flyouts to the right).
+    Fall back to PopupMenuButton when callers pass only PopupMenuItem leaves
+    (Frame Editor / Vision custom lists that have not migrated yet).
+    """
     if not items:
         return None
-    return ft.Container(
-        content=ft.PopupMenuButton(
-            content=ft.Row(
-                [
-                    ft.Icon(ft.Icons.SEND_OUTLINED, size=16, color=TEXT),
-                    ft.Text("Send to ▾", size=FONT_SM, color=TEXT),
-                ],
-                spacing=6,
-                tight=True,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+
+    # Legacy path: pure PopupMenuItem list (no nested SubmenuButton).
+    if all(isinstance(c, ft.PopupMenuItem) for c in items):
+        return ft.Container(
+            content=ft.PopupMenuButton(
+                content=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.SEND_OUTLINED, size=16, color=TEXT),
+                        ft.Text("Send to ▾", size=FONT_SM, color=TEXT),
+                    ],
+                    spacing=6,
+                    tight=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                items=list(items),  # type: ignore[arg-type]
+                tooltip=tooltip,
+                menu_position=ft.PopupMenuPosition.UNDER,
             ),
-            items=items,
-            tooltip=tooltip,
-            menu_position=ft.PopupMenuPosition.UNDER,
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+            padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+        )
+
+    # Cascading menu: root SubmenuButton opens top-level destinations;
+    # Director / Creative Vision / Tools are nested SubmenuButtons.
+    root = ft.SubmenuButton(
+        content=ft.Row(
+            [
+                ft.Icon(ft.Icons.SEND_OUTLINED, size=16, color=TEXT),
+                ft.Text("Send to ▾", size=FONT_SM, color=TEXT),
+            ],
+            spacing=6,
+            tight=True,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
+        controls=list(items),
+        tooltip=tooltip,
+        style=ft.ButtonStyle(color=TEXT, padding=ft.Padding.symmetric(horizontal=4, vertical=2)),
+        menu_style=ft.MenuStyle(
+            bgcolor=PANEL_ELEVATED,
+            elevation=4,
+            side=ft.BorderSide(1, BORDER),
+            padding=ft.Padding.symmetric(horizontal=4, vertical=4),
+            alignment=ft.Alignment.BOTTOM_LEFT,
+        ),
+    )
+    bar = ft.MenuBar(
+        expand=False,
+        style=ft.MenuStyle(
+            bgcolor=PANEL_ELEVATED,
+            elevation=0,
+            padding=ft.Padding.symmetric(horizontal=2, vertical=0),
+            side=ft.BorderSide(0, BORDER),
+        ),
+        controls=[root],
+    )
+    return ft.Container(
+        content=bar,
         bgcolor=PANEL_ELEVATED,
         border=ft.Border.all(1, BORDER),
         border_radius=6,
-        padding=ft.Padding.symmetric(horizontal=10, vertical=6),
+        padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+        tooltip=tooltip,
     )

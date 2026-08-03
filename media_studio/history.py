@@ -96,6 +96,9 @@ class HistoryEntry:
             "aleph_keyframe",
             "aleph-keyframe",
             "aleph",
+            "director",
+            "multi_shot",
+            "multi-shot",
         ):
             return "Video"
         if first_video_path(self):

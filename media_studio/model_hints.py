@@ -149,6 +149,31 @@ _BEST_FOR: dict[str, BestFor] = {
         "multimodal ref + native stereo audio / motion transfer",
         "H3 omni: multi stills + motion plate + optional audio; cite Image/Video/Audio N.",
     ),
+    # --- Director multi-shot ---
+    "kling v3 pro multi-shot": BestFor(
+        "multi-shot storyboard, cinematic V3 Pro",
+        "Kling V3 Pro multi_prompt director — up to 6 shots, total ≤15s.",
+    ),
+    "kling v3 pro · multi-shot": BestFor(
+        "multi-shot storyboard, cinematic V3 Pro",
+        "Kling V3 Pro multi_prompt director — up to 6 shots, total ≤15s.",
+    ),
+    "kling v3 standard multi-shot": BestFor(
+        "multi-shot storyboard, faster V3 Standard",
+        "Kling V3 Standard multi-shot — cheaper iteration, total ≤15s.",
+    ),
+    "kling v3 standard · multi-shot": BestFor(
+        "multi-shot storyboard, faster V3 Standard",
+        "Kling V3 Standard multi-shot — cheaper iteration, total ≤15s.",
+    ),
+    "kling o3 pro multi-shot": BestFor(
+        "O3 director multi-shot + optional audio",
+        "Kling O3 Pro multi-shot / director path for structured storyboards.",
+    ),
+    "kling o3 pro · multi-shot (director)": BestFor(
+        "O3 director multi-shot + optional audio",
+        "Kling O3 Pro multi-shot / director path for structured storyboards.",
+    ),
     # --- Creative Vision I2I labels ---
     "flux 2 pro (edit)": BestFor(
         "furniture / architecture lock, photoreal edits",

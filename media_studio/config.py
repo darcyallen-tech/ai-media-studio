@@ -58,7 +58,7 @@ MODEL_CATALOG: dict[str, dict] = catalog_for_enhance()
 APP_TITLE = "AI Media Studio"
 APP_DESCRIPTION = (
     "Local desktop workspace for personal AI image and video editing (Flet). "
-    "Studio · Tools · Creative Vision · Frame Editor · Audio · Library. "
+    "Studio · Tools · Creative Vision · Director · Frame Editor · Audio · Library. "
     "Outputs: outputs/YYYY-MM-DD/."
 )
 

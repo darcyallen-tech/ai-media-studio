@@ -37,6 +37,34 @@ TOP BAR
 - Output folder path (persisted) + Open folder
 
 ==============================================================================
+DIRECTOR (multi-shot)
+==============================================================================
+Peer tab to Studio / Creative Vision / Frame Editor — generate multi-shot clips
+from a master brief + ordered shot list (not for editing existing plates).
+
+- Master: global prompt, total duration (model max, e.g. 3–15s), aspect, style pack
+  (None | Cinematic | Marvel-style | Documentary | Luxury RE), multi-shot model only
+- Models (start): Kling V3 Pro / Standard Multi-Shot, Kling O3 Pro Multi-Shot (Director)
+- Shot list 2–6 rows (hard-capped by model): start/end time, camera preset
+  (Push in / Orbit / Crane / Static / Pan / Tilt / Handheld…), per-shot action,
+  optional ref still (upload / Previously used / From Resolve) with ~64px thumbnail
+  + filename (Clear ref; empty state “No ref still”)
+- Phase 2 polish (prompt-level): audio intent (Generate audio + No music | Soft bed |
+  Full score + optional SFX notes); continuity toggles (Same character / location /
+  time of day); transition (Hard cut | Soft dissolve | Match cut); optional energy
+  curve (restrained → peak → resolve); vision notes (Enhance-only tone/refs);
+  output Single multi-shot clip (default) or Clip pack + shot-list .txt sidecar
+- Fail-safes: times inside [0, duration], no overlaps, min 1s per shot, required
+  action prompts; Generate blocked with clear messages
+- Enhance: master + style + polish + every shot → shot-aware rewrite (vision notes
+  weave into tone; not dumped raw unless useful)
+- Generate → one multi-shot video (fal multi_prompt); optional shot-list sidecar for
+  Resolve; Library + Show in folder + Send to Resolve
+- Library Send to ▾ → Director ▶ → Shot 1…N assigns that shot’s ref still + thumbnail
+  (creates Shot 1 if empty; focuses Director + highlights the row)
+- Cost est. = duration × model $/s
+
+==============================================================================
 JOB / LISTING (app-level)
 ==============================================================================
 Optional “Job / Listing” field on the scenario bar (shared by Studio, Creative
@@ -345,7 +373,8 @@ LIBRARY
     Also summarized in Settings → Local spend
 - Hide missing media (Settings)
 - Thumbnails + metadata (model, job, scenario, cost, time, Resolve badge)
-- Send to ▾ (Image, Video, tools, Frame Editor, Resolve, etc.)
+- Send to ▾ nested: Studio Image / Video · Region · Director ▶ (Shot 1…N) ·
+  Creative Vision ▶ · Frame Editor · Tools ▶ · Resolve (not a long flat list)
 - Show in folder (uses updated path after assign-move)
 - Open large (stills / posters)
 - History cap; media retention follows Settings policy

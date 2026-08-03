@@ -2975,6 +2975,7 @@ class CreativeVisionView:
             make_send_menu_button,
             send_to_frame_editor,
         )
+        from media_studio.flet_theme import FONT_SM, TEXT
 
         def _st(msg: str) -> None:
             try:
@@ -2983,19 +2984,24 @@ class CreativeVisionView:
             except Exception:
                 pass
 
+        def _leaf(label: str, handler) -> ft.MenuItemButton:
+            return ft.MenuItemButton(
+                content=ft.Text(label, size=FONT_SM, color=TEXT),
+                on_click=handler,
+                style=ft.ButtonStyle(color=TEXT),
+            )
+
         ext = Path(path).suffix.lower()
         is_img = ext in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
         job_name = self._active_job_name()
 
         if is_img:
-            import flet as ft
-
             items: list = []
             # Primary Aleph / motion handoffs after creative I2I or T2I
             items.append(
-                ft.PopupMenuItem(
-                    content="Frame Editor · keyframe",
-                    on_click=send_to_frame_editor(
+                _leaf(
+                    "Frame Editor · keyframe",
+                    send_to_frame_editor(
                         self.state,
                         path,
                         as_video=False,
@@ -3004,32 +3010,22 @@ class CreativeVisionView:
                     ),
                 )
             )
-            items.append(ft.PopupMenuItem())
             items.append(
-                ft.PopupMenuItem(
-                    content="→ Start frame (this Vision tab)",
-                    on_click=self._apply_as_start(path),
-                )
+                _leaf("→ Start frame (this Vision tab)", self._apply_as_start(path))
             )
             items.append(
-                ft.PopupMenuItem(
-                    content="→ End frame (this Vision tab)",
-                    on_click=self._apply_as_end(path),
-                )
+                _leaf("→ End frame (this Vision tab)", self._apply_as_end(path))
             )
             items.append(
-                ft.PopupMenuItem(
-                    content="→ I2V source (this Vision tab)",
-                    on_click=self._apply_as_i2v(path),
-                )
+                _leaf("→ I2V source (this Vision tab)", self._apply_as_i2v(path))
             )
             items.append(
-                ft.PopupMenuItem(
-                    content="→ Image → Image source (this Vision tab)",
-                    on_click=self._apply_as_i2i(path),
+                _leaf(
+                    "→ Image → Image source (this Vision tab)",
+                    self._apply_as_i2i(path),
                 )
             )
-            # Shared matrix (Studio, Tools, Resolve, …) — skip vision + FE
+            # Shared matrix (Studio, Director, Tools, Resolve, …) — skip vision + FE
             more = build_send_menu_items(
                 self.state,
                 image_path=path,
@@ -3038,7 +3034,6 @@ class CreativeVisionView:
                 include_frame_editor=False,
             )
             if more:
-                items.append(ft.PopupMenuItem())
                 items.extend(more)
         else:
             items = build_send_menu_items(
@@ -3049,7 +3044,7 @@ class CreativeVisionView:
 
         btn = make_send_menu_button(
             items,
-            tooltip="Send to Frame Editor, Vision slots, Studio, Tools, or Resolve",
+            tooltip="Send to Frame Editor, Vision slots, Studio, Director, Tools, or Resolve",
         )
         if btn is None:
             self.send_host.visible = False

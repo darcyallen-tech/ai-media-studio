@@ -225,7 +225,7 @@ Long jobs use **per-tab busy** scopes so one generate does not lock the whole ap
 
 - Top: Settings, **Help (?)**, fal / Runware / xAI chips, Import from Resolve, output folder  
 - App-level **scenario** bar + optional **Job / Listing** field  
-- Main tabs: Studio · Tools · Creative Vision · Frame Editor · Audio · Library  
+- Main tabs: Studio · Tools · Creative Vision · Director · Frame Editor · Audio · Library  
 
 ### Job / Listing folders
 
