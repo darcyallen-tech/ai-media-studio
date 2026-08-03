@@ -37,6 +37,28 @@ TOP BAR
 - Output folder path (persisted) + Open folder
 
 ==============================================================================
+VFX (in-scene + element plates)
+==============================================================================
+Peer tab for visual effects — not for general plate staging (use Studio / Vision).
+
+Sub-tabs:
+  In-scene — effect integrated into a full still or clip (geometry + lighting lock)
+  Element plates — isolated effect on pure black / clean bg for Resolve Screen or Add
+
+Effect preset packs (physics-aware prompt inject; prompt stays fully editable):
+  Fire / heat haze · Smoke / dust · Energy / power surge · Rain / snow / fog ·
+  Debris / impact · Lens flare / light leak
+
+Shared controls:
+  Source still or clip · Strength / intensity · Duration · Resolution ·
+  Model picker (Grok Imagine 1.5, Kling, Seedance, H3, Veo Fast, video-edit models) ·
+  Enhance (mode-aware) · Est. cost under Generate (Studio chrome) ·
+  Library / Show in folder / Send to Resolve
+
+Element plates: obvious “Pure black / clean plate (Screen · Add in Resolve)” checkbox
+and tip copy. In-scene keeps plate geometry/lighting language in the prompt.
+
+==============================================================================
 DIRECTOR (multi-shot)
 ==============================================================================
 Peer tab to Studio / Creative Vision / Frame Editor — generate multi-shot clips

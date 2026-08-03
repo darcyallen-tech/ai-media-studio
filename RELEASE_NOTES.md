@@ -34,6 +34,14 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - Pricing: $0.08/s @480p · $0.14/s @720p · $0.25/s @1080p (I2V/T2V) + $0.01 per ref image
 - fal: `xai/grok-imagine-video/v1.5/{image,text,reference}-to-video`
 
+### VFX tab
+- New main tab **VFX** (peer to Studio / Creative Vision / Director / Frame Editor)
+- **In-scene** — integrate fire, smoke, energy, weather, debris, lens FX into a still or clip
+- **Element plates** — isolated FX on pure black for Resolve **Screen / Add** composite
+- Preset packs inject physics-aware prompt language (editable); strength + duration + model picker
+- Models: Grok Imagine 1.5, Kling I2V, Seedance, H3, Veo Fast, video-edit models
+- Est. cost under Generate (Studio chrome); Library / Resolve handoff
+
 ### Director tab (multi-shot)
 - New main tab **Director** (peer to Studio / Creative Vision / Frame Editor)
 - Master brief + total duration/aspect/style pack; multi-shot models only (Kling V3 Pro/Standard, O3 Pro/Standard)

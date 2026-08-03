@@ -99,6 +99,9 @@ class HistoryEntry:
             "director",
             "multi_shot",
             "multi-shot",
+            "vfx",
+            "vfx-element",
+            "vfx-in_scene",
         ):
             return "Video"
         if first_video_path(self):
