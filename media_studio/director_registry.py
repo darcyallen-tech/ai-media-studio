@@ -68,6 +68,12 @@ class DirectorModelSpec:
     multi_prompt_max_chars: int | None = 512
     # V3 I2V supports elements[] for real character binding (frontal + side refs)
     supports_kling_elements: bool = False
+    # Character + Scene both attach as real image refs (Grok R2V, Kling V3 elements+start)
+    supports_scene_image_ref: bool = False
+    # Unique-asset ref budget (elements + images, or bag-of-images)
+    max_unique_refs: int = 7
+    # "kling_element" = 1 per unique character + unique scenes; "image_bag" = each still file
+    ref_budget_mode: str = "kling_element"
     # "kling_multi" = multi_prompt; "grok_imagine" = single clip from refs + brief
     engine: str = "kling_multi"
 
@@ -85,9 +91,12 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         cost_per_second_audio=0.168,
         multi_prompt_max_chars=512,
         supports_kling_elements=True,
+        supports_scene_image_ref=True,  # character→elements, scene→start still
+        max_unique_refs=7,
+        ref_budget_mode="kling_element",
         notes=(
-            "Kling V3 Pro multi-shot storyboard — up to 6 shots, total ≤15s. "
-            "multi_prompt ≤512 chars/shot. Character stills → elements + I2V. "
+            "Kling V3 Pro multi-shot — ≤15s, multi_prompt ≤512/shot. "
+            "Character + Scene as real image refs (elements + start). "
             "Est. ~$0.11–0.17/s."
         ),
     ),
@@ -103,10 +112,12 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         cost_per_second_audio=0.126,
         multi_prompt_max_chars=512,
         supports_kling_elements=True,
+        supports_scene_image_ref=True,
+        max_unique_refs=7,
+        ref_budget_mode="kling_element",
         notes=(
-            "Kling V3 Standard multi-shot — faster/cheaper than Pro. "
-            "multi_prompt ≤512 chars/shot. Character stills → elements + I2V. "
-            "Up to 6 shots, total ≤15s. Est. ~$0.08–0.13/s."
+            "Kling V3 Standard multi-shot — cheaper than Pro. "
+            "Character + Scene as real image refs. multi_prompt ≤512/shot."
         ),
     ),
     "kling o3 pro multi-shot": DirectorModelSpec(
@@ -125,9 +136,12 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         i2v_accepts_aspect=False,
         multi_prompt_max_chars=512,
         supports_kling_elements=False,
+        supports_scene_image_ref=False,  # single image_url — scene in prompt only
+        max_unique_refs=7,
+        ref_budget_mode="kling_element",
         notes=(
-            "Kling O3 Pro multi-shot / director — multi-prompt ≤512 chars/shot. "
-            "Character still → image_url I2V (identity). T2V: 16:9 / 9:16 / 1:1."
+            "Kling O3 Pro multi-shot — multi_prompt ≤512/shot. "
+            "Single image_url (character pack = 1); Scene is text-only on this model."
         ),
     ),
     "kling o3 standard multi-shot": DirectorModelSpec(
@@ -145,9 +159,12 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         i2v_accepts_aspect=False,
         multi_prompt_max_chars=512,
         supports_kling_elements=False,
+        supports_scene_image_ref=False,
+        max_unique_refs=7,
+        ref_budget_mode="kling_element",
         notes=(
-            "Kling O3 Standard multi-shot — multi_prompt ≤512 chars/shot. "
-            "Character still → image_url I2V. Up to 6 shots, total ≤15s."
+            "Kling O3 Standard multi-shot — single image_url; Scene text-only. "
+            "multi_prompt ≤512/shot."
         ),
     ),
     "grok imagine 1.5 director": DirectorModelSpec(
@@ -172,11 +189,13 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         supports_audio=False,  # native audio always
         default_generate_audio=False,
         multi_prompt_max_chars=None,  # single prompt, not Kling multi_prompt
+        supports_scene_image_ref=True,  # R2V multi refs — character + scene
+        max_unique_refs=7,
+        ref_budget_mode="image_bag",
         engine="grok_imagine",
         notes=(
-            "Grok Imagine Video 1.5 — one clip from master + ordered shot refs (up to 7). "
-            "Character stills are real image refs (not text-only). "
-            "0 refs → T2V; 1 ref → I2V; 2+ refs → R2V with <IMAGE_n> tags. "
+            "Grok Imagine Video 1.5 — Character + Scene as real refs (<IMAGE_n>). "
+            "0 refs → T2V; 1 ref → I2V; 2+ refs → R2V. "
             "Est. $0.08–0.25/s by resolution + $0.01/ref."
         ),
     ),
@@ -309,6 +328,10 @@ def normalize_transition(value: str | None) -> str:
 CHARACTER_IDENTITY_LOCK = (
     "Same person as the reference character image — identical face, hair, body, and outfit."
 )
+# Injected when a scene still is bound
+SCENE_LOCATION_LOCK = (
+    "Setting matches the reference location still — same place, architecture, and environment."
+)
 
 # Compact continuity for multi_prompt (fits 512 budget)
 _CONT_COMPACT = "Lock: same person, place, time."
@@ -323,7 +346,7 @@ class DirectorShot:
     end_s: float = 5.0
     camera: str = "Push in"
     action: str = ""
-    # Scene / establishing / generic still (optional)
+    # Manual one-off still (optional; not a library Character/Scene)
     ref_path: str | None = None
     # Bound saved character still (real image ref — not text-only)
     character_path: str | None = None
@@ -331,6 +354,13 @@ class DirectorShot:
     character_id: str | None = None
     # Extra identity angles (Side / Close-up) when pack has them
     character_extra_paths: tuple[str, ...] = ()
+    # Bound saved scene / variation still (location)
+    scene_path: str | None = None
+    scene_label: str | None = None
+    scene_id: str | None = None
+    # Text location when model cannot take scene as image ref (e.g. Kling O3).
+    # Keep separate from action (character action only).
+    location_text: str = ""
 
     @property
     def duration_s(self) -> float:
@@ -340,22 +370,46 @@ class DirectorShot:
         p = (self.character_path or "").strip()
         return bool(p and Path(p).is_file())
 
+    def has_scene_bind(self) -> bool:
+        p = (self.scene_path or "").strip()
+        return bool(p and Path(p).is_file())
+
     def has_scene_ref(self) -> bool:
+        """Library scene bind or manual ref distinct from character."""
+        if self.has_scene_bind():
+            return True
         p = (self.ref_path or "").strip()
         if not p or not Path(p).is_file():
             return False
-        # Scene distinct from character still
         if self.has_character_bind():
             try:
                 return Path(p).resolve() != Path(self.character_path or "").resolve()
             except OSError:
                 return p != self.character_path
+        if self.has_scene_bind():
+            try:
+                return Path(p).resolve() != Path(self.scene_path or "").resolve()
+            except OSError:
+                return p != self.scene_path
         return True
 
     def has_any_still(self) -> bool:
-        return self.has_character_bind() or bool(
-            self.ref_path and Path(self.ref_path).is_file()
+        return (
+            self.has_character_bind()
+            or self.has_scene_bind()
+            or bool(self.ref_path and Path(self.ref_path).is_file())
         )
+
+    def location_still_path(self) -> str | None:
+        """Best location plate: library scene, else manual ref if not the character."""
+        if self.has_scene_bind():
+            return str(Path(self.scene_path).resolve())  # type: ignore[arg-type]
+        if self.has_scene_ref() and self.ref_path:
+            try:
+                return str(Path(self.ref_path).resolve())
+            except OSError:
+                return self.ref_path
+        return None
 
 
 @dataclass
@@ -631,6 +685,95 @@ def format_director_cost(
     return format_job_cost(amt, unit=unit, model=spec.label)
 
 
+def balance_shot_times(
+    n_shots: int,
+    total_duration_s: float,
+) -> list[tuple[float, float]]:
+    """
+    Evenly split total duration into contiguous non-overlapping ranges.
+
+    Prefer whole-second lengths (API multi_prompt uses integer seconds).
+    e.g. 10s / 5 shots → (0,2), (2,4), (4,6), (6,8), (8,10).
+    """
+    n = max(1, int(n_shots))
+    total = max(float(n), float(total_duration_s or 0))
+    total_i = max(n, int(round(total)))
+    base = total_i // n
+    rem = total_i % n
+    ranges: list[tuple[float, float]] = []
+    t = 0
+    for i in range(n):
+        dur = base + (1 if i < rem else 0)
+        if dur < 1:
+            dur = 1
+        ranges.append((float(t), float(t + dur)))
+        t += dur
+    # Ensure last end lands on total_i (contiguous cover)
+    if ranges:
+        s0, _ = ranges[-1]
+        ranges[-1] = (s0, float(total_i))
+    return ranges
+
+
+def format_shot_length_label(index: int, start_s: float, end_s: float) -> str:
+    """e.g. ``Shot 3 · 2.0s``."""
+    try:
+        dur = max(0.0, float(end_s) - float(start_s))
+    except (TypeError, ValueError):
+        dur = 0.0
+    return f"Shot {int(index) + 1} · {dur:.1f}s"
+
+
+def per_shot_timing_errors(
+    shots: list[DirectorShot],
+    *,
+    total_duration_s: float,
+    allow_overlap: bool = False,
+) -> list[list[str]]:
+    """
+    Per-shot timing issues for live UI (red on bad shot).
+
+    Returns a list of error strings per shot index (empty = ok for that shot).
+    Gaps between shots are allowed (user choice); overlaps and out-of-range warn.
+    """
+    total = float(total_duration_s or 0)
+    n = len(shots)
+    out: list[list[str]] = [[] for _ in range(n)]
+    if total < 1 or n == 0:
+        return out
+    starts_ends: list[tuple[int, float, float] | None] = []
+    for i, sh in enumerate(shots):
+        try:
+            a = float(sh.start_s)
+            b = float(sh.end_s)
+        except (TypeError, ValueError):
+            out[i].append("start/end must be numbers")
+            starts_ends.append(None)
+            continue
+        starts_ends.append((i, a, b))
+        if a < -0.01:
+            out[i].append("start before 0")
+        if b > total + 0.01:
+            out[i].append(f"end past total ({total:g}s)")
+        if b <= a + 0.01:
+            out[i].append("end must be after start")
+        elif (b - a) < 0.99:
+            out[i].append("need ≥1s")
+    if not allow_overlap and n >= 2:
+        ordered = sorted(
+            [x for x in starts_ends if x is not None],
+            key=lambda t: (t[1], t[2]),
+        )
+        for j in range(1, len(ordered)):
+            i_prev, a0, b0 = ordered[j - 1]
+            i_cur, a1, b1 = ordered[j]
+            if a1 < b0 - 0.01:
+                msg = f"overlaps Shot {i_prev + 1}"
+                out[i_cur].append(msg)
+                out[i_prev].append(f"overlaps Shot {i_cur + 1}")
+    return out
+
+
 def validate_shots(
     shots: list[DirectorShot],
     *,
@@ -650,42 +793,39 @@ def validate_shots(
         return errors
     if len(shots) > max_shots:
         errors.append(f"This model allows at most {max_shots} shots.")
-    for i, sh in enumerate(shots):
+    per = per_shot_timing_errors(
+        shots, total_duration_s=total, allow_overlap=allow_overlap
+    )
+    for i, msgs in enumerate(per):
         n = i + 1
-        try:
-            a = float(sh.start_s)
-            b = float(sh.end_s)
-        except (TypeError, ValueError):
-            errors.append(f"Shot {n}: start/end must be numbers.")
-            continue
-        if a < -0.01:
-            errors.append(f"Shot {n}: start time cannot be before 0.")
-        if b > total + 0.01:
-            errors.append(
-                f"Shot {n}: end ({b:g}s) is past total duration ({total:g}s)."
-            )
-        if b <= a + 0.01:
-            errors.append(f"Shot {n}: end must be after start.")
-        if not (sh.action or "").strip():
-            errors.append(f"Shot {n}: enter a per-shot action prompt.")
-        # fal multi_prompt duration is integer seconds ≥1
-        dur = b - a
-        if dur < 0.99:
-            errors.append(f"Shot {n}: duration must be at least 1s for the API.")
+        for m in msgs:
+            if m.startswith("overlaps"):
+                # Deduplicate pair messages below
+                continue
+            errors.append(f"Shot {n}: {m}.")
     if not allow_overlap and len(shots) >= 2:
         ordered = sorted(
             enumerate(shots),
             key=lambda pair: (float(pair[1].start_s), float(pair[1].end_s)),
         )
+        seen_pairs: set[tuple[int, int]] = set()
         for j in range(1, len(ordered)):
             i_prev, prev = ordered[j - 1]
             i_cur, cur = ordered[j]
             if float(cur.start_s) < float(prev.end_s) - 0.01:
+                pair = (min(i_prev, i_cur), max(i_prev, i_cur))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
                 errors.append(
                     f"Shots {i_prev + 1} and {i_cur + 1} overlap "
                     f"({prev.start_s:g}–{prev.end_s:g}s vs {cur.start_s:g}–{cur.end_s:g}s). "
                     "Ranges must not overlap."
                 )
+    for i, sh in enumerate(shots):
+        n = i + 1
+        if not (sh.action or "").strip():
+            errors.append(f"Shot {n}: enter a per-shot action prompt.")
     # Sum of shot lengths should not exceed total (API multi_prompt durations sum)
     shot_sum = sum(max(0.0, float(s.end_s) - float(s.start_s)) for s in shots)
     if shot_sum > total + 0.51:
@@ -714,6 +854,41 @@ def validate_shots(
     return errors
 
 
+def location_text_from_scene(
+    *,
+    scene_id: str | None = None,
+    scene_label: str | None = None,
+    notes: str | None = None,
+) -> str:
+    """
+    Build editable location text from a saved scene (name + short notes).
+    Used when the model cannot bind scene as an image ref.
+    """
+    name = (scene_label or "").strip()
+    note = (notes or "").strip()
+    # Prefer store lookup for fresh name/notes
+    if scene_id:
+        try:
+            from media_studio.scene_store import find_scene
+
+            s = find_scene(scene_id)
+            if s is not None:
+                name = (s.display_name() or s.name or name).strip()
+                if not note:
+                    note = (s.notes or "").strip()
+        except Exception:
+            pass
+    # Drop huge T2I prompt dumps from notes
+    if len(note) > 180:
+        note = note[:177].rstrip() + "…"
+    if name and note:
+        # Avoid duplicating name if notes already start with it
+        if note.lower().startswith(name.lower()[: min(20, len(name))]):
+            return note
+        return f"{name}. {note}"
+    return name or note
+
+
 def assemble_shot_prompt(
     shot: DirectorShot,
     *,
@@ -721,10 +896,18 @@ def assemble_shot_prompt(
     style_pack: str | None = None,
     compact: bool = False,
     include_identity: bool = True,
+    scene_as_image_ref: bool = True,
 ) -> str:
-    """One multi_prompt element text (camera + action [+ identity lock])."""
+    """
+    One multi_prompt element text (camera + action [+ identity/location]).
+
+    Action stays character action only. Location comes from:
+    - image lock language when scene is a real image ref, or
+    - ``location_text`` when the model is single-ref (describe place in text).
+    """
     cam = CAMERA_PROMPT_LANG.get(shot.camera, shot.camera or "camera move")
     action = (shot.action or "").strip()
+    loc_text = (shot.location_text or "").strip()
     if compact:
         bits = [f"{cam}."]
     else:
@@ -739,6 +922,31 @@ def assemble_shot_prompt(
             )
         else:
             bits.append(CHARACTER_IDENTITY_LOCK)
+    has_scene_image = bool(
+        scene_as_image_ref
+        and (
+            shot.has_scene_bind()
+            or (shot.location_still_path() and shot.has_scene_ref())
+        )
+    )
+    if has_scene_image:
+        loc = (shot.scene_label or "").strip()
+        if loc:
+            bits.append(
+                f"Location matches {loc} reference still — same place and environment."
+            )
+        else:
+            bits.append(SCENE_LOCATION_LOCK)
+    elif loc_text:
+        # Text-only location (single-ref models) — not merged into action
+        loc_clean = loc_text.rstrip().rstrip(".")
+        if compact:
+            if loc_clean.lower().startswith("at "):
+                bits.append(f"{loc_clean}.")
+            else:
+                bits.append(f"At {loc_clean}.")
+        else:
+            bits.append(f"Location: {loc_clean}.")
     # Style pack is mainly on master; light echo only if set and not compact
     if not compact:
         style = (STYLE_PACKS.get(style_pack or "None") or "").strip()
@@ -974,9 +1182,11 @@ def assemble_director_brief(
         t0 = float(sh.start_s)
         t1 = float(sh.end_s)
         action = (sh.action or "").strip() or "(no action)"
-        lines.append(
-            f"Shot {i + 1} ({t0:g}–{t1:g}s, {cam}): {action}"
-        )
+        loc = (sh.location_text or "").strip()
+        line = f"Shot {i + 1} ({t0:g}–{t1:g}s, {cam}): {action}"
+        if loc:
+            line += f" | Location: {loc}"
+        lines.append(line)
         # Per-gap transition line after each shot except the last
         if polish is not None and i < len(shots) - 1:
             key = polish.gap_at(i)
@@ -994,6 +1204,7 @@ def multi_prompt_from_shots(
     generate_audio: bool = False,
     max_chars: int | None = 512,
     force_compact: bool | None = None,
+    scene_as_image_ref: bool = True,
 ) -> list[dict[str, str]]:
     """
     fal multi_prompt payload: [{prompt, duration}, …].
@@ -1001,6 +1212,7 @@ def multi_prompt_from_shots(
     Duration is integer seconds (shot length), string enum for API.
     When ``max_chars`` is set (Kling 512), uses compact continuity + short master
     and clamps each prompt. Character-bound shots get identity lock language.
+    ``scene_as_image_ref=False`` (e.g. Kling O3): use location_text, not image lock.
     """
     limit = int(max_chars) if max_chars and max_chars > 0 else None
     # Auto-compact whenever a hard limit exists
@@ -1065,6 +1277,7 @@ def multi_prompt_from_shots(
             style_pack=style_pack,
             compact=compact,
             include_identity=True,
+            scene_as_image_ref=scene_as_image_ref,
         )
         if i == 0:
             if master_txt:
@@ -1095,6 +1308,7 @@ def multi_prompt_from_shots(
                     style_pack=None,
                     compact=True,
                     include_identity=True,
+                    scene_as_image_ref=scene_as_image_ref,
                 )
                 if i == 0:
                     tiny_m = compact_master_for_multi(master or "", budget=80)
@@ -1111,6 +1325,7 @@ def multi_prompt_from_shots(
                     style_pack=None,
                     compact=True,
                     include_identity=False,
+                    scene_as_image_ref=scene_as_image_ref,
                 )
                 # Keep a short identity tag if character bound
                 id_tag = " Same person as ref image." if sh.has_character_bind() else ""
@@ -1131,6 +1346,7 @@ def multi_prompt_char_counts(
     polish: DirectorPolish | None = None,
     generate_audio: bool = False,
     max_chars: int | None = 512,
+    scene_as_image_ref: bool = True,
 ) -> list[tuple[int, int | None, str]]:
     """
     Per-shot (length, max_or_None, prompt_preview) after compaction rules.
@@ -1142,6 +1358,7 @@ def multi_prompt_char_counts(
         polish=polish,
         generate_audio=generate_audio,
         max_chars=max_chars,
+        scene_as_image_ref=scene_as_image_ref,
     )
     out: list[tuple[int, int | None, str]] = []
     for m in multi:
@@ -1281,19 +1498,39 @@ def build_grok_imagine_director_arguments(
     if brief:
         # Prefer full assembled brief for a single-pass model
         prompt = brief if not prompt else f"{prompt}\n{brief}"
-    # Real character image refs require identity lock language (not "the character" alone)
+    # Real image refs: identity + location lock language (not text-only "character/scene")
     char_labels = [
         (sh.character_label or "character").strip()
         for sh in shots
         if sh.has_character_bind()
     ]
+    scene_labels = [
+        (sh.scene_label or "location").strip()
+        for sh in shots
+        if sh.has_scene_bind()
+    ]
+    lock_lines: list[str] = []
     if char_labels or any(sh.has_character_bind() for sh in shots):
         names = ", ".join(dict.fromkeys(char_labels)) or "the bound character"
-        id_line = (
+        lock_lines.append(
             f"{CHARACTER_IDENTITY_LOCK} "
             f"Match reference image(s) for {names}; preserve hair, face, body, outfit."
         )
-        prompt = f"{(prompt or '').rstrip()}\n{id_line}".strip()
+    if scene_labels or any(sh.has_scene_bind() for sh in shots):
+        places = ", ".join(dict.fromkeys(scene_labels)) or "the bound location"
+        lock_lines.append(
+            f"{SCENE_LOCATION_LOCK} "
+            f"Match location reference(s) for {places}."
+        )
+    # Cite ordered refs when multi-image
+    urls = [u for u in (ref_image_urls or []) if u]
+    if len(urls) >= 2:
+        tags = ", ".join(f"<IMAGE_{i}>" for i in range(len(urls)))
+        lock_lines.append(
+            f"Use {tags} as ordered visual refs (character identity and/or location plates)."
+        )
+    if lock_lines:
+        prompt = f"{(prompt or '').rstrip()}\n" + "\n".join(lock_lines)
     prompt = (prompt or "").strip()
     if not prompt:
         raise ValueError("Enter a master brief or shot actions for Grok Imagine Director.")
@@ -1416,6 +1653,7 @@ def build_director_arguments(
         polish=polish,
         generate_audio=use_audio,
         max_chars=max_chars,
+        scene_as_image_ref=bool(getattr(spec, "supports_scene_image_ref", False)),
     )
     if not multi:
         raise ValueError("At least one shot is required.")
@@ -1498,34 +1736,238 @@ def strip_director_internal_args(arguments: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in arguments.items() if not str(k).startswith("_")}
 
 
+@dataclass(frozen=True)
+class DirectorRefBudget:
+    """Unique-asset ref budget across the whole Director job."""
+
+    used: int
+    max_refs: int
+    shot_count: int
+    max_shots: int
+    mode: str  # kling_element | image_bag
+    angle_mode: str  # front_only | full_pack | n/a
+    n_characters: int
+    n_scenes: int
+    n_images: int  # bag-of-images unique files (Imagine)
+    detail: str
+    reason_over: str = ""
+
+    @property
+    def over(self) -> bool:
+        return self.used > self.max_refs or self.shot_count > self.max_shots
+
+    @property
+    def near(self) -> bool:
+        if self.max_refs <= 0:
+            return False
+        return (not self.over) and self.used >= int(self.max_refs * 0.8)
+
+    @property
+    def shots_over(self) -> bool:
+        return self.shot_count > self.max_shots
+
+
+def resolve_angle_mode(
+    shots: list[DirectorShot],
+    *,
+    requested: str | None = None,
+) -> str:
+    """
+    Imagine bag-of-images angle mode.
+
+    ``front_only`` | ``full_pack``. Default: Front only if any scene is bound,
+    else Full pack.
+    """
+    req = (requested or "auto").strip().lower()
+    if req in ("front_only", "front", "primary"):
+        return "front_only"
+    if req in ("full_pack", "full", "all", "pack"):
+        return "full_pack"
+    any_scene = any(sh.has_scene_bind() or sh.has_scene_ref() for sh in shots)
+    return "front_only" if any_scene else "full_pack"
+
+
+def count_director_ref_budget(
+    spec: DirectorModelSpec,
+    shots: list[DirectorShot],
+    *,
+    angle_mode: str | None = None,
+) -> DirectorRefBudget:
+    """
+    Count UNIQUE assets for the job (not per-shot duplicates).
+
+    Kling element-style: 1 per unique character (Front+Side+Close-up = 1 element)
+    + 1 per unique scene/start image when the model accepts scene image refs.
+
+    Imagine image-bag: each selected still file once. ``front_only`` uses only
+    character primary; ``full_pack`` includes identity extras.
+    """
+    mode = (getattr(spec, "ref_budget_mode", None) or "kling_element").strip()
+    max_refs = int(getattr(spec, "max_unique_refs", None) or 7)
+    max_shots = int(spec.max_shots or 6)
+    n_shots = len(shots)
+    ang = resolve_angle_mode(shots, requested=angle_mode)
+
+    # Unique characters by primary path
+    char_keys: dict[str, DirectorShot] = {}
+    for sh in shots:
+        if not sh.has_character_bind():
+            continue
+        try:
+            key = str(Path(sh.character_path or "").resolve())
+        except OSError:
+            key = (sh.character_path or "").strip()
+        if key and key not in char_keys:
+            char_keys[key] = sh
+
+    # Unique location plates
+    scene_keys: set[str] = set()
+    for sh in shots:
+        loc = sh.location_still_path()
+        if not loc:
+            continue
+        try:
+            key = str(Path(loc).resolve())
+        except OSError:
+            key = loc
+        # Don't count character path as a scene
+        if key in char_keys:
+            continue
+        if Path(key).is_file():
+            scene_keys.add(key)
+
+    n_chars = len(char_keys)
+    n_scenes = len(scene_keys)
+    supports_scene_img = bool(getattr(spec, "supports_scene_image_ref", False))
+
+    if mode == "image_bag":
+        files: set[str] = set()
+        for key, sh in char_keys.items():
+            if ang == "full_pack":
+                files.add(key)
+                for ex in sh.character_extra_paths or ():
+                    try:
+                        ep = str(Path(ex).resolve())
+                    except OSError:
+                        ep = (ex or "").strip()
+                    if ep and Path(ep).is_file():
+                        files.add(ep)
+            else:
+                files.add(key)
+        if supports_scene_img:
+            files |= scene_keys
+        used = len(files)
+        n_images = used
+        detail_bits = []
+        if n_chars:
+            detail_bits.append(
+                f"{n_chars} character{'s' if n_chars != 1 else ''}"
+                + (" (full pack)" if ang == "full_pack" else " (front only)")
+            )
+        if n_scenes and supports_scene_img:
+            detail_bits.append(
+                f"{n_scenes} scene{'s' if n_scenes != 1 else ''}"
+            )
+        detail = " + ".join(detail_bits) if detail_bits else "no refs"
+        reason = ""
+        if used > max_refs:
+            tip = "remove a scene or use Front only" if ang == "full_pack" else (
+                "remove a scene or character"
+            )
+            reason = f"{detail} = {used}/{max_refs} — {tip}."
+        return DirectorRefBudget(
+            used=used,
+            max_refs=max_refs,
+            shot_count=n_shots,
+            max_shots=max_shots,
+            mode=mode,
+            angle_mode=ang,
+            n_characters=n_chars,
+            n_scenes=n_scenes if supports_scene_img else 0,
+            n_images=n_images,
+            detail=detail,
+            reason_over=reason,
+        )
+
+    # kling_element: elements (unique chars) + unique image_urls (scenes/start)
+    n_elements = n_chars
+    # O3: no elements API — still count unique characters as 1 identity unit each
+    # Scene image urls only when model can send them
+    n_img = n_scenes if supports_scene_img else 0
+    # Manual refs that aren't character/scene already counted
+    # (location_still_path covers library scene + distinct manual)
+    used = n_elements + n_img
+    # Pure T2V with no stills → 0
+    detail_bits = []
+    if n_elements:
+        detail_bits.append(
+            f"{n_elements} character{'s' if n_elements != 1 else ''} (pack = 1 each)"
+        )
+    if n_img:
+        detail_bits.append(f"{n_img} scene{'s' if n_img != 1 else ''}")
+    elif n_scenes and not supports_scene_img:
+        detail_bits.append(
+            f"{n_scenes} scene{'s' if n_scenes != 1 else ''} (text only)"
+        )
+    detail = " + ".join(detail_bits) if detail_bits else "no refs"
+    reason = ""
+    if used > max_refs:
+        reason = (
+            f"{n_elements} character{'s' if n_elements != 1 else ''} + "
+            f"{n_img} scene{'s' if n_img != 1 else ''} = {used}/{max_refs} "
+            f"— remove a character or scene."
+        )
+    return DirectorRefBudget(
+        used=used,
+        max_refs=max_refs,
+        shot_count=n_shots,
+        max_shots=max_shots,
+        mode=mode,
+        angle_mode="n/a",
+        n_characters=n_chars,
+        n_scenes=n_scenes if supports_scene_img else 0,
+        n_images=n_img,
+        detail=detail,
+        reason_over=reason,
+    )
+
+
 def collect_director_image_plan(
     shots: list[DirectorShot],
+    *,
+    angle_mode: str | None = None,
 ) -> dict[str, Any]:
     """
     Plan which stills bind as character vs scene for API upload.
 
-    Multi-character across shots is supported: each shot can bind a different
-    character. Returns ordered per-shot stills for Grok, and unique character
-    entries for Kling elements.
+    Multi-character and multi-scene across shots supported.
+    Order for Grok: per shot, character then location (when distinct).
+    ``angle_mode``: front_only | full_pack (image_bag models).
 
     Returns:
-      character_primary: first character still path
-      characters: list[{path, label, id, extras}] unique by path, shot order
-      character_extras: extra identity angles (first character pack)
-      character_labels: labels for notes
-      scene_start: first scene/establishing still (distinct from characters)
-      all_ref_paths: ordered unique paths (per-shot character then scene)
-      per_shot_paths: list of primary still path per shot (character preferred)
+      character_primary, characters, character_extras, character_labels
+      scene_start: first location plate (library scene preferred)
+      scenes: list[{path, label, id}] unique location plates
+      scene_labels
+      all_ref_paths: ordered unique paths (char then scene per shot)
+      per_shot_paths: primary path per shot (character preferred)
+      per_shot_pairs: list of (char_path|None, scene_path|None)
+      angle_mode: resolved front_only | full_pack
     """
+    ang = resolve_angle_mode(shots, requested=angle_mode)
     char_primary: str | None = None
     char_extras: list[str] = []
     char_labels: list[str] = []
     characters: list[dict[str, Any]] = []
     char_seen: set[str] = set()
     scene_start: str | None = None
+    scenes: list[dict[str, Any]] = []
+    scene_labels: list[str] = []
+    scene_seen: set[str] = set()
     ordered: list[str] = []
     seen: set[str] = set()
     per_shot: list[str | None] = []
+    per_shot_pairs: list[tuple[str | None, str | None]] = []
 
     def _add(path: str | None) -> None:
         if not path:
@@ -1541,66 +1983,90 @@ def collect_director_image_plan(
         seen.add(p)
         ordered.append(p)
 
+    def _norm(path: str | None) -> str | None:
+        if not path:
+            return None
+        try:
+            p = str(Path(path).resolve())
+        except OSError:
+            p = path
+        return p if Path(p).is_file() else None
+
     for sh in shots:
-        shot_primary: str | None = None
-        if sh.has_character_bind():
-            cp = str(Path(sh.character_path).resolve())  # type: ignore[arg-type]
-            shot_primary = cp
+        char_p = _norm(sh.character_path) if sh.has_character_bind() else None
+        loc_p = _norm(sh.location_still_path())
+        # Don't double-count character as location
+        if char_p and loc_p and char_p == loc_p:
+            loc_p = None
+
+        if char_p:
             if char_primary is None:
-                char_primary = cp
-            _add(cp)
+                char_primary = char_p
+            _add(char_p)
             if sh.character_label:
                 char_labels.append(str(sh.character_label))
-            if cp not in char_seen:
-                char_seen.add(cp)
+            if char_p not in char_seen:
+                char_seen.add(char_p)
+                extras_list = [
+                    str(Path(ex).resolve())
+                    for ex in (sh.character_extra_paths or ())
+                    if ex and Path(ex).is_file()
+                ][:4]
+                # front_only: do not attach side/close-up stills to the bag
+                if ang == "front_only":
+                    extras_list = []
                 characters.append(
                     {
-                        "path": cp,
+                        "path": char_p,
                         "label": sh.character_label,
                         "id": sh.character_id,
-                        "extras": [
-                            str(Path(ex).resolve())
-                            for ex in (sh.character_extra_paths or ())
-                            if ex and Path(ex).is_file()
-                        ][:4],
+                        "extras": extras_list,
                     }
                 )
-            for ex in sh.character_extra_paths or ():
-                if not ex:
-                    continue
-                try:
-                    exr = str(Path(ex).resolve())
-                except OSError:
-                    exr = ex
-                if char_primary and exr == char_primary:
-                    continue
-                if exr not in char_extras:
-                    char_extras.append(exr)
-                _add(exr)
-        if sh.has_scene_ref() or (
-            sh.ref_path
-            and Path(sh.ref_path).is_file()
-            and not sh.has_character_bind()
-        ):
-            rp = str(Path(sh.ref_path).resolve())  # type: ignore[arg-type]
-            if shot_primary is None:
-                shot_primary = rp
+            if ang != "front_only":
+                for ex in sh.character_extra_paths or ():
+                    if not ex:
+                        continue
+                    try:
+                        exr = str(Path(ex).resolve())
+                    except OSError:
+                        exr = ex
+                    if char_p and exr == char_p:
+                        continue
+                    if exr not in char_extras:
+                        char_extras.append(exr)
+                    _add(exr)
+
+        if loc_p:
             if scene_start is None:
-                if char_primary is None or rp != char_primary:
-                    scene_start = rp
-            _add(rp)
-        elif sh.ref_path and Path(sh.ref_path).is_file() and not sh.has_character_bind():
-            _add(sh.ref_path)
-            if shot_primary is None:
-                shot_primary = str(Path(sh.ref_path).resolve())
-        per_shot.append(shot_primary)
+                scene_start = loc_p
+            _add(loc_p)
+            lab = (sh.scene_label or Path(loc_p).name).strip()
+            if lab:
+                scene_labels.append(lab)
+            if loc_p not in scene_seen:
+                scene_seen.add(loc_p)
+                scenes.append(
+                    {
+                        "path": loc_p,
+                        "label": sh.scene_label,
+                        "id": sh.scene_id,
+                    }
+                )
+
+        per_shot.append(char_p or loc_p)
+        per_shot_pairs.append((char_p, loc_p))
 
     return {
         "character_primary": char_primary,
         "characters": characters,
-        "character_extras": char_extras[:4],
+        "character_extras": char_extras[:4] if ang != "front_only" else [],
         "character_labels": char_labels,
         "scene_start": scene_start,
+        "scenes": scenes,
+        "scene_labels": scene_labels,
         "all_ref_paths": ordered,
         "per_shot_paths": per_shot,
+        "per_shot_pairs": per_shot_pairs,
+        "angle_mode": ang,
     }

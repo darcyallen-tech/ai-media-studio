@@ -983,11 +983,13 @@ class ScenesView:
         children: list[SavedScene] | None = None,
         nested: bool = False,
     ) -> ft.Control:
-        still_ok = s.has_still()
+        still_src = s.resolved_still_path()
+        still_ok = bool(still_src)
         badge_txt = s.aspect_badge()
-        if still_ok:
+        title = s.display_name()
+        if still_ok and still_src:
             img = ft.Image(
-                src=s.still_path,
+                src=still_src,
                 width=_THUMB,
                 height=_THUMB,
                 fit=ft.BoxFit.COVER,
@@ -1014,11 +1016,12 @@ class ScenesView:
                     height=_THUMB,
                 ),
                 on_tap=self._make_preview_path(
-                    s.still_path,
-                    f"{s.name}" + (f" · {badge_txt}" if badge_txt else ""),
+                    still_src,
+                    f"{title}" + (f" · {badge_txt}" if badge_txt else ""),
                 ),
             )
         else:
+            # Broken path / missing still — placeholder (not a green blank Image)
             thumb = ft.Container(
                 width=_THUMB,
                 height=_THUMB,
@@ -1032,9 +1035,9 @@ class ScenesView:
             )
         lock_icon = " 🔒" if s.locked else ""
         notes = s.display_notes()
-        # Primary = user Name; secondary = short notes only (never bury name under prompt)
+        # Primary = user Name (display_name), never the long T2I prompt
         name_txt = ft.Text(
-            f"{s.name}{lock_icon}",
+            f"{title}{lock_icon}",
             size=FONT_SM,
             color=TEXT,
             weight=ft.FontWeight.W_700,

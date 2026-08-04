@@ -193,17 +193,83 @@ class FriendlyError:
     suggested_fix: str = ""
 
 
-def format_friendly_error(exc: BaseException | str, *, context: str = "") -> FriendlyError:
+def _infer_media_kind(
+    raw: str,
+    context: str = "",
+    media_kind: str | None = None,
+) -> str | None:
+    """
+    ``image`` | ``video`` | None — used to pick the right “too large” guidance.
+    Prefer explicit ``media_kind``; else sniff path/mime/context.
+    """
+    if media_kind:
+        mk = media_kind.strip().lower()
+        if mk in ("image", "still", "ref", "photo", "png", "jpg", "jpeg"):
+            return "image"
+        if mk in ("video", "clip", "motion"):
+            return "video"
+    blob = f"{context} {raw}".lower()
+    image_hints = (
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".gif",
+        ".bmp",
+        "image/",
+        "image_url",
+        "start_image",
+        "reference image",
+        "still",
+        "character still",
+        "scene still",
+        "downscale the still",
+    )
+    video_hints = (
+        ".mp4",
+        ".mov",
+        ".webm",
+        ".m4v",
+        ".mkv",
+        "video/",
+        "render-in-place",
+        "render in place",
+    )
+    has_image = any(h in blob for h in image_hints)
+    has_video = any(h in blob for h in video_hints)
+    if has_image and not has_video:
+        return "image"
+    if has_video and not has_image:
+        return "video"
+    # Director / Vision I2V paths are predominantly still refs
+    ctx = (context or "").lower()
+    if any(x in ctx for x in ("director", "i2v", "image-to-video", "image edit")):
+        return "image"
+    return None
+
+
+def format_friendly_error(
+    exc: BaseException | str,
+    *,
+    context: str = "",
+    media_kind: str | None = None,
+) -> FriendlyError:
     """Structured plain-language error; ``message`` is the one-liner for status."""
     raw = str(exc).strip() if not isinstance(exc, str) else exc.strip()
-    msg = friendly_error(exc, context=context)
+    msg = friendly_error(exc, context=context, media_kind=media_kind)
     # Suggested fix is already baked into many messages; extract trailing "Details:" if any
     detail = raw if raw and raw not in msg else ""
     fix = ""
     low = msg.lower()
+    kind = _infer_media_kind(raw, context, media_kind) or _infer_media_kind(msg, context)
     if "top up" in low or "credits" in low:
         fix = "Open billing and add credits, then retry."
-    elif "too large" in low or "proxy" in low:
+    elif "too large" in low or "downscale" in low:
+        if kind == "image":
+            fix = "Downscale the reference still (longest edge ≤1920) and retry."
+        else:
+            fix = "Render a short graded proxy (3–10s, ≤~100 MB) and re-upload local."
+    elif "proxy" in low and kind != "image":
         fix = "Render a short graded proxy (3–10s, ≤~100 MB) and re-upload local."
     elif "download failed" in low or "re-select" in low:
         fix = "Always re-upload from a local path; do not reuse old fal.media URLs."
@@ -216,13 +282,22 @@ def format_friendly_error(exc: BaseException | str, *, context: str = "") -> Fri
     return FriendlyError(message=msg, detail=_clip(detail, 400) if detail else "", suggested_fix=fix)
 
 
-def friendly_error(exc: BaseException | str, *, context: str = "") -> str:
+def friendly_error(
+    exc: BaseException | str,
+    *,
+    context: str = "",
+    media_kind: str | None = None,
+) -> str:
     """
     Turn raw exceptions / fal messages into short, actionable status text.
+
+    ``media_kind``: ``image`` | ``video`` — when set (or inferred), “too large”
+    messages avoid the wrong proxy advice (e.g. Render-in-Place on stills).
     """
     raw = str(exc).strip() if not isinstance(exc, str) else exc.strip()
     low = raw.lower()
     prefix = f"{context}: " if context else ""
+    kind = _infer_media_kind(raw, context, media_kind)
 
     # Credits / quota — specific, not generic unknown
     credits = detect_credits_error(raw, context=context)
@@ -252,7 +327,7 @@ def friendly_error(exc: BaseException | str, *, context: str = "") -> str:
             + _clip(raw, 160)
         )
 
-    # File too large / payload limits
+    # File too large / payload limits — image vs video copy
     if any(
         x in low
         for x in (
@@ -265,9 +340,22 @@ def friendly_error(exc: BaseException | str, *, context: str = "") -> str:
             "exceeds the maximum",
         )
     ):
+        if kind == "image":
+            return (
+                f"{prefix}Reference image too large for the API — "
+                "downscale the still (longest edge ≤1920) and retry. "
+                "Director auto-downscales refs when possible."
+            )
+        if kind == "video":
+            return (
+                f"{prefix}File is too large for the API. "
+                "Use a shorter 3–10s Render-in-Place proxy (≤~100 MB), then retry."
+            )
+        # Unknown: mention both without implying video is required
         return (
             f"{prefix}File is too large for the API. "
-            "Use a shorter 3–10s Render-in-Place proxy (≤~100 MB) or downscale the still, then retry."
+            "If this is a still, downscale (longest edge ≤1920) and retry; "
+            "if video, use a shorter 3–10s Render-in-Place proxy (≤~100 MB)."
         )
 
     # Aspect ratio / dimension enum rejections

@@ -67,13 +67,59 @@ class SavedScene:
     parent_id: str | None = None
 
     def display_notes(self) -> str:
-        return (self.notes or "").strip()
+        n = (self.notes or "").strip()
+        # Don't surface long T2I prompt blobs as notes if name is short
+        if len(n) > 160:
+            return n[:157].rstrip() + "…"
+        return n
+
+    def display_name(self) -> str:
+        """
+        User-facing list title. Prefer short Name; if Name was polluted by a long
+        generate prompt, show a truncated title (never put the full prompt first).
+        """
+        n = (self.name or "").strip() or "Untitled scene"
+        low = n.lower()
+        looks_like_prompt = len(n) > 48 and any(
+            tok in low
+            for tok in (
+                "photoreal",
+                "establishing",
+                "location plate",
+                "empty or lightly",
+                "no hero",
+                "creative intent",
+            )
+        )
+        if looks_like_prompt:
+            return n[:40].rstrip(" .,;:-") + "…"
+        if len(n) > 56:
+            return n[:53].rstrip() + "…"
+        return n
 
     def has_still(self) -> bool:
+        p = self.resolved_still_path()
+        return bool(p)
+
+    def resolved_still_path(self) -> str | None:
+        """Return a readable still path, repairing basename under scene_stills/."""
+        raw = (self.still_path or "").strip()
+        if not raw:
+            return None
         try:
-            return bool(self.still_path) and Path(self.still_path).is_file()
+            p = Path(raw)
+            if p.is_file():
+                return str(p.resolve())
         except OSError:
-            return False
+            pass
+        # Repair: same filename in local store dir
+        try:
+            cand = STILLS_DIR / Path(raw).name
+            if cand.is_file():
+                return str(cand.resolve())
+        except OSError:
+            pass
+        return None
 
     def is_variation(self) -> bool:
         return bool((self.parent_id or "").strip())
@@ -86,8 +132,7 @@ class SavedScene:
         a = normalize_scene_aspect(self.aspect)
         if a:
             return a
-        # Detect from file if missing
-        det = detect_still_aspect(self.still_path)
+        det = detect_still_aspect(self.resolved_still_path() or self.still_path)
         return det or ""
 
 
@@ -215,12 +260,24 @@ def load_scenes() -> list[SavedScene]:
     if not isinstance(raw, list):
         return []
     out: list[SavedScene] = []
+    repaired = False
     for item in raw:
         if not isinstance(item, dict):
             continue
         entry = _from_dict(item)
-        if entry:
-            out.append(entry)
+        if not entry:
+            continue
+        # Repair broken absolute paths → local scene_stills basename
+        fixed = entry.resolved_still_path()
+        if fixed and fixed != (entry.still_path or ""):
+            entry.still_path = fixed
+            repaired = True
+        out.append(entry)
+    if repaired:
+        try:
+            save_scenes(out)
+        except Exception:
+            pass
     return out
 
 
@@ -727,6 +784,9 @@ class ScenePickerChoice:
     id: str
     label: str
     still_path: str
+    is_variation: bool = False
+    parent_id: str | None = None
+    aspect: str = ""
 
     @property
     def has_still(self) -> bool:
@@ -737,14 +797,42 @@ class ScenePickerChoice:
 
 
 def scene_picker_choices() -> list[ScenePickerChoice]:
+    """
+    Flat list for dropdowns: bases first, then each variation.
+    Labels use display_name (user Name), not long generate prompts.
+    """
     out: list[ScenePickerChoice] = []
-    for s in load_scenes():
-        if s.has_still():
+    for base in list_base_scenes():
+        bp = base.resolved_still_path()
+        if bp:
             out.append(
                 ScenePickerChoice(
-                    id=s.id,
-                    label=s.name,
-                    still_path=s.still_path,
+                    id=base.id,
+                    label=base.display_name(),
+                    still_path=bp,
+                    is_variation=False,
+                    aspect=base.aspect_badge() or "",
+                )
+            )
+        for kid in list_scene_variations(base.id):
+            kp = kid.resolved_still_path()
+            if not kp:
+                continue
+            # Child display name; nest under parent if not already prefixed
+            kname = kid.display_name()
+            bname = base.display_name()
+            if bname and not kname.lower().startswith(bname.lower()[: min(12, len(bname))]):
+                label = f"{bname} – {kname}"
+            else:
+                label = kname
+            out.append(
+                ScenePickerChoice(
+                    id=kid.id,
+                    label=label,
+                    still_path=kp,
+                    is_variation=True,
+                    parent_id=base.id,
+                    aspect=kid.aspect_badge() or base.aspect_badge() or "",
                 )
             )
     return out

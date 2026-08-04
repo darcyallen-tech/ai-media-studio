@@ -24,6 +24,12 @@ from media_studio.director_registry import (
 from media_studio.errors import friendly_error
 from media_studio.fal.client import FalClientError, download_url, extract_video_url, subscribe, upload_file
 from media_studio.history import append_history
+from media_studio.motion_sync_prep import (
+    API_STILL_PROXY_NOTE,
+    MAX_API_STILL_BYTES,
+    MAX_API_STILL_SIDE,
+    prepare_api_still,
+)
 from media_studio.naming import job_media_dir, make_output_stem, timestamp_now, unique_path
 from media_studio.pricing import (
     extract_cost_usd_from_response,
@@ -84,6 +90,7 @@ def run_director(
     polish: DirectorPolish | None = None,
     output_dir: str | Path,
     on_progress: ProgressCallback | None = None,
+    angle_mode: str | None = None,
 ) -> DirectorResult:
     """
     Generate one multi-shot video from ordered Director shots.
@@ -119,7 +126,14 @@ def run_director(
     ref_urls: list[str] = []
     elements: list[dict[str, Any]] | None = None
     is_grok = (getattr(spec, "engine", None) or "") == "grok_imagine"
-    plan = collect_director_image_plan(shots)
+    # Kling: always attach full identity pack as element extras (budget still 1/char).
+    # Imagine: respect Front only / Full pack toggle.
+    plan = collect_director_image_plan(
+        shots,
+        angle_mode=angle_mode if is_grok else "full_pack",
+    )
+    if is_grok and plan.get("angle_mode"):
+        notes.append(f"Angle mode: {plan['angle_mode']}")
 
     # Low-res character warning (non-blocking)
     for sh in shots:
@@ -129,22 +143,59 @@ def run_director(
                 "prefer 1K–2K Front for identity lock."
             )
 
+    # Cache prepared still paths (original → proxy or original)
+    _prep_cache: dict[str, str] = {}
+    _proxy_count = 0
+
+    def _prepare_still(path: str, label: str) -> str:
+        """Auto-downscale oversized character/scene stills for Kling/Grok image refs."""
+        nonlocal _proxy_count
+        key = str(Path(path).resolve()) if path else path
+        if key in _prep_cache:
+            return _prep_cache[key]
+        try:
+            prep = prepare_api_still(
+                path,
+                output_dir=output_dir,
+                max_side=MAX_API_STILL_SIDE,
+                max_bytes=MAX_API_STILL_BYTES,
+                on_progress=progress,
+                label=label,
+            )
+            out = str(prep.path)
+            _prep_cache[key] = out
+            if prep.used_proxy:
+                _proxy_count += 1
+                for n in prep.notes or []:
+                    if n not in notes:
+                        notes.append(n)
+            return out
+        except Exception as exc:
+            notes.append(f"still prep skipped ({label}): {exc}")
+            _prep_cache[key] = path
+            return path
+
     def _upload(path: str, label: str) -> str | None:
         try:
-            progress(f"Uploading {label}: {Path(path).name}")
-            return upload_file(Path(path), on_progress=progress)
+            local = _prepare_still(path, label)
+            progress(f"Uploading {label}: {Path(local).name}")
+            return upload_file(Path(local), on_progress=progress)
         except Exception as exc:
-            notes.append(f"Skip {label} upload: {exc}")
+            # Image-aware friendly copy (never “Render-in-Place” for stills)
+            msg = friendly_error(exc, context="Director", media_kind="image")
+            notes.append(f"Skip {label} upload: {msg}")
             return None
 
+    supports_scene_img = bool(getattr(spec, "supports_scene_image_ref", False))
+
     if is_grok:
-        # Per-shot order: each shot’s character/scene still as a real image ref
+        # Per-shot order: character then location plate (real multi-ref / R2V)
         cap = max(1, int(spec.max_shots or 7))
-        # Prefer per_shot_paths (shot order) then any remaining unique refs
         upload_list: list[str] = []
-        for p in plan.get("per_shot_paths") or []:
-            if p and p not in upload_list:
-                upload_list.append(p)
+        for pair in plan.get("per_shot_pairs") or []:
+            for p in pair:
+                if p and p not in upload_list:
+                    upload_list.append(p)
         for p in plan.get("all_ref_paths") or []:
             if p not in upload_list:
                 upload_list.append(p)
@@ -159,22 +210,32 @@ def run_director(
             notes.append(
                 "Characters: " + ", ".join(dict.fromkeys(plan["character_labels"]))
             )
-        if not ref_urls and any(sh.has_character_bind() for sh in shots):
+        if plan.get("scene_labels"):
+            notes.append(
+                "Scenes: " + ", ".join(dict.fromkeys(plan["scene_labels"]))
+            )
+        if not ref_urls and (
+            any(sh.has_character_bind() for sh in shots)
+            or any(sh.has_scene_bind() for sh in shots)
+        ):
             return DirectorResult(
                 ok=False,
                 model_key=spec.key,
                 endpoint=spec.endpoint,
                 status=(
-                    "Character selected but still could not be uploaded. "
-                    "Check the Characters still file and retry."
+                    "Character/Scene selected but still could not be uploaded. "
+                    "Check the still file and retry."
                 ),
                 notes=notes,
             )
     else:
-        # Kling multi-shot: real image refs — multi-character via elements (V3)
-        # or first character as image_url start (O3)
+        # Kling multi-shot
         chars = list(plan.get("characters") or [])
-        scene_path = plan.get("scene_start")
+        scene_path = plan.get("scene_start") if supports_scene_img else None
+        # O3: still collect scene for notes, but do not upload as second image
+        scene_path_prompt_only = None
+        if not supports_scene_img and plan.get("scene_start"):
+            scene_path_prompt_only = plan.get("scene_start")
         scene_url: str | None = None
         path_to_url: dict[str, str] = {}
 
@@ -199,6 +260,11 @@ def run_director(
             scene_url = _upload(scene_path, "scene ref")
             if scene_url:
                 notes.append(f"Scene still: {Path(scene_path).name}")
+        elif scene_path_prompt_only:
+            notes.append(
+                f"Scene “{Path(str(scene_path_prompt_only)).name}” in prompt only "
+                f"(this model is single image-ref)."
+            )
 
         char_url = None
         primary = plan.get("character_primary")
@@ -217,7 +283,7 @@ def run_director(
                         break
 
         if getattr(spec, "supports_kling_elements", False) and path_to_url:
-            # V3 I2V: one element per unique character (multi-character across shots)
+            # V3 I2V: character elements + scene as start (dual image bind)
             elements = []
             for ch in chars:
                 p = ch.get("path")
@@ -230,6 +296,7 @@ def run_director(
                     for ex in (ch.get("extras") or [])
                     if ex in path_to_url
                 ][:4]
+                # When multi-scene, attach first scene as element ref too
                 if scene_url and scene_url not in refs and scene_url != frontal:
                     refs.append(scene_url)
                 if refs:
@@ -237,12 +304,14 @@ def run_director(
                 elements.append(el)
             if not elements and char_url:
                 elements = [{"frontal_image_url": char_url}]
+            # Prefer scene as start frame (location plate); else character
             start_url = scene_url or char_url
             notes.append(
                 f"Kling elements: {len(elements or [])} character(s)"
+                + (" + scene start" if scene_url else "")
             )
         elif char_url:
-            # O3 (no elements): first character is I2V start; others in multi_prompt text
+            # O3 (no elements): first character is I2V start; scene text-only
             start_url = char_url
             n_chars = len(chars)
             if n_chars > 1:
@@ -250,9 +319,9 @@ def run_director(
                     f"O3 I2V: {n_chars} characters bound in prompts; "
                     "single image_url uses first character still."
                 )
-            if scene_url and scene_url != char_url:
+            if plan.get("scene_labels"):
                 notes.append(
-                    "Scene still noted in prompt only — O3 I2V has a single image_url."
+                    "Scene bound in prompt only — O3 I2V has a single image_url."
                 )
         else:
             start_url = scene_url
@@ -268,6 +337,28 @@ def run_director(
                 ),
                 notes=notes,
             )
+        if (
+            any(sh.has_scene_bind() for sh in shots)
+            and supports_scene_img
+            and not scene_url
+            and not char_url
+        ):
+            return DirectorResult(
+                ok=False,
+                model_key=spec.key,
+                endpoint=spec.endpoint,
+                status=(
+                    "Scene selected but still could not be uploaded as an image ref. "
+                    "Check the Scenes still file and retry."
+                ),
+                notes=notes,
+            )
+
+    if _proxy_count > 0:
+        note = API_STILL_PROXY_NOTE
+        if note not in notes:
+            notes.append(note)
+        progress(note)
 
     try:
         endpoint, arguments = build_director_arguments(
@@ -346,8 +437,9 @@ def run_director(
         result = subscribe(endpoint, api_args, on_progress=progress)
     except FalClientError as exc:
         render_s = time.perf_counter() - t0
+        # Director refs are stills — never suggest video Render-in-Place
         status = _enrich_director_aspect_error(
-            str(exc),
+            friendly_error(exc, context="Director", media_kind="image"),
             sent_aspect=sent_aspect,
             accepted=accepted,
             endpoint=endpoint,
@@ -364,7 +456,7 @@ def run_director(
     except Exception as exc:
         render_s = time.perf_counter() - t0
         status = _enrich_director_aspect_error(
-            friendly_error(exc, context="Director"),
+            friendly_error(exc, context="Director", media_kind="image"),
             sent_aspect=sent_aspect,
             accepted=accepted,
             endpoint=endpoint,
@@ -455,6 +547,8 @@ def run_director(
         f"{spec.label} OK · {len(shots)} shot(s). "
         f"Saved {Path(resolved).name}. {metrics}."
     )
+    if _proxy_count > 0:
+        status = f"{status} · {API_STILL_PROXY_NOTE}."
     try:
         append_history(
             job_kind="director",

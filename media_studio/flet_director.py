@@ -22,22 +22,29 @@ from media_studio.director_registry import (
     DirectorPolish,
     DirectorShot,
     assemble_director_brief,
+    balance_shot_times,
+    count_director_ref_budget,
     default_director_model,
     director_aspect_ui_choices,
     director_model_labels,
     estimate_director_cost,
     find_director_model,
     format_director_cost,
+    format_shot_length_label,
+    location_text_from_scene,
     multi_prompt_char_counts,
     multi_prompt_from_shots,
     normalize_transition,
+    per_shot_timing_errors,
     preferred_character_still_bundle,
+    resolve_angle_mode,
     still_is_low_res,
     validate_multi_prompt_limits,
     validate_shots,
 )
 from media_studio.director_service import run_director
 from media_studio.flet_character_picker import CharacterPicker
+from media_studio.flet_scene_picker import ScenePicker
 from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_image
 from media_studio.flet_progress import JobProgress, classify_progress
@@ -183,11 +190,31 @@ class DirectorView:
             ),
             visible=True,
         )
+        self.btn_apply_scene_all = ft.TextButton(
+            content="Apply scene to all shots",
+            icon=ft.Icons.LANDSCAPE,
+            on_click=self._apply_scene_to_all_shots,
+            style=ft.ButtonStyle(color=ACCENT),
+            tooltip=(
+                "Copy the first bound scene onto every shot "
+                "(when Same location is on)."
+            ),
+            visible=True,
+        )
         self.same_char_hint = ft.Text(
-            "Same character on: use Apply to fill all shots. Off: Alice on Shot 1, Charlie on Shot 2, etc.",
+            "Character = who · Scene = where · Action = what happens. "
+            "Same character / location: Apply to all shots. "
+            "Multi-ref models use both stills; single-ref models keep Scene as text.",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=3,
+        )
+        self.scene_model_hint = ft.Text(
+            "",
             size=FONT_SM,
             color=TEXT_MUTED,
             max_lines=2,
+            visible=False,
         )
         self.transition_dd = styled_dropdown(
             label_text="Default transition (all gaps)",
@@ -277,10 +304,67 @@ class DirectorView:
             on_click=self._add_shot,
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
         )
+        self.btn_auto_balance = ft.OutlinedButton(
+            content="Auto-balance shot times",
+            icon=ft.Icons.LINEAR_SCALE,
+            on_click=self._auto_balance_times,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            tooltip=(
+                "Evenly split total duration across shots "
+                "(contiguous, non-overlapping). Manual start/end stay editable."
+            ),
+        )
         self.shots_meta = ft.Text(
             "",
             size=FONT_SM,
             color=TEXT_MUTED,
+        )
+        self.timing_warn = ft.Text(
+            "",
+            size=FONT_SM,
+            color="#ef9a9a",
+            max_lines=3,
+            visible=False,
+        )
+        self.ref_budget_label = ft.Text(
+            "",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            weight=ft.FontWeight.W_600,
+            max_lines=2,
+        )
+        self.ref_budget_detail = ft.Text(
+            "",
+            size=11,
+            color=TEXT_MUTED,
+            max_lines=2,
+        )
+        # Imagine bag-of-images: Front only vs Full identity pack
+        self._angle_mode_user: str = "auto"  # auto | front_only | full_pack
+        self.angle_mode_row = ft.Row(
+            [
+                ft.Text("Identity angles:", size=FONT_SM, color=TEXT_MUTED),
+                ft.TextButton(
+                    content="Front only",
+                    on_click=lambda _e: self._set_angle_mode("front_only"),
+                    style=ft.ButtonStyle(color=ACCENT),
+                ),
+                ft.TextButton(
+                    content="Full pack",
+                    on_click=lambda _e: self._set_angle_mode("full_pack"),
+                    style=ft.ButtonStyle(color=TEXT_MUTED),
+                ),
+            ],
+            spacing=4,
+            wrap=True,
+            visible=False,
+        )
+        self.angle_mode_hint = ft.Text(
+            "",
+            size=11,
+            color=TEXT_MUTED,
+            max_lines=2,
+            visible=False,
         )
 
         self.prev_strip = PreviousSourcesStrip(
@@ -348,6 +432,7 @@ class DirectorView:
         self._add_shot_row(start=5, end=10, camera="Orbit")
         self._sync_shots_meta()
         self._sync_apply_char_visibility()
+        self._sync_scene_pickers_for_model()
         self._rebuild_assembled_text()
         self.cost_text.value = self._cost_label()
         self.apply_key_gates()
@@ -364,10 +449,11 @@ class DirectorView:
                     ),
                     ft.Text(
                         "1. Set total duration and pick a multi-shot model.\n"
-                        "2. Add 2–6 shots with start/end times (no overlaps).\n"
-                        "3. Optional: ref still + camera + action per shot.\n"
-                        "4. Write a master brief (story, location, character).\n"
-                        "5. Enhance if you want, then Generate.",
+                        "2. Add shots; use Auto-balance shot times (or edit start/end).\n"
+                        "3. Per shot: Character = who, Scene = where, Action = what happens.\n"
+                        "4. Multi-ref (V3 / Imagine): both stills. Single-ref (O3): "
+                        "Scene fills Location (text); action stays character-only.\n"
+                        "5. Master brief + Enhance optional, then Generate.",
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
@@ -414,11 +500,12 @@ class DirectorView:
                 wrap=True,
             ),
             ft.Row(
-                [self.btn_apply_char_all],
+                [self.btn_apply_char_all, self.btn_apply_scene_all],
                 spacing=8,
                 wrap=True,
             ),
             self.same_char_hint,
+            self.scene_model_hint,
             ft.Row([self.transition_dd, self.output_mode_dd], spacing=8),
             self.transition_hint,
             self.energy_curve,
@@ -427,8 +514,17 @@ class DirectorView:
             ft.Divider(height=1, color=BORDER),
             label("Shots (ordered, non-overlapping)", muted=True),
             self.shots_meta,
+            self.ref_budget_label,
+            self.ref_budget_detail,
+            self.angle_mode_row,
+            self.angle_mode_hint,
+            self.timing_warn,
             self.shots_host,
-            ft.Row([self.btn_add_shot], spacing=8),
+            ft.Row(
+                [self.btn_add_shot, self.btn_auto_balance],
+                spacing=8,
+                wrap=True,
+            ),
             label(
                 "Extra stills for active shot (Previously used / From Resolve) — "
                 "Character is on each shot card",
@@ -497,7 +593,7 @@ class DirectorView:
             audio = bool(self.gen_audio.value) if spec.supports_audio else False
             seen_paths: set[str] = set()
             for row in self._shots:
-                for key in ("character_path", "ref_path"):
+                for key in ("character_path", "scene_path", "ref_path"):
                     p = row.get(key)
                     if p and Path(str(p)).is_file():
                         try:
@@ -545,6 +641,8 @@ class DirectorView:
         self.gen_audio.visible = bool(spec.supports_audio)
         self.gen_audio.value = bool(spec.default_generate_audio)
         self._sync_audio_polish_visibility()
+        self._sync_scene_pickers_for_model()
+        self._sync_location_fields_for_model()
         self._trim_shots_to_max()
         self._sync_shots_meta()
         self.cost_text.value = self._cost_label()
@@ -562,7 +660,63 @@ class DirectorView:
             cp = row.get("character_path")
             if cp and Path(cp).is_file():
                 return True
+            sp = row.get("scene_path")
+            if sp and Path(sp).is_file():
+                return True
         return False
+
+    def _model_supports_scene_image(self) -> bool:
+        spec = self._current_spec()
+        return bool(getattr(spec, "supports_scene_image_ref", False))
+
+    def _apply_scene_picker_gate(self, picker: ScenePicker) -> None:
+        ok = self._model_supports_scene_image()
+        picker.set_enabled(
+            ok,
+            reason=(
+                ""
+                if ok
+                else "Not supported as image ref on this model — describe location in text."
+            ),
+        )
+
+    def _sync_scene_pickers_for_model(self) -> None:
+        """
+        Multi-ref models: Scene stills attach as image refs — no single-ref warning.
+        Single-ref models: keep “describe location in text” when a scene is bound
+        (or always as a soft model note so users know before picking).
+        """
+        ok = self._model_supports_scene_image()
+        any_scene = any(
+            (row.get("scene_path") and Path(str(row["scene_path"])).is_file())
+            or row.get("scene_id")
+            for row in self._shots
+        )
+        # Multi-ref: never show the text-only warning
+        # Single-ref: show note (stronger when a scene is already selected)
+        if ok:
+            self.scene_model_hint.visible = False
+            self.scene_model_hint.value = ""
+        else:
+            self.scene_model_hint.visible = True
+            self.scene_model_hint.value = (
+                "Scene selected — this model is single image-ref: use Location (text) "
+                "per shot (auto-filled from Scene; Action stays character-only). "
+                "Prefer Kling V3 or Imagine 1.5 for Character + Scene multi-ref."
+                if any_scene
+                else (
+                    "This model is single image-ref: Scene stills are not image refs — "
+                    "use Location (text) per shot. Prefer Kling V3 or Imagine 1.5 for "
+                    "Character + Scene multi-ref."
+                )
+            )
+        for row in self._shots:
+            sp = row.get("scene_picker")
+            if sp is not None:
+                try:
+                    self._apply_scene_picker_gate(sp)
+                except Exception:
+                    pass
 
     def _sync_aspect_options(self) -> None:
         """Only list ratios the selected model/path accepts; Auto when I2V."""
@@ -595,6 +749,7 @@ class DirectorView:
     async def _on_duration(self, e: ft.ControlEvent) -> None:
         self.cost_text.value = self._cost_label()
         self._sync_shots_meta()
+        self._sync_shot_timing_ui()
         try:
             self.page.update()
         except Exception:
@@ -619,6 +774,10 @@ class DirectorView:
             pass
 
     async def _on_polish_change(self, e: ft.ControlEvent | None = None) -> None:
+        try:
+            self._sync_apply_char_visibility()
+        except Exception:
+            pass
         self._rebuild_assembled_text()
         try:
             self.page.update()
@@ -681,6 +840,13 @@ class DirectorView:
             extras = row.get("character_extra_paths") or ()
             if isinstance(extras, list):
                 extras = tuple(extras)
+            loc_tf = row.get("location")
+            loc_val = ""
+            if loc_tf is not None:
+                try:
+                    loc_val = (loc_tf.value or "").strip()
+                except Exception:
+                    loc_val = ""
             out.append(
                 DirectorShot(
                     start_s=start,
@@ -692,6 +858,10 @@ class DirectorView:
                     character_label=row.get("character_label"),
                     character_id=row.get("character_id"),
                     character_extra_paths=tuple(extras) if extras else (),
+                    scene_path=row.get("scene_path"),
+                    scene_label=row.get("scene_label"),
+                    scene_id=row.get("scene_id"),
+                    location_text=loc_val,
                 )
             )
         return out
@@ -709,10 +879,86 @@ class DirectorView:
         spec = self._current_spec()
         n = len(self._shots)
         self.shots_meta.value = (
-            f"{n} shot(s) · max {spec.max_shots} · total duration {self._total_duration():.0f}s "
-            f"· times must stay inside 0–{self._total_duration():.0f}s, no overlap"
+            f"Shots {n} / {spec.max_shots} · total {self._total_duration():.0f}s "
+            f"· times inside 0–{self._total_duration():.0f}s, no overlap"
         )
         self.btn_add_shot.disabled = n >= spec.max_shots
+        self._sync_ref_budget()
+
+    def _current_angle_mode(self) -> str:
+        shots = self._collect_shots()
+        return resolve_angle_mode(shots, requested=self._angle_mode_user)
+
+    def _set_angle_mode(self, mode: str) -> None:
+        self._angle_mode_user = mode
+        self._sync_ref_budget()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _sync_ref_budget(self) -> None:
+        """Unique-asset ref budget + Generate gate (blue / amber / red)."""
+        try:
+            spec = self._current_spec()
+            shots = self._collect_shots()
+            is_bag = (getattr(spec, "ref_budget_mode", "") or "") == "image_bag"
+            self.angle_mode_row.visible = is_bag
+            self.angle_mode_hint.visible = is_bag
+            ang = self._current_angle_mode() if is_bag else "n/a"
+            if is_bag:
+                # Highlight active mode button
+                for i, btn in enumerate(self.angle_mode_row.controls):
+                    if not isinstance(btn, ft.TextButton):
+                        continue
+                    label = str(getattr(btn, "content", "") or "")
+                    active = (
+                        (ang == "front_only" and "Front" in label)
+                        or (ang == "full_pack" and "Full" in label)
+                    )
+                    try:
+                        btn.style = ft.ButtonStyle(
+                            color=ACCENT if active else TEXT_MUTED
+                        )
+                    except Exception:
+                        pass
+                auto = self._angle_mode_user == "auto"
+                self.angle_mode_hint.value = (
+                    f"Using {('Front only' if ang == 'front_only' else 'Full pack')}"
+                    + (" (auto)" if auto else "")
+                    + ". Front only if a scene is bound; Full pack otherwise."
+                )
+            budget = count_director_ref_budget(
+                spec, shots, angle_mode=ang if is_bag else None
+            )
+            self.ref_budget_label.value = (
+                f"Refs {budget.used} / {budget.max_refs}  ·  "
+                f"Shots {budget.shot_count} / {budget.max_shots}"
+            )
+            self.ref_budget_detail.value = budget.detail + (
+                f" — {budget.reason_over}" if budget.over and budget.reason_over else ""
+            )
+            if budget.over:
+                self.ref_budget_label.color = "#ef9a9a"  # red
+                self.ref_budget_detail.color = "#ef9a9a"
+            elif budget.near:
+                self.ref_budget_label.color = "#ffb74d"  # amber
+                self.ref_budget_detail.color = "#ffb74d"
+            else:
+                self.ref_budget_label.color = "#64b5f6"  # blue
+                self.ref_budget_detail.color = TEXT_MUTED
+            # Disable Generate when over budget
+            over = budget.over
+            try:
+                self.btn_generate.disabled = bool(over) or bool(
+                    self.state.is_busy("director")
+                )
+            except Exception:
+                self.btn_generate.disabled = bool(over)
+            self._last_ref_budget = budget
+        except Exception:
+            self.ref_budget_label.value = ""
+            self.ref_budget_detail.value = ""
 
     def _rebuild_assembled_text(self) -> None:
         gen_audio = bool(self.gen_audio.value) if self.gen_audio.visible else False
@@ -744,6 +990,9 @@ class DirectorView:
                 polish=self._collect_polish(),
                 generate_audio=gen_audio,
                 max_chars=int(max_c),
+                scene_as_image_ref=bool(
+                    getattr(spec, "supports_scene_image_ref", False)
+                ),
             )
             parts = [f"Shot {i + 1}: {n}/{max_c}" for i, (n, _, _) in enumerate(counts)]
             over = [i + 1 for i, (n, _, _) in enumerate(counts) if n > int(max_c)]
@@ -782,6 +1031,7 @@ class DirectorView:
         end: float = 5,
         camera: str = "Push in",
         action: str = "",
+        location_text: str = "",
     ) -> None:
         idx = len(self._shots)
         start_tf = ft.TextField(
@@ -816,9 +1066,9 @@ class DirectorView:
             expand=True,
         )
         action_tf = ft.TextField(
-            label="Per-shot action",
+            label="Per-shot action (character)",
             value=action,
-            hint_text="What happens in this shot",
+            hint_text="What the character does — not location",
             dense=True,
             filled=True,
             fill_color=PANEL_ELEVATED,
@@ -827,6 +1077,40 @@ class DirectorView:
             text_size=FONT_SM,
             expand=True,
             on_change=self._on_shot_field,
+        )
+        # Visible when model cannot bind scene as image ref (e.g. Kling O3)
+        show_loc = not self._model_supports_scene_image()
+        location_tf = ft.TextField(
+            label="Location (text)",
+            value=location_text,
+            hint_text="Where this shot is — auto-filled from Scene name + notes",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            expand=True,
+            multiline=True,
+            min_lines=1,
+            max_lines=3,
+            visible=show_loc,
+            on_change=self._on_shot_field,
+        )
+        location_hint = ft.Text(
+            "Single-ref model: describe place here (not in Action). "
+            "Picking a Scene auto-fills name + notes.",
+            size=11,
+            color=TEXT_MUTED,
+            max_lines=2,
+            visible=show_loc,
+        )
+        timing_err = ft.Text(
+            "",
+            size=11,
+            color="#ef9a9a",
+            max_lines=2,
+            visible=False,
         )
         ref_label = ft.Text(
             "No ref still",
@@ -877,7 +1161,7 @@ class DirectorView:
             on_click=self._make_remove_shot(idx),
         )
         title = ft.Text(
-            f"Shot {idx + 1}",
+            format_shot_length_label(idx, start, end),
             size=FONT_SM,
             color=TEXT,
             weight=ft.FontWeight.W_700,
@@ -888,6 +1172,9 @@ class DirectorView:
             "end": end_tf,
             "camera": cam_dd,
             "action": action_tf,
+            "location": location_tf,
+            "location_hint": location_hint,
+            "timing_err": timing_err,
             "ref_label": ref_label,
             "ref_thumb": ref_thumb,
             "ref_empty": ref_empty,
@@ -896,6 +1183,9 @@ class DirectorView:
             "character_label": None,
             "character_id": None,
             "character_extra_paths": (),
+            "scene_path": None,
+            "scene_label": None,
+            "scene_id": None,
             "title": title,
             "btn_ref": btn_ref,
             "btn_clear_ref": btn_clear_ref,
@@ -911,7 +1201,20 @@ class DirectorView:
             label_text="Character (this shot)",
             compact=True,
         )
+        scene_picker = ScenePicker(
+            self.page,
+            on_select=self._make_shot_scene_select(row),
+            on_clear=self._make_shot_scene_clear(row),
+            label_text="Scene (this shot)",
+            compact=True,
+        )
         row["char_picker"] = char_picker
+        row["scene_picker"] = scene_picker
+        # Apply model gate for scene multi-ref
+        try:
+            self._apply_scene_picker_gate(scene_picker)
+        except Exception:
+            pass
         card = ft.Container(
             content=ft.Column(
                 [
@@ -921,9 +1224,14 @@ class DirectorView:
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     ft.Row([start_tf, end_tf, cam_dd], spacing=8),
+                    timing_err,
                     action_tf,
-                    label("Character (this shot)", muted=True),
+                    location_tf,
+                    location_hint,
+                    label("Character (this shot) = who", muted=True),
                     char_picker.root,
+                    label("Scene (this shot) = where", muted=True),
+                    scene_picker.root,
                     ft.Row(
                         [
                             ft.Container(
@@ -1030,7 +1338,6 @@ class DirectorView:
     def _reindex_shots(self) -> None:
         for i, row in enumerate(self._shots):
             try:
-                row["title"].value = f"Shot {i + 1}"
                 row["btn_ref"].on_click = self._make_pick_ref(i)
                 row["btn_clear_ref"].on_click = self._make_clear_ref(i)
                 row["btn_remove"].on_click = self._make_remove_shot(i)
@@ -1040,6 +1347,99 @@ class DirectorView:
                 self._ensure_gap_control(row, i)
         self._refresh_shots_host()
         self._sync_shots_meta()
+        self._sync_shot_timing_ui()
+
+    def _apply_balanced_times(self, *, announce: bool = True) -> None:
+        """Evenly split total duration across current shots (contiguous)."""
+        n = len(self._shots)
+        if n < 1:
+            return
+        total = self._total_duration()
+        ranges = balance_shot_times(n, total)
+        for row, (a, b) in zip(self._shots, ranges):
+            try:
+                row["start"].value = str(int(a) if a == int(a) else a)
+                row["end"].value = str(int(b) if b == int(b) else b)
+            except Exception:
+                pass
+        self._sync_shot_timing_ui()
+        if announce:
+            self.status.value = (
+                f"Auto-balanced {n} shot(s) across {total:.0f}s "
+                f"({ranges[0][0]:g}–{ranges[0][1]:g}s … "
+                f"{ranges[-1][0]:g}–{ranges[-1][1]:g}s)."
+            )
+
+    async def _auto_balance_times(self, e: ft.ControlEvent | None = None) -> None:
+        self._apply_balanced_times(announce=True)
+        self._rebuild_assembled_text()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _sync_shot_timing_ui(self) -> None:
+        """Refresh Shot N · Xs labels, red borders on invalid ranges, summary warn."""
+        shots = self._collect_shots()
+        total = self._total_duration()
+        per = per_shot_timing_errors(shots, total_duration_s=total)
+        summary: list[str] = []
+        for i, row in enumerate(self._shots):
+            try:
+                a = float(row["start"].value or 0)
+            except (TypeError, ValueError):
+                a = 0.0
+            try:
+                b = float(row["end"].value or 0)
+            except (TypeError, ValueError):
+                b = 0.0
+            try:
+                row["title"].value = format_shot_length_label(i, a, b)
+            except Exception:
+                pass
+            errs = per[i] if i < len(per) else []
+            bad = bool(errs)
+            color = "#ef9a9a" if bad else BORDER
+            try:
+                row["card"].border = ft.Border.all(1, color if bad else BORDER)
+            except Exception:
+                pass
+            try:
+                row["start"].border_color = color
+                row["end"].border_color = color
+            except Exception:
+                pass
+            try:
+                te = row.get("timing_err")
+                if te is not None:
+                    if errs:
+                        te.value = " · ".join(errs)
+                        te.visible = True
+                    else:
+                        te.value = ""
+                        te.visible = False
+            except Exception:
+                pass
+            if errs:
+                summary.append(f"Shot {i + 1}: {', '.join(errs)}")
+        if summary:
+            self.timing_warn.value = "Timing: " + " · ".join(summary[:4])
+            self.timing_warn.visible = True
+        else:
+            self.timing_warn.value = ""
+            self.timing_warn.visible = False
+
+    def _sync_location_fields_for_model(self) -> None:
+        """Show Location (text) only when scene is not an image ref on this model."""
+        show = not self._model_supports_scene_image()
+        for row in self._shots:
+            for key in ("location", "location_hint"):
+                ctl = row.get(key)
+                if ctl is not None:
+                    try:
+                        ctl.visible = show
+                    except Exception:
+                        pass
 
     async def _add_shot(self, e: ft.ControlEvent) -> None:
         spec = self._current_spec()
@@ -1047,20 +1447,18 @@ class DirectorView:
             self.status.value = f"Max {spec.max_shots} shots for {spec.label}."
             self.page.update()
             return
-        # Default: continue after last end, 1/3 of remaining or 3s
+        # Append a temporary range, then re-balance all shots evenly
         total = self._total_duration()
-        if self._shots:
-            try:
-                last_end = float(self._shots[-1]["end"].value or 0)
-            except (TypeError, ValueError):
-                last_end = 0.0
-        else:
-            last_end = 0.0
-        start = min(last_end, total - 1)
-        end = min(total, start + max(3.0, (total - start) / 2))
-        if end <= start:
-            end = min(total, start + 1)
-        self._add_shot_row(start=start, end=end)
+        n = len(self._shots) + 1
+        ranges = balance_shot_times(n, total)
+        # Create new row with last range; balance will overwrite all
+        a, b = ranges[-1]
+        self._add_shot_row(start=a, end=b)
+        self._apply_balanced_times(announce=True)
+        self.status.value = (
+            f"Added shot {n}; times auto-balanced across {total:.0f}s. "
+            "Edit start/end anytime, or Auto-balance again."
+        )
         self._rebuild_assembled_text()
         self.page.update()
 
@@ -1110,36 +1508,45 @@ class DirectorView:
         return _click
 
     def _refresh_shot_still_ui(self, row: dict[str, Any]) -> None:
-        """Update main thumb / labels from scene ref + character bind."""
-        scene = row.get("ref_path")
+        """Update main thumb / labels from character + scene + manual ref."""
+        manual = row.get("ref_path")
         char = row.get("character_path")
         char_label = row.get("character_label")
+        scene_p = row.get("scene_path")
+        scene_label = row.get("scene_label")
         show_path = None
+        parts: list[str] = []
         if char and Path(str(char)).is_file():
-            # Character bind is the primary identity still on the row
             show_path = str(char)
-            label = char_label or Path(str(char)).name
-            if scene and Path(str(scene)).is_file():
-                try:
-                    same = Path(str(scene)).resolve() == Path(str(char)).resolve()
-                except OSError:
-                    same = scene == char
-                if same:
-                    row["ref_label"].value = f"Character: {label}"
-                else:
-                    row["ref_label"].value = (
-                        f"Character: {label} · scene {Path(str(scene)).name}"
-                    )
-                    # Prefer showing character thumb for identity clarity
-            else:
-                row["ref_label"].value = f"Character: {label}"
-            row["ref_label"].color = TEXT
-        elif scene and Path(str(scene)).is_file():
-            show_path = str(scene)
-            row["ref_label"].value = Path(str(scene)).name
+            parts.append(f"Who: {char_label or Path(str(char)).name}")
+        if scene_p and Path(str(scene_p)).is_file():
+            if show_path is None:
+                show_path = str(scene_p)
+            parts.append(f"Where: {scene_label or Path(str(scene_p)).name}")
+        if manual and Path(str(manual)).is_file():
+            try:
+                same_char = (
+                    char
+                    and Path(str(manual)).resolve() == Path(str(char)).resolve()
+                )
+            except OSError:
+                same_char = manual == char
+            try:
+                same_scene = (
+                    scene_p
+                    and Path(str(manual)).resolve() == Path(str(scene_p)).resolve()
+                )
+            except OSError:
+                same_scene = manual == scene_p
+            if not same_char and not same_scene:
+                if show_path is None:
+                    show_path = str(manual)
+                parts.append(f"Manual: {Path(str(manual)).name}")
+        if parts:
+            row["ref_label"].value = " · ".join(parts)
             row["ref_label"].color = TEXT
         else:
-            row["ref_label"].value = "No ref still"
+            row["ref_label"].value = "No character / scene still"
             row["ref_label"].color = TEXT_MUTED
         thumb = row.get("ref_thumb")
         empty = row.get("ref_empty")
@@ -1228,6 +1635,161 @@ class DirectorView:
 
         return _on
 
+    def _make_shot_scene_select(self, row: dict[str, Any]):
+        def _on(path: str, choice) -> None:
+            try:
+                idx = self._shots.index(row)
+            except ValueError:
+                return
+            label = getattr(choice, "label", None)
+            scene_id = getattr(choice, "id", None)
+            if not self._model_supports_scene_image():
+                # Auto-fill Location (text) from scene name + notes; action stays separate
+                loc = location_text_from_scene(
+                    scene_id=scene_id,
+                    scene_label=label,
+                )
+                loc_tf = row.get("location")
+                if loc_tf is not None and loc:
+                    try:
+                        loc_tf.value = loc
+                    except Exception:
+                        pass
+                self.status.value = (
+                    f"Shot {idx + 1} · Location (text) filled from “{label or path}” "
+                    "— this model cannot bind a second image ref. Edit freely."
+                )
+            self._ref_target_index = idx
+            self._set_shot_scene(
+                idx,
+                path,
+                label=label,
+                scene_id=scene_id,
+                aspect=getattr(choice, "aspect", None),
+                sync_picker=False,
+            )
+            self._highlight_shot(idx)
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _on
+
+    def _make_shot_scene_clear(self, row: dict[str, Any]):
+        def _on() -> None:
+            try:
+                idx = self._shots.index(row)
+            except ValueError:
+                return
+            self._set_shot_scene(idx, None, sync_picker=False)
+            self.status.value = f"Shot {idx + 1} · scene cleared"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _on
+
+    def _sync_row_scene_picker(self, row: dict[str, Any]) -> None:
+        picker = row.get("scene_picker")
+        if picker is None:
+            return
+        try:
+            picker.set_selection_silent(row.get("scene_id"))
+        except Exception:
+            pass
+
+    def _set_shot_scene(
+        self,
+        index: int,
+        path: str | None,
+        *,
+        label: str | None = None,
+        scene_id: str | None = None,
+        aspect: str | None = None,
+        sync_picker: bool = True,
+    ) -> None:
+        """Bind (or clear) a saved scene still on a shot."""
+        if not (0 <= index < len(self._shots)):
+            return
+        row = self._shots[index]
+        if path and Path(path).is_file():
+            resolved = str(Path(path).resolve())
+            row["scene_path"] = resolved
+            row["scene_label"] = label or Path(resolved).name
+            row["scene_id"] = scene_id
+            try:
+                self.prev_strip.record_and_refresh(resolved)
+            except Exception:
+                pass
+            # Single-ref: auto-fill Location (text) from scene name + notes
+            if not self._model_supports_scene_image():
+                loc_tf = row.get("location")
+                if loc_tf is not None:
+                    filled = location_text_from_scene(
+                        scene_id=scene_id,
+                        scene_label=row["scene_label"],
+                    )
+                    if filled:
+                        try:
+                            loc_tf.value = filled
+                        except Exception:
+                            pass
+            # Soft aspect mismatch warning (multi-ref path)
+            if self._model_supports_scene_image():
+                try:
+                    from media_studio.scene_store import (
+                        detect_still_aspect,
+                        normalize_scene_aspect,
+                    )
+
+                    scene_ar = normalize_scene_aspect(aspect) or detect_still_aspect(
+                        resolved
+                    )
+                    dir_ar = normalize_scene_aspect(_dd(self.aspect_dd) or "")
+                    if scene_ar and dir_ar and scene_ar != dir_ar and not str(
+                        _dd(self.aspect_dd) or ""
+                    ).lower().startswith("auto"):
+                        self.status.value = (
+                            f"Shot {index + 1} · scene: {row['scene_label']} "
+                            f"({scene_ar}) — Director aspect is {dir_ar} "
+                            f"(soft warning; plate still bound)."
+                        )
+                    else:
+                        self.status.value = (
+                            f"Shot {index + 1} · scene: {row['scene_label']}"
+                        )
+                except Exception:
+                    self.status.value = (
+                        f"Shot {index + 1} · scene: {row['scene_label']}"
+                    )
+        else:
+            row["scene_path"] = None
+            row["scene_label"] = None
+            row["scene_id"] = None
+        self._refresh_shot_still_ui(row)
+        if sync_picker:
+            self._sync_row_scene_picker(row)
+        try:
+            self._sync_aspect_options()
+        except Exception:
+            pass
+        try:
+            self.cost_text.value = self._cost_label()
+        except Exception:
+            pass
+        try:
+            self._sync_prompt_counts()
+        except Exception:
+            pass
+        try:
+            # Scene bind changes unique ref budget (and Imagine auto Front only)
+            self._sync_ref_budget()
+            self._sync_scene_pickers_for_model()
+        except Exception:
+            pass
+
     def _set_shot_ref(self, index: int, path: str | None) -> None:
         if not (0 <= index < len(self._shots)):
             return
@@ -1253,6 +1815,10 @@ class DirectorView:
             pass
         try:
             self._sync_prompt_counts()
+        except Exception:
+            pass
+        try:
+            self._sync_ref_budget()
         except Exception:
             pass
 
@@ -1310,6 +1876,10 @@ class DirectorView:
             pass
         try:
             self._sync_prompt_counts()
+        except Exception:
+            pass
+        try:
+            self._sync_ref_budget()
         except Exception:
             pass
 
@@ -1481,13 +2051,20 @@ class DirectorView:
         await self._on_polish_change(e)
 
     def _sync_apply_char_visibility(self) -> None:
-        on = bool(self.cont_character.value)
-        self.btn_apply_char_all.visible = on
-        self.same_char_hint.value = (
-            "Same character on: pick on one shot, then Apply to all shots."
-            if on
-            else "Same character off: each shot can use a different character (Alice, Charlie, …)."
-        )
+        on_c = bool(self.cont_character.value)
+        on_s = bool(self.cont_location.value)
+        self.btn_apply_char_all.visible = on_c
+        self.btn_apply_scene_all.visible = on_s
+        bits = []
+        if on_c:
+            bits.append("Same character: Apply character to all shots.")
+        else:
+            bits.append("Different characters per shot OK.")
+        if on_s:
+            bits.append("Same location: Apply scene to all shots.")
+        else:
+            bits.append("Different scenes per shot OK.")
+        self.same_char_hint.value = " ".join(bits)
 
     async def _apply_character_to_all_shots(self, e: ft.ControlEvent) -> None:
         """Copy first bound character onto every shot (Same character workflow)."""
@@ -1535,22 +2112,96 @@ class DirectorView:
         except Exception:
             pass
 
+    async def _apply_scene_to_all_shots(self, e: ft.ControlEvent) -> None:
+        """Copy first bound scene onto every shot (Same location workflow)."""
+        if not self._shots:
+            self.status.value = "Add a shot first."
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+        src: dict[str, Any] | None = None
+        for row in self._shots:
+            sp = row.get("scene_path")
+            if sp and Path(str(sp)).is_file():
+                src = row
+                break
+        if src is None:
+            self.status.value = (
+                "Set a scene on one shot first, then Apply scene to all shots."
+            )
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+        # Copy location text from source when single-ref (if present)
+        src_loc = ""
+        try:
+            loc_tf = src.get("location")
+            if loc_tf is not None:
+                src_loc = (loc_tf.value or "").strip()
+        except Exception:
+            src_loc = ""
+        if not src_loc and not self._model_supports_scene_image():
+            src_loc = location_text_from_scene(
+                scene_id=src.get("scene_id"),
+                scene_label=src.get("scene_label"),
+            )
+        for i in range(len(self._shots)):
+            self._set_shot_scene(
+                i,
+                src.get("scene_path"),
+                label=src.get("scene_label"),
+                scene_id=src.get("scene_id"),
+                sync_picker=True,
+            )
+            if src_loc and not self._model_supports_scene_image():
+                loc_tf = self._shots[i].get("location")
+                if loc_tf is not None:
+                    try:
+                        loc_tf.value = src_loc
+                    except Exception:
+                        pass
+        self.status.value = (
+            f"Applied scene “{src.get('scene_label') or Path(str(src.get('scene_path'))).name}” "
+            f"to all {len(self._shots)} shot(s)."
+        )
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
     def refresh_character_picker(self) -> None:
+        """Refresh Character + Scene pickers (tab focus)."""
         try:
             self.char_picker.refresh()
         except Exception:
             pass
         for row in self._shots:
             picker = row.get("char_picker")
-            if picker is None:
-                continue
-            try:
-                picker.refresh()
-                self._sync_row_char_picker(row)
-            except Exception:
-                pass
+            if picker is not None:
+                try:
+                    picker.refresh()
+                    self._sync_row_char_picker(row)
+                except Exception:
+                    pass
+            sp = row.get("scene_picker")
+            if sp is not None:
+                try:
+                    sp.refresh()
+                    self._sync_row_scene_picker(row)
+                    self._apply_scene_picker_gate(sp)
+                except Exception:
+                    pass
+        try:
+            self._sync_scene_pickers_for_model()
+        except Exception:
+            pass
 
     async def _on_shot_field(self, e: ft.ControlEvent | None = None) -> None:
+        self._sync_shot_timing_ui()
         self._rebuild_assembled_text()
         try:
             self.page.update()
@@ -1594,6 +2245,7 @@ class DirectorView:
                         "end_s": s.end_s,
                         "camera": s.camera,
                         "action": s.action,
+                        "location_text": s.location_text or None,
                         "has_ref": bool(s.ref_path or s.character_path),
                         "has_character": bool(s.character_path),
                         "character_label": s.character_label,
@@ -1607,6 +2259,7 @@ class DirectorView:
                     "Rewrite for Kling multi-shot / director video generation. "
                     "Output should remain useful as: (1) a tightened master brief and "
                     "(2) clear per-shot action language with camera moves. "
+                    "Keep action (character) separate from location_text when present. "
                     "Preserve shot order and timing intent. "
                     f"Honor continuity flags: {cont} "
                     f"Per-gap transitions (emit clear cut vs soft dissolve vs continuous "
@@ -1702,6 +2355,23 @@ class DirectorView:
                 self.page.update()
                 return
 
+        # Unique-asset ref budget — block Generate when over
+        try:
+            self._sync_ref_budget()
+            budget = getattr(self, "_last_ref_budget", None)
+            if budget is not None and budget.over:
+                reason = budget.reason_over or (
+                    f"Refs {budget.used}/{budget.max_refs} over budget."
+                )
+                self.status.value = f"Cannot Generate — {reason}"
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+
         # Kling multi_prompt 512 hard limit — compact then block if still over
         max_c = getattr(spec, "multi_prompt_max_chars", None)
         if max_c:
@@ -1715,6 +2385,9 @@ class DirectorView:
                     if self.gen_audio.visible
                     else False,
                     max_chars=int(max_c),
+                    scene_as_image_ref=bool(
+                        getattr(spec, "supports_scene_image_ref", False)
+                    ),
                 )
                 limit_errs = validate_multi_prompt_limits(multi, max_chars=int(max_c))
                 if limit_errs:
@@ -1803,11 +2476,29 @@ class DirectorView:
                 polish=polish,
                 output_dir=self.state.output_dir,
                 on_progress=on_progress,
+                angle_mode=(
+                    self._current_angle_mode()
+                    if (getattr(spec, "ref_budget_mode", "") or "") == "image_bag"
+                    else None
+                ),
             )
             self.cost_text.value = result.cost_label or self._cost_label()
             if result.ok and result.path:
                 self._result_path = result.path
                 done = result.status or "OK"
+                # Surface auto-downscale note when proxies were used
+                try:
+                    proxy_notes = [
+                        n
+                        for n in (result.notes or [])
+                        if "downscaled" in (n or "").lower()
+                        or "still_proxy" in (n or "").lower()
+                        or "using downscaled" in (n or "").lower()
+                    ]
+                    if proxy_notes and "downscaled" not in done.lower():
+                        done = f"{done} · Using downscaled refs for API"
+                except Exception:
+                    pass
                 self.job_progress.finish_ok(done, self.page)
                 self.status.value = done
                 try:
@@ -1835,7 +2526,7 @@ class DirectorView:
         except Exception as exc:
             from media_studio.errors import friendly_error
 
-            err = friendly_error(exc, context="Director")
+            err = friendly_error(exc, context="Director", media_kind="image")
             self.job_progress.finish_error(err, self.page)
             self.status.value = err
             traceback.print_exc()

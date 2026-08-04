@@ -39,7 +39,7 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - Upload or **Generate** (T2I) with establishing bias; name + notes; list thumb; Edit / Delete / Lock / Show in folder
 - Character = who · Scene = where (Director multi-ref scene plates; later Motion Sync / Vision)
 - **Aspect + Quality**: separate Aspect (16:9 Horizontal / 9:16 Vertical / 1:1 / 4:3 / 3:4) and Quality (1K·2K or Standard·HD); framing language in prompt; list **aspect badge** on thumbs
-- **Scenes polish**: enlarge still from generate/form/list; Name primary in list (not long prompt); taller description field; **Variations** nested under base (I2I season/weather/era transform)
+- **Scenes polish**: enlarge still from generate/form/list; **Name** primary in list (not long prompt); broken/missing thumbs show placeholder + repair path from `scene_stills/`; taller description field; **Variations** nested under base (I2I season/weather/era transform)
 
 ### Characters tab
 - New main tab **Characters** — save reusable character stills (local store only)
@@ -74,6 +74,10 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - **Aspect fix**: Kling I2V multi-shot (any shot ref) no longer sends `aspect_ratio` (not in OpenAPI — frame follows start still; UI shows **Auto (from start still)**). O3 I2V uses `image_url`; V3 uses `start_image_url`. T2V lists only `16:9` / `9:16` / `1:1`. Errors report sent vs accepted.
 - **Prompt 512 + character bind**: Kling multi_prompt auto-compacts to ≤512 chars/shot (live counts; block Generate if still over). Saved character binds a real still (Front preferred) as image ref — V3 `elements`, O3 `image_url`, Grok ref list — plus identity-lock language; shot-row badge/thumb; low-res warn.
 - **Per-shot Character control**: each Director shot card has its own Character (this shot) picker; multi-character across shots; **Apply character to all shots** when Same character is on.
+- **Per-shot Scene ref**: Scene (this shot) picker (saved Scenes + variations); multi-ref models attach Character + Scene stills; O3 single-ref keeps Scene text-only; **Apply scene to all shots** when Same location is on.
+- **Unique ref budget**: count unique assets across the job (not per-shot duplicates). Kling: character pack = 1 element + unique scenes; O3 pack = 1 (scene text-only). Imagine: Front only | Full pack (auto Front if scene bound). Refs N / max + Shots N / max — blue / amber ≥80% / red over; Generate disabled only when over, with short reason.
+- **Location (text) + timing QoL**: single-ref models get per-shot Location (text) auto-filled from Scene (action stays separate). **Auto-balance shot times** splits total duration evenly; Add shot re-balances; live red timing warns; title “Shot N · Xs”.
+- **Kling still size**: oversized character/scene plates auto-downscale to API-safe proxies (≤1920 long edge / ~8 MB) before upload; originals stay full-res. Image “too large” errors no longer suggest Render-in-Place video proxy.
 - **Est. cost** chrome matches Studio (bordered block under Generate; live on model / duration / audio)
 - Ordered shot list (up to model max, typically 6): start/end times, camera presets, per-shot action, optional ref still with **thumbnail** (~64px) + filename
 - Fail-safes: times within total duration, no overlap, clear Generate blocks

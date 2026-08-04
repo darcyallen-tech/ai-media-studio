@@ -21,6 +21,8 @@ CACHE_SUBDIRS = (
     "_region",
     "_fal_upload",
     "_previews",
+    "_api_still_proxies",
+    "_motion_sync_proxies",
 )
 
 # Max age for filmstrip/proxy side-files when retention is "Never" (still bound growth)

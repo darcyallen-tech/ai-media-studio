@@ -326,13 +326,26 @@ def upload_file(path: str | Path, on_progress: ProgressCallback | None = None) -
     if on_progress:
         on_progress(f"Uploading {local.name} ({size_s}, {mime}) to fal…")
 
+    # Sniff image vs video so “too large” copy never suggests Render-in-Place for stills
+    _img_ext = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+    media_kind = (
+        "image"
+        if (upload_path.suffix.lower() in _img_ext or (mime or "").startswith("image/"))
+        else (
+            "video"
+            if (mime or "").startswith("video/")
+            or upload_path.suffix.lower() in {".mp4", ".mov", ".webm", ".m4v", ".mkv", ".avi"}
+            else None
+        )
+    )
+
     try:
         url = _upload_bytes_with_mime(upload_path, mime=mime, on_progress=on_progress)
     except FalClientError:
         raise
     except Exception as exc:
         raise FalClientError(
-            friendly_error(exc, context="fal upload")
+            friendly_error(exc, context="fal upload", media_kind=media_kind)
             + f" Local: {local} ({size_s})."
         ) from exc
 
