@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from media_studio.config import PROJECT_ROOT
+from media_studio.helper_none import HELPER_NONE, active_helper, is_helper_none, with_none
 
 DATA_DIR = PROJECT_ROOT / "data"
 SCENES_FILE = DATA_DIR / "scenes.json"
@@ -30,6 +31,143 @@ SCENE_T2I_BIAS = (
     "description explicitly requests people. Clean, usable as a Director scene "
     "reference still. Natural light, sharp detail, no text, no logo, no watermark."
 )
+
+# ----- Plate builder helpers (Scenes T2I) — None = skip that dimension -----
+PLATE_SETTINGS: list[str] = with_none(["Interior", "Exterior", "Mixed"])
+PLATE_TYPES: list[str] = with_none(
+    [
+        "Living room",
+        "Kitchen",
+        "Bedroom",
+        "Gym",
+        "Office",
+        "Street",
+        "Park",
+        "Sidewalk",
+        "Driveway",
+        "Empty lot",
+        "Custom",
+    ]
+)
+PLATE_TIMES: list[str] = with_none(
+    ["Golden hour", "Midday", "Blue hour", "Night", "Overcast"]
+)
+PLATE_WEATHER: list[str] = with_none(
+    ["Clear", "Overcast", "Rain", "Snow", "Fog"]
+)
+# Default bias is empty when skipped; explicit Empty / Lightly populated available
+PLATE_ACTIVITY: list[str] = with_none(["Empty", "Lightly populated"])
+
+# Variation transform quick chips (append to I2I transform prompt)
+VARIATION_CHIPS: tuple[str, ...] = (
+    "Winter",
+    "Night",
+    "Rain",
+    "Golden hour",
+    "Overcast",
+)
+
+_PLATE_TYPE_LANG: dict[str, str] = {
+    "Living room": "a living room interior",
+    "Kitchen": "a kitchen interior",
+    "Bedroom": "a bedroom interior",
+    "Gym": "a modern gym / fitness interior",
+    "Office": "an office / workspace interior",
+    "Street": "an urban street establishing view",
+    "Park": "a public park establishing view",
+    "Sidewalk": "a city sidewalk establishing view",
+    "Driveway": "a residential driveway and facade establishing view",
+    "Empty lot": "an empty lot / undeveloped parcel establishing view",
+    "Custom": "a location establishing plate",
+}
+
+_PLATE_TIME_LANG: dict[str, str] = {
+    "Golden hour": "golden hour warm low sun, long soft shadows",
+    "Midday": "midday clear light, bright even daylight",
+    "Blue hour": "blue hour twilight, cool ambient sky light",
+    "Night": "nighttime, practical lights and soft ambient night illumination",
+    "Overcast": "overcast soft diffused daylight, flat even light",
+}
+
+_PLATE_WEATHER_LANG: dict[str, str] = {
+    "Clear": "clear weather, crisp air",
+    "Overcast": "overcast cloudy sky",
+    "Rain": "wet surfaces from rain, rainy atmosphere",
+    "Snow": "snow-covered ground and surfaces, winter air",
+    "Fog": "light fog / mist, soft distance falloff",
+}
+
+
+def assemble_plate_description(
+    *,
+    setting: str | None = None,
+    place_type: str | None = None,
+    time_of_day: str | None = None,
+    weather: str | None = None,
+    activity: str | None = None,
+    notes: str | None = None,
+) -> str:
+    """
+    Rebuild location description from plate helpers (Studio/music builder pattern).
+
+    Skipped helpers (None) omit that dimension. Always keeps establishing bias:
+    empty or light activity, no hero talent, unless notes ask for people.
+    """
+    set_v = active_helper(setting)
+    type_v = active_helper(place_type)
+    time_v = active_helper(time_of_day)
+    weather_v = active_helper(weather)
+    act_v = active_helper(activity)
+    note = (notes or "").strip()
+
+    bits: list[str] = []
+
+    # Core place
+    if type_v and type_v != "Custom":
+        place = _PLATE_TYPE_LANG.get(type_v, f"a {type_v.lower()} location")
+        bits.append(place)
+    elif type_v == "Custom" and note:
+        bits.append("a custom location establishing plate")
+    elif set_v:
+        bits.append(
+            {
+                "Interior": "an interior establishing plate",
+                "Exterior": "an exterior establishing plate",
+                "Mixed": "an interior/exterior establishing plate",
+            }.get(set_v, "a location establishing plate")
+        )
+
+    if set_v:
+        bits.append(f"{set_v.lower()} setting")
+
+    if time_v:
+        bits.append(_PLATE_TIME_LANG.get(time_v, time_v.lower()))
+
+    # Weather: prefer exterior / mixed; still allow if user set it alone
+    if weather_v:
+        if not set_v or set_v in ("Exterior", "Mixed") or weather_v:
+            bits.append(_PLATE_WEATHER_LANG.get(weather_v, weather_v.lower()))
+
+    # Activity — default empty bias when helpers are used but activity skipped
+    if act_v == "Empty":
+        bits.append("empty space, no people visible")
+    elif act_v == "Lightly populated":
+        bits.append("lightly populated only, no hero talent or portrait subject")
+    elif any((set_v, type_v, time_v, weather_v)):
+        bits.append("empty or lightly populated, no hero talent")
+
+    if note:
+        bits.append(note.rstrip("."))
+
+    if not bits:
+        return ""
+
+    # Readable sentence
+    text = ", ".join(bits)
+    if not text.endswith("."):
+        text += "."
+    # Capitalize first letter
+    return text[0].upper() + text[1:] if text else ""
 
 # Canonical aspect tokens stored on SavedScene.aspect
 SCENE_ASPECT_CORE: tuple[str, ...] = ("16:9", "9:16", "1:1", "4:3", "3:4")

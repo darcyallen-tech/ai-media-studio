@@ -33,10 +33,18 @@ from media_studio.flet_theme import (
     section_title,
     styled_dropdown,
 )
+from media_studio.helper_none import HELPER_NONE
 from media_studio.scene_store import (
+    PLATE_ACTIVITY,
+    PLATE_SETTINGS,
+    PLATE_TIMES,
+    PLATE_TYPES,
+    PLATE_WEATHER,
+    VARIATION_CHIPS,
     SavedScene,
     SceneHasChildrenError,
     add_scene,
+    assemble_plate_description,
     default_scene_quality,
     delete_scene,
     detect_still_aspect,
@@ -193,11 +201,57 @@ class ScenesView:
             weight=ft.FontWeight.W_600,
         )
 
-        # --- Generate (T2I) ---
+        # --- Generate (T2I) + plate builder helpers ---
         t2i_labs = t2i_scene_model_labels()
+        self.t2i_setting_dd = styled_dropdown(
+            label_text="Setting",
+            options=list(PLATE_SETTINGS),
+            value=HELPER_NONE,
+            on_select=self._on_plate_helper,
+            expand=True,
+        )
+        self.t2i_type_dd = styled_dropdown(
+            label_text="Type",
+            options=list(PLATE_TYPES),
+            value=HELPER_NONE,
+            on_select=self._on_plate_helper,
+            expand=True,
+        )
+        self.t2i_time_dd = styled_dropdown(
+            label_text="Time of day",
+            options=list(PLATE_TIMES),
+            value=HELPER_NONE,
+            on_select=self._on_plate_helper,
+            expand=True,
+        )
+        self.t2i_weather_dd = styled_dropdown(
+            label_text="Weather",
+            options=list(PLATE_WEATHER),
+            value=HELPER_NONE,
+            on_select=self._on_plate_helper,
+            expand=True,
+        )
+        self.t2i_activity_dd = styled_dropdown(
+            label_text="Activity",
+            options=list(PLATE_ACTIVITY),
+            value=HELPER_NONE,
+            on_select=self._on_plate_helper,
+            expand=True,
+        )
+        self.t2i_helper_notes = ft.TextField(
+            label="Optional notes (appended on rebuild)",
+            hint_text="e.g. brick facade, autumn trees, glass curtain wall…",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            on_change=self._on_plate_helper,
+        )
         self.t2i_desc = ft.TextField(
             label="Location description",
-            hint_text='e.g. "empty downtown street daytime, soft sun, no people"',
+            hint_text="Filled by helpers — edit freely or Enhance",
             dense=True,
             filled=True,
             fill_color=PANEL_ELEVATED,
@@ -283,12 +337,22 @@ class ScenesView:
                         weight=ft.FontWeight.W_600,
                     ),
                     ft.Text(
-                        "Establishing bias — empty or lightly populated; no hero talent "
-                        "unless you ask for people. Aspect and quality are separate. "
-                        "Click the result thumb to enlarge.",
+                        "Helpers rebuild the description (like Music/Studio builders). "
+                        "Establishing bias: empty or light activity, no hero talent "
+                        "unless you ask for people. Enhance rewrites the full prompt.",
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
+                    ft.Row(
+                        [self.t2i_setting_dd, self.t2i_type_dd],
+                        spacing=8,
+                    ),
+                    ft.Row(
+                        [self.t2i_time_dd, self.t2i_weather_dd],
+                        spacing=8,
+                    ),
+                    ft.Row([self.t2i_activity_dd], spacing=0),
+                    self.t2i_helper_notes,
                     self.t2i_desc,
                     ft.Row([self.t2i_model_dd], spacing=0),
                     ft.Row(
@@ -482,6 +546,22 @@ class ScenesView:
             content=self.var_preview_host,
             on_tap=self._on_tap_var_preview,
         )
+        # Quick chips append transform language (optional QoL)
+        self.var_chip_row = ft.Row(
+            [
+                ft.Text("Quick:", size=11, color=TEXT_MUTED),
+                *[
+                    ft.TextButton(
+                        content=chip,
+                        on_click=self._make_var_chip(chip),
+                        style=ft.ButtonStyle(color=ACCENT),
+                    )
+                    for chip in VARIATION_CHIPS
+                ],
+            ],
+            spacing=2,
+            wrap=True,
+        )
         # Built fresh each open via _assemble_variation_panel() — not empty toggles
         self._var_panel_shell: ft.Container | None = None
 
@@ -611,6 +691,7 @@ class ScenesView:
                 parent_row,
                 self.var_name,
                 self.var_prompt,
+                self.var_chip_row,
                 ft.Row(
                     [self.var_model_dd, self.var_quality_dd],
                     spacing=8,
@@ -785,9 +866,13 @@ class ScenesView:
         self._set_still(None)
         self.name_field.value = ""
         self.notes_field.value = ""
-        # Location description / T2I prompt (so user can generate scenes in a row)
+        # Location description / T2I prompt + plate helpers
         try:
             self.t2i_desc.value = ""
+        except Exception:
+            pass
+        try:
+            self._reset_plate_helpers()
         except Exception:
             pass
         self.btn_save.content = "Save scene"
@@ -922,7 +1007,56 @@ class ScenesView:
         except Exception:
             pass
 
-    # ----- T2I -----
+    # ----- T2I + plate helpers -----
+
+    def _dd_val(self, dd: ft.Control | None) -> str:
+        try:
+            return str(getattr(dd, "value", None) or "").strip()
+        except Exception:
+            return ""
+
+    def _reset_plate_helpers(self) -> None:
+        for dd in (
+            self.t2i_setting_dd,
+            self.t2i_type_dd,
+            self.t2i_time_dd,
+            self.t2i_weather_dd,
+            self.t2i_activity_dd,
+        ):
+            try:
+                dd.value = HELPER_NONE
+            except Exception:
+                pass
+        try:
+            self.t2i_helper_notes.value = ""
+        except Exception:
+            pass
+
+    def _apply_plate_description_rebuild(self) -> None:
+        """Rebuild location description from helpers + optional notes (music-builder pattern)."""
+        try:
+            notes = (self.t2i_helper_notes.value or "").strip()
+        except Exception:
+            notes = ""
+        self.t2i_desc.value = assemble_plate_description(
+            setting=self._dd_val(self.t2i_setting_dd),
+            place_type=self._dd_val(self.t2i_type_dd),
+            time_of_day=self._dd_val(self.t2i_time_dd),
+            weather=self._dd_val(self.t2i_weather_dd),
+            activity=self._dd_val(self.t2i_activity_dd),
+            notes=notes,
+        )
+
+    async def _on_plate_helper(self, e: ft.ControlEvent | None = None) -> None:
+        try:
+            self._apply_plate_description_rebuild()
+        except Exception as exc:
+            self._set_status(f"Plate helper rebuild: {exc}", error=True)
+            return
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     def _refresh_t2i_cost_sync(self) -> None:
         try:
@@ -1423,6 +1557,27 @@ class ScenesView:
             else:
                 self._variations_expanded.add(parent_id)
             self.refresh()
+
+        return _click
+
+    def _make_var_chip(self, chip: str):
+        """Append a quick transform chip to the variation prompt."""
+
+        def _click(_e: ft.ControlEvent) -> None:
+            try:
+                cur = (self.var_prompt.value or "").strip()
+                bit = chip.strip()
+                if not bit:
+                    return
+                if bit.lower() in cur.lower():
+                    return
+                self.var_prompt.value = f"{cur}, {bit}".lstrip(", ").strip()
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+            except Exception as exc:
+                self._set_status(f"Chip failed: {exc}", error=True)
 
         return _click
 

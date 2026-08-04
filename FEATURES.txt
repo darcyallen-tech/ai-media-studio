@@ -77,6 +77,9 @@ Local only (data/scenes.json + data/scene_stills/). Not a Library replacement.
   (optional Enhance + model); separate Aspect (16:9 Horizontal · 9:16 Vertical ·
   1:1 · 4:3 / 3:4) and Quality (1K/2K or Standard/HD — not mixed into one blob);
   establishing bias + framing language; cost tracks model + quality
+- **Plate helpers** (each None/skip): Setting · Type · Time of day · Weather ·
+  Activity + optional notes — rebuild location description on change (Studio/music
+  builder pattern); Enhance still full-rewrites
 - Name (required) + optional notes → Save; aspect stored and shown as badge
 - List: **Name** primary (user title, never long T2I prompt), notes secondary,
   aspect badge on thumb; missing/broken still → placeholder (path repair from
