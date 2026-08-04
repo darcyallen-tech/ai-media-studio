@@ -121,6 +121,7 @@ Dashboards:
 | **Creative Vision** | **Text → Image**, **Image → Image**, Text → Video, Image → Video, Bridge / Connect |
 | **Director** | Multi-shot storyboard: master brief, ordered shots, camera presets, ref stills per shot, cut/continuous transitions |
 | **VFX** | In-scene effects on a plate + **Element plates** (black / clean for Screen·Add in Resolve); fire, smoke, energy, weather, debris, lens packs |
+| **Motion Sync** | Character still + driving video → motion transfer (Kling Motion Control, Wan Motion) |
 | **Frame Editor** | Aleph 2.0 keyframe edit via **Runware** + optional fal 1080p proxy |
 | **Audio** | Music, SFX, Ambience, VO, Voice clone, **Video → SFX** |
 | **Library** | History; filters including **From Resolve**; Send to Studio / Tools / Frame Editor / Resolve |
@@ -228,7 +229,7 @@ Long jobs use **per-tab busy** scopes so one generate does not lock the whole ap
 
 - Top: Settings, **Help (?)**, fal / Runware / xAI chips, Import from Resolve, output folder  
 - App-level **scenario** bar + optional **Job / Listing** field  
-- Main tabs: Studio · Tools · Creative Vision · Director · VFX · Frame Editor · Audio · Library  
+- Main tabs: Studio · Tools · Creative Vision · Director · VFX · Motion Sync · Frame Editor · Audio · Library  
 
 ### Job / Listing folders
 

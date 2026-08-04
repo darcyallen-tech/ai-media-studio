@@ -223,6 +223,23 @@ _BEST_FOR: dict[str, BestFor] = {
         "strong reference consistency, native audio, motion quality",
         "Director via Grok Imagine 1.5 — ordered shot refs as R2V/I2V/T2V single clip.",
     ),
+    # --- Motion Sync ---
+    "kling motion control v3 pro": BestFor(
+        "finished motion transfer, identity + motion quality",
+        "Kling V3 Pro motion-control — character still + driving video.",
+    ),
+    "kling motion control v3 standard": BestFor(
+        "iteration / simpler actions, lower cost",
+        "Kling V3 Standard motion-control — cost-effective motion transfer.",
+    ),
+    "kling 2.6 motion control": BestFor(
+        "budget drafts, short social hooks",
+        "Kling 2.6 Standard motion-control — budget motion transfer.",
+    ),
+    "wan motion": BestFor(
+        "flexible proportions, optional identity boost",
+        "Wan Motion — driving clip onto a still; adapt-motion + enhance-identity.",
+    ),
     # --- Creative Vision I2I labels ---
     "flux 2 pro (edit)": BestFor(
         "furniture / architecture lock, photoreal edits",

@@ -102,6 +102,9 @@ class HistoryEntry:
             "vfx",
             "vfx-element",
             "vfx-in_scene",
+            "motion_sync",
+            "motion-sync",
+            "motion-control",
         ):
             return "Video"
         if first_video_path(self):

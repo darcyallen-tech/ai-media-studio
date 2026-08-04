@@ -37,6 +37,24 @@ TOP BAR
 - Output folder path (persisted) + Open folder
 
 ==============================================================================
+MOTION SYNC (character + driving video)
+==============================================================================
+Peer tab for motion transfer: a character still performs actions from a driving
+clip (realtor hooks, trend content) while preserving identity.
+
+- Character still: upload / Previously used / From Resolve (full-body or clear
+  upper body works best)
+- Motion reference: upload video / From Resolve; duration shown when loaded
+  (clean subject motion, roughly 3–30s depending on model)
+- Models (true motion-control only):
+    Kling Motion Control V3 Pro · V3 Standard · Kling 2.6 Motion Control · Wan Motion
+- Keep original audio (Kling, default on); Wan: adapt motion / enhance identity
+- Optional prompt (environment, style, clothing) + Enhance
+- Est. cost under Generate (Studio chrome; duration × $/s)
+- Generate → Library / Show in folder / Send to Resolve
+- Clear blocks if still or motion clip is missing
+
+==============================================================================
 VFX (in-scene + element plates)
 ==============================================================================
 Peer tab for visual effects — not for general plate staging (use Studio / Vision).

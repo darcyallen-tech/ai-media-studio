@@ -2,7 +2,7 @@
 Flet desktop shell for AI Media Studio.
 
 Tabs: Studio (Image/Video) · Tools · Creative Vision · Director · VFX ·
-Frame Editor · Audio · Library.
+Motion Sync · Frame Editor · Audio · Library.
 Providers: fal (main), xAI (Enhance), Runware (Frame Editor / Aleph).
 """
 
@@ -78,6 +78,7 @@ from media_studio.flet_progress import CollapsibleJobLog, JobProgress, classify_
 from media_studio.flet_tools import ToolsView
 from media_studio.flet_video import StudioVideoView
 from media_studio.flet_vision import CreativeVisionView
+from media_studio.flet_motion_sync import MotionSyncView
 from media_studio.flet_vfx import VfxView
 from media_studio.services import describe_job_kind, enhance_prompt, generate
 from media_studio.flet_model_hint import make_best_for_line, update_best_for_line
@@ -3501,6 +3502,7 @@ def main(page: ft.Page) -> None:
     vision_view = CreativeVisionView(page, state)
     director_view = DirectorView(page, state)
     vfx_view = VfxView(page, state)
+    motion_sync_view = MotionSyncView(page, state)
     frame_editor_view = FrameEditorView(page, state)
     audio_view = AudioView(page, state)
     library_view = LibraryView(page, state)
@@ -3511,6 +3513,7 @@ def main(page: ft.Page) -> None:
     state.vision_view = vision_view  # type: ignore[attr-defined]
     state.director_view = director_view  # type: ignore[attr-defined]
     state.vfx_view = vfx_view  # type: ignore[attr-defined]
+    state.motion_sync_view = motion_sync_view  # type: ignore[attr-defined]
     state.frame_editor_view = frame_editor_view  # type: ignore[attr-defined]
     # Soft tool defaults for the restored app scenario (no tool auto-switch)
     try:
@@ -4295,7 +4298,8 @@ def main(page: ft.Page) -> None:
         tight=False,
     )
 
-    # Tab order: Studio · Tools · Creative Vision · Director · VFX · Frame Editor · Audio · Library
+    # Tab order: Studio · Tools · Creative Vision · Director · VFX · Motion Sync ·
+    # Frame Editor · Audio · Library
     main_tabs = build_tabs(
         [
             ("Studio", ft.Icons.DASHBOARD, studio_shell),
@@ -4314,6 +4318,11 @@ def main(page: ft.Page) -> None:
                 "VFX",
                 ft.Icons.LOCAL_FIRE_DEPARTMENT,
                 _tab_body(vfx_view.build()),
+            ),
+            (
+                "Motion Sync",
+                ft.Icons.DIRECTIONS_RUN,
+                _tab_body(motion_sync_view.build()),
             ),
             (
                 "Frame Editor",
@@ -4372,9 +4381,9 @@ def main(page: ft.Page) -> None:
     def switch_to_library() -> None:
         """Select Library tab and refresh list."""
         try:
-            main_tabs.selected_index = 7
+            main_tabs.selected_index = 8
             try:
-                main_tabs.move_to(7)
+                main_tabs.move_to(8)
             except Exception:
                 pass
             library_view.refresh()
@@ -4453,12 +4462,28 @@ def main(page: ft.Page) -> None:
         except Exception:
             pass
 
+    def switch_to_motion_sync() -> None:
+        """Select Motion Sync (character still + driving video)."""
+        try:
+            main_tabs.selected_index = 5
+            try:
+                main_tabs.move_to(5)
+            except Exception:
+                pass
+            try:
+                motion_sync_view.apply_key_gates()
+            except Exception:
+                pass
+            page.update()
+        except Exception:
+            pass
+
     def switch_to_audio(panel_id: str | None = None) -> None:
         """Select Audio tab; optionally open a pill (music / sfx / …)."""
         try:
-            main_tabs.selected_index = 6
+            main_tabs.selected_index = 7
             try:
-                main_tabs.move_to(6)
+                main_tabs.move_to(7)
             except Exception:
                 pass
             if panel_id:
@@ -4491,9 +4516,9 @@ def main(page: ft.Page) -> None:
         source video, stills stage as handoff (load clip next).
         """
         try:
-            main_tabs.selected_index = 5
+            main_tabs.selected_index = 6
             try:
-                main_tabs.move_to(5)
+                main_tabs.move_to(6)
             except Exception:
                 pass
             fe = frame_editor_view
@@ -4536,13 +4561,19 @@ def main(page: ft.Page) -> None:
     def _on_main_tab_change(e: ft.ControlEvent) -> None:
         try:
             idx = getattr(main_tabs, "selected_index", None)
-            if idx == 7:  # Library
+            if idx == 8:  # Library
                 library_view.refresh()
                 page.update()
-            elif idx == 5:  # Frame Editor — key banner + From Resolve strip
+            elif idx == 6:  # Frame Editor — key banner + From Resolve strip
                 try:
                     frame_editor_view.apply_key_gates()
                     frame_editor_view.refresh_resolve_strip()
+                    page.update()
+                except Exception:
+                    pass
+            elif idx == 5:  # Motion Sync
+                try:
+                    motion_sync_view.apply_key_gates()
                     page.update()
                 except Exception:
                     pass
@@ -4581,6 +4612,7 @@ def main(page: ft.Page) -> None:
     state.switch_to_vision = switch_to_vision  # type: ignore[attr-defined]
     state.switch_to_director = switch_to_director  # type: ignore[attr-defined]
     state.switch_to_vfx = switch_to_vfx  # type: ignore[attr-defined]
+    state.switch_to_motion_sync = switch_to_motion_sync  # type: ignore[attr-defined]
     state.switch_to_audio = switch_to_audio  # type: ignore[attr-defined]
     state.switch_to_frame_editor = switch_to_frame_editor  # type: ignore[attr-defined]
     state.audio_view = audio_view  # type: ignore[attr-defined]

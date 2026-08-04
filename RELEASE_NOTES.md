@@ -34,6 +34,12 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - Pricing: $0.08/s @480p · $0.14/s @720p · $0.25/s @1080p (I2V/T2V) + $0.01 per ref image
 - fal: `xai/grok-imagine-video/v1.5/{image,text,reference}-to-video`
 
+### Motion Sync tab
+- New main tab **Motion Sync** — character still + driving video → motion transfer
+- Models: Kling Motion Control V3 Pro / Standard, Kling 2.6 Motion Control, Wan Motion
+- Keep original audio (Kling); Wan adapt-motion / enhance-identity; optional prompt + Enhance
+- Est. cost under Generate (duration × $/s); Library + Resolve
+
 ### VFX tab
 - New main tab **VFX** (peer to Studio / Creative Vision / Director / Frame Editor)
 - **In-scene** — integrate fire, smoke, energy, weather, debris, lens FX into a still or clip
