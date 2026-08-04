@@ -688,6 +688,37 @@ class FrameEditorView:
         self._rebuild_filmstrip()
         self._set_preview_mode("empty")
 
+        # Orientation only — does not change Generate, cost, or layout structure
+        self.howto_box = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(
+                        "How to use Frame Editor",
+                        size=FONT_SM,
+                        color=TEXT,
+                        weight=ft.FontWeight.W_700,
+                    ),
+                    ft.Text(
+                        "1. Upload or send a source video (auto-proxy available).\n"
+                        "2. Pick edit intent: apply through clip, transition first→last, "
+                        "or custom timestamps.\n"
+                        "3. Pin keyframes on the filmstrip (or upload stills) — max 5.\n"
+                        "4. Describe only what should change at those frames; "
+                        "motion/framing stay locked.\n"
+                        "5. Enhance if needed, then Generate (Aleph 2.0).",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                    ),
+                ],
+                spacing=4,
+                tight=True,
+            ),
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, BORDER),
+            border_radius=8,
+            padding=10,
+        )
+
     # ------------------------------------------------------------------ layout
 
     def _empty_preview_content(self) -> ft.Control:
@@ -739,6 +770,7 @@ class FrameEditorView:
         # ---- LEFT: scrollable main + sticky Generate footer ----
         left_scroll_items: list[ft.Control] = [
             section_title("Frame Editor"),
+            self.howto_box,
             self.key_banner,
             label("Source video", muted=True),
             ft.Row(

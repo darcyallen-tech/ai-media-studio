@@ -105,19 +105,35 @@ class MotionSyncView:
             color=TEXT_MUTED,
             max_lines=3,
         )
+        # Wan-only toggles (labels/help only — behavior/defaults unchanged)
         self.adapt_motion = ft.Checkbox(
-            label="Adapt motion to body proportions (Wan)",
+            label="Fit motion to this character's body",
             value=True,
             visible=False,
         )
         self.enhance_identity = ft.Checkbox(
-            label="Enhance identity (Wan · Flux preprocess)",
-            value=False,
+            label="Sharpen face & identity",
+            value=bool(getattr(spec0, "default_enhance_identity", False))
+            if getattr(spec0, "supports_enhance_identity", False)
+            else False,
             visible=False,
-            tooltip=(
-                "Runs a light identity-preserving preprocess before animation "
-                "(more faithful face, slightly longer)"
-            ),
+            tooltip="Extra pass to keep the person looking like the still",
+            on_change=self._refresh_cost,
+        )
+        self.enhance_identity_hint = ft.Text(
+            "Extra pass to keep the person looking like the still",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            visible=False,
+            max_lines=2,
+        )
+        self.wan_toggles_hint = ft.Text(
+            "Wan can adjust the motion to your character's build and optionally "
+            "lock the face more tightly.",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            visible=False,
+            max_lines=3,
         )
         self.accel_dd = styled_dropdown(
             label_text="Acceleration (Wan)",
@@ -298,6 +314,61 @@ class MotionSyncView:
             media_kind="video",
         )
 
+        # Non-blocking proxy status (large/long inputs) — near motion + under Generate
+        self.proxy_note = ft.Text(
+            "",
+            size=FONT_SM,
+            color=ACCENT_BRIGHT,
+            weight=ft.FontWeight.W_600,
+            visible=False,
+            max_lines=2,
+        )
+
+        # Slot containers for Send-to highlight (character vs motion reference)
+        self.char_slot = ft.Container(
+            content=ft.Column(
+                [
+                    label("Character / subject", muted=True),
+                    self.char_tip,
+                    ft.Stack(
+                        [self.char_empty, self.char_preview], width=140, height=140
+                    ),
+                    self.char_label,
+                    ft.Row([self.btn_char, self.btn_char_clear], spacing=6),
+                    self.char_prev.root,
+                    self.char_resolve.root,
+                ],
+                spacing=6,
+                tight=True,
+            ),
+            border=ft.Border.all(1, BORDER),
+            border_radius=8,
+            padding=10,
+            bgcolor=PANEL_ELEVATED,
+        )
+        self.motion_slot = ft.Container(
+            content=ft.Column(
+                [
+                    label("Motion reference", muted=True),
+                    self.motion_tip,
+                    ft.Stack(
+                        [self.motion_empty, self.motion_poster], width=160, height=90
+                    ),
+                    self.motion_label,
+                    self.motion_duration_text,
+                    self.proxy_note,
+                    ft.Row([self.btn_motion, self.btn_motion_clear], spacing=6),
+                    self.motion_resolve.root,
+                ],
+                spacing=6,
+                tight=True,
+            ),
+            border=ft.Border.all(1, BORDER),
+            border_radius=8,
+            padding=10,
+            bgcolor=PANEL_ELEVATED,
+        )
+
         self.cost_text, self.cost_box = make_estimated_cost_box(initial="Est. cost: —")
         self.btn_generate = ft.FilledButton(
             content="Generate motion sync",
@@ -344,21 +415,8 @@ class MotionSyncView:
             ),
             self.tips_box,
             ft.Divider(height=1, color=BORDER),
-            label("Character / subject", muted=True),
-            self.char_tip,
-            ft.Stack([self.char_empty, self.char_preview], width=140, height=140),
-            self.char_label,
-            ft.Row([self.btn_char, self.btn_char_clear], spacing=6),
-            self.char_prev.root,
-            self.char_resolve.root,
-            ft.Divider(height=1, color=BORDER),
-            label("Motion reference", muted=True),
-            self.motion_tip,
-            ft.Stack([self.motion_empty, self.motion_poster], width=160, height=90),
-            self.motion_label,
-            self.motion_duration_text,
-            ft.Row([self.btn_motion, self.btn_motion_clear], spacing=6),
-            self.motion_resolve.root,
+            self.char_slot,
+            self.motion_slot,
             ft.Divider(height=1, color=BORDER),
             ft.Row([self.model_dd], spacing=0),
             self.model_best_for,
@@ -368,6 +426,8 @@ class MotionSyncView:
             self.orient_hint,
             self.adapt_motion,
             self.enhance_identity,
+            self.enhance_identity_hint,
+            self.wan_toggles_hint,
             self.accel_dd,
             self.prompt,
             self.prompt_chip_hint,
@@ -448,11 +508,21 @@ class MotionSyncView:
         self.orient_dd.visible = bool(spec.supports_character_orientation)
         self.orient_hint.visible = bool(spec.supports_character_orientation)
         self.adapt_motion.visible = bool(spec.supports_adapt_motion)
+        was_identity = bool(self.enhance_identity.visible)
         self.enhance_identity.visible = bool(spec.supports_enhance_identity)
+        # Helper lines track the Wan toggles (hide for Kling)
+        show_wan_toggles = bool(
+            spec.supports_adapt_motion or spec.supports_enhance_identity
+        )
+        self.enhance_identity_hint.visible = bool(spec.supports_enhance_identity)
+        self.wan_toggles_hint.visible = show_wan_toggles
+        # When switching onto Wan, seed default (off = current best practice);
+        # hide entirely for Kling. Keep user choice while staying on Wan.
+        if self.enhance_identity.visible and not was_identity:
+            self.enhance_identity.value = bool(spec.default_enhance_identity)
         self.accel_dd.visible = is_wan
         if is_wan:
             self.adapt_motion.value = bool(spec.default_adapt_motion)
-            # leave enhance_identity as user left it after first Wan visit
 
     def _orientation_api(self) -> str:
         if not self.orient_dd.visible:
@@ -512,6 +582,100 @@ class MotionSyncView:
         except Exception:
             pass
 
+    # ----- proxy status + slot highlight -----
+
+    def _refresh_proxy_note(self, *, force_used: bool = False, note: str | None = None) -> None:
+        """
+        Show short non-blocking proxy tip near motion reference when large/long
+        inputs will (or did) auto-proxy. Clears when neither slot needs it.
+        """
+        from media_studio.motion_sync_prep import (
+            PROXY_NOTE,
+            motion_will_need_proxy,
+            still_will_need_proxy,
+        )
+
+        if force_used:
+            text = (note or PROXY_NOTE).strip() or PROXY_NOTE
+            self.proxy_note.value = text
+            self.proxy_note.visible = True
+            return
+
+        needs = False
+        if self._character_path:
+            try:
+                needs = needs or still_will_need_proxy(self._character_path)
+            except Exception:
+                pass
+        if self._motion_path:
+            try:
+                needs = needs or motion_will_need_proxy(
+                    self._motion_path, duration_s=self._motion_duration_s
+                )
+            except Exception:
+                pass
+        if needs:
+            self.proxy_note.value = PROXY_NOTE
+            self.proxy_note.visible = True
+        else:
+            self.proxy_note.value = ""
+            self.proxy_note.visible = False
+
+    def _clear_proxy_note(self) -> None:
+        self.proxy_note.value = ""
+        self.proxy_note.visible = False
+
+    def _highlight_slot(self, slot: str) -> None:
+        """Accent-border Character or Motion reference after Send-to."""
+        for name, box in (("character", self.char_slot), ("motion", self.motion_slot)):
+            try:
+                if name == slot:
+                    box.border = ft.Border.all(2, ACCENT)
+                    box.bgcolor = PANEL
+                else:
+                    box.border = ft.Border.all(1, BORDER)
+                    box.bgcolor = PANEL_ELEVATED
+            except Exception:
+                pass
+
+    def receive_character(self, path: str) -> bool:
+        """Library / Send-to: set character still and highlight the slot."""
+        ok = self._set_character(path, update=False)
+        if ok:
+            self._highlight_slot("character")
+            try:
+                from media_studio.flet_dialogs import show_snack
+
+                show_snack(
+                    self.page, f"Motion Sync · Character: {Path(path).name}"
+                )
+            except Exception:
+                pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        return ok
+
+    def receive_motion(self, path: str) -> bool:
+        """Library / Send-to: set driving video and highlight the slot."""
+        ok = self._set_motion(path, update=False)
+        if ok:
+            self._highlight_slot("motion")
+            try:
+                from media_studio.flet_dialogs import show_snack
+
+                show_snack(
+                    self.page, f"Motion Sync · Motion reference: {Path(path).name}"
+                )
+            except Exception:
+                pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        return ok
+
     # ----- character -----
 
     async def _pick_character(self, e: ft.ControlEvent) -> None:
@@ -533,6 +697,7 @@ class MotionSyncView:
         self.char_preview.visible = False
         self.char_empty.visible = True
         self.char_label.value = "No character still"
+        self._refresh_proxy_note()
         try:
             self.page.update()
         except Exception:
@@ -541,15 +706,16 @@ class MotionSyncView:
     def _on_char_from_strip(self, path: str) -> None:
         self._set_character(path)
 
-    def _set_character(self, path: str) -> None:
+    def _set_character(self, path: str, *, update: bool = True) -> bool:
         p = Path(path)
         if not p.is_file():
             self.status.value = f"Missing still: {path}"
-            try:
-                self.page.update()
-            except Exception:
-                pass
-            return
+            if update:
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+            return False
         self._character_path = str(p.resolve())
         self.char_label.value = f"Character: {p.name}"
         self.char_preview.src = self._character_path
@@ -560,10 +726,13 @@ class MotionSyncView:
         except Exception:
             pass
         self.status.value = f"Character loaded: {p.name}"
-        try:
-            self.page.update()
-        except Exception:
-            pass
+        self._refresh_proxy_note()
+        if update:
+            try:
+                self.page.update()
+            except Exception:
+                pass
+        return True
 
     # ----- motion -----
 
@@ -589,6 +758,7 @@ class MotionSyncView:
         self.motion_label.value = "No motion reference"
         self.motion_duration_text.value = ""
         self.motion_duration_text.visible = False
+        self._refresh_proxy_note()
         self.cost_text.value = self._cost_label()
         try:
             self.page.update()
@@ -598,15 +768,16 @@ class MotionSyncView:
     def _on_motion_from_strip(self, path: str) -> None:
         self._set_motion(path)
 
-    def _set_motion(self, path: str) -> None:
+    def _set_motion(self, path: str, *, update: bool = True) -> bool:
         p = Path(path)
         if not p.is_file():
             self.status.value = f"Missing video: {path}"
-            try:
-                self.page.update()
-            except Exception:
-                pass
-            return
+            if update:
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+            return False
         self._motion_path = str(p.resolve())
         self.motion_label.value = f"Motion: {p.name}"
         dur = probe_video_duration(self._motion_path)
@@ -635,10 +806,13 @@ class MotionSyncView:
             self.motion_empty.visible = True
         self.cost_text.value = self._cost_label()
         self.status.value = f"Motion loaded: {p.name}"
-        try:
-            self.page.update()
-        except Exception:
-            pass
+        self._refresh_proxy_note()
+        if update:
+            try:
+                self.page.update()
+            except Exception:
+                pass
+        return True
 
     # ----- enhance / generate -----
 
@@ -766,15 +940,14 @@ class MotionSyncView:
                 on_progress=on_progress,
             )
             self.cost_text.value = result.cost_label or self._cost_label()
+            if getattr(result, "used_proxy", False):
+                self._refresh_proxy_note(
+                    force_used=True,
+                    note=getattr(result, "proxy_note", None) or None,
+                )
             if result.ok and result.path:
                 self._result_path = result.path
                 done = result.status or "OK"
-                if getattr(result, "used_proxy", False) and getattr(
-                    result, "proxy_note", ""
-                ):
-                    # Keep proxy note visible at the top of status
-                    if result.proxy_note not in done:
-                        done = f"{result.proxy_note} · {done}"
                 self.job_progress.finish_ok(done, self.page)
                 self.status.value = done
                 try:
@@ -790,10 +963,6 @@ class MotionSyncView:
                     pass
             else:
                 err = result.status or "Failed."
-                if getattr(result, "used_proxy", False) and getattr(
-                    result, "proxy_note", ""
-                ):
-                    err = f"{result.proxy_note} · {err}"
                 self.job_progress.finish_error(err, self.page)
                 self.status.value = err
         except Exception as exc:

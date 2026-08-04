@@ -84,8 +84,9 @@ MOTION_SYNC_MODELS: dict[str, MotionSyncModelSpec] = {
         cost_per_second=0.08,  # ballpark; fal bills per output second
         notes=(
             "Wan Motion — driving video motion onto a reference still. "
-            "Optional adapt-motion (body proportions) and enhance-identity. "
-            "No keep-original-audio toggle. Est. ~$0.08/s (confirm on fal)."
+            "Optional adapt-motion (body proportions) and Identity enhance "
+            "(preprocess; no separate line-item cost). No keep-original-audio. "
+            "Est. ~$0.08/s (confirm on fal)."
         ),
         supports_keep_audio=False,
         default_keep_audio=False,
@@ -93,7 +94,7 @@ MOTION_SYNC_MODELS: dict[str, MotionSyncModelSpec] = {
         supports_adapt_motion=True,
         default_adapt_motion=True,
         supports_enhance_identity=True,
-        default_enhance_identity=False,
+        default_enhance_identity=False,  # off by default (Wan best practice)
         best_for="flexible proportions, optional identity boost",
         min_duration_s=2.0,
         max_duration_s=30.0,

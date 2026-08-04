@@ -6,8 +6,8 @@ Destinations appear only when the media type allows them.
 
 Nested layout (desktop Flet MenuBar / SubmenuButton flyouts):
   Studio Image · Studio Video · Region · Director ▶ · Creative Vision ▶ ·
-  Frame Editor · Tools ▶ · Resolve
-Director / Creative Vision / Tools open a flyout to the right.
+  Frame Editor · Tools ▶ · Motion Sync ▶ · Resolve
+Director / Creative Vision / Tools / Motion Sync open a flyout to the right.
 """
 
 from __future__ import annotations
@@ -184,6 +184,55 @@ def send_to_tool(
             switch(tool_id)
         if status_cb:
             status_cb(f"Sent to Tools → {tool_id}: {Path(path).name}")
+
+    return _click
+
+
+def send_to_motion_sync(
+    state: Any,
+    path: str,
+    *,
+    role: str,
+    status_cb: Callable[[str], None] | None = None,
+) -> Callable:
+    """
+    Send media into Motion Sync.
+
+    role:
+      - ``character`` — still → character / subject slot
+      - ``motion`` — video → motion reference (driving clip) slot
+    Switches to the Motion Sync tab and highlights the target slot.
+    """
+
+    async def _click(_e: ft.ControlEvent) -> None:
+        mv = getattr(state, "motion_sync_view", None)
+        role_key = (role or "").strip().lower()
+        ok = False
+        if mv is not None:
+            if role_key in ("character", "char", "still", "subject"):
+                if hasattr(mv, "receive_character"):
+                    ok = bool(mv.receive_character(path))
+                elif hasattr(mv, "_set_character"):
+                    ok = bool(mv._set_character(path))
+            elif role_key in ("motion", "motion_ref", "driving", "video"):
+                if hasattr(mv, "receive_motion"):
+                    ok = bool(mv.receive_motion(path))
+                elif hasattr(mv, "_set_motion"):
+                    ok = bool(mv._set_motion(path))
+        switch = getattr(state, "switch_to_motion_sync", None)
+        if switch:
+            switch()
+        if status_cb:
+            slot = (
+                "Character"
+                if role_key in ("character", "char", "still", "subject")
+                else "Motion reference"
+            )
+            name = Path(path).name
+            if ok:
+                status_cb(f"Sent to Motion Sync → {slot}: {name}")
+            else:
+                status_cb(f"Motion Sync → {slot}: could not load {name}")
 
     return _click
 
@@ -486,6 +535,37 @@ def tools_menu_items(
     ]
 
 
+def motion_sync_menu_items(
+    state: Any,
+    path: str,
+    *,
+    as_video: bool,
+    status_cb: Callable[[str], None] | None = None,
+) -> list[ft.Control]:
+    """
+    Nested Motion Sync targets:
+      still → Character
+      video → Motion reference
+    """
+    if as_video:
+        return [
+            _item(
+                "Motion reference",
+                send_to_motion_sync(
+                    state, path, role="motion", status_cb=status_cb
+                ),
+            )
+        ]
+    return [
+        _item(
+            "Character",
+            send_to_motion_sync(
+                state, path, role="character", status_cb=status_cb
+            ),
+        )
+    ]
+
+
 def build_send_menu_items(
     state: Any,
     *,
@@ -506,12 +586,13 @@ def build_send_menu_items(
 
     Top-level (stills) stays short:
       Studio Image · Studio Video · Region · Director ▶ · Creative Vision ▶ ·
-      Frame Editor · Tools ▶ · Resolve
+      Frame Editor · Tools ▶ · Motion Sync ▶ · Resolve
 
     Flyouts:
       Director → Shot 1…N (dynamic from Director rows)
       Creative Vision → I2I source / add ref / start / end / I2V
       Tools → Upscale, Object Remove, …
+      Motion Sync → Character (still) or Motion reference (video)
     """
     items: list[ft.Control] = []
     img = image_path if image_path and Path(image_path).is_file() else None
@@ -562,6 +643,14 @@ def build_send_menu_items(
                     tools_menu_items(state, img, as_video=False, status_cb=_ok),
                 )
             )
+        items.append(
+            _submenu(
+                "Motion Sync",
+                motion_sync_menu_items(
+                    state, img, as_video=False, status_cb=_ok
+                ),
+            )
+        )
         if include_resolve:
             items.append(
                 _item(
@@ -599,6 +688,14 @@ def build_send_menu_items(
                     tools_menu_items(state, vid, as_video=True, status_cb=_ok),
                 )
             )
+        items.append(
+            _submenu(
+                "Motion Sync",
+                motion_sync_menu_items(
+                    state, vid, as_video=True, status_cb=_ok
+                ),
+            )
+        )
         if include_audio_vsfx:
             items.append(
                 _item(
@@ -620,7 +717,10 @@ def build_send_menu_items(
 def make_send_menu_button(
     items: list[ft.Control],
     *,
-    tooltip: str = "Send to Studio, Director, Creative Vision, Tools, Frame Editor, or Resolve",
+    tooltip: str = (
+        "Send to Studio, Director, Creative Vision, Tools, Motion Sync, "
+        "Frame Editor, or Resolve"
+    ),
 ) -> ft.Control | None:
     """
     Build the Send to control.

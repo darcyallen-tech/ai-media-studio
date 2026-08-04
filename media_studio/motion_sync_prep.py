@@ -25,6 +25,7 @@ TARGET_MOTION_MIN_S = 3.0
 MOTION_LONG_EDGE = 1280  # 720p-class long edge (safe + smaller)
 MOTION_LONG_EDGE_FALLBACK = 960
 MAX_STILL_SIDE = 2048
+PROXY_NOTE = "Using optimized proxy for API (original kept)"
 
 
 def _ffmpeg_exe() -> str | None:
@@ -119,7 +120,7 @@ def prepare_character_still(
                 return PrepResult(
                     path=dest.resolve(),
                     used_proxy=True,
-                    note="Using optimized proxy for API (original kept)",
+                    note=PROXY_NOTE,
                     notes=[f"still_proxy={dest.name}", f"still {w}x{h}→{tw}x{th}"],
                 )
 
@@ -130,7 +131,7 @@ def prepare_character_still(
             return PrepResult(
                 path=dest.resolve(),
                 used_proxy=True,
-                note="Using optimized proxy for API (original kept)",
+                note=PROXY_NOTE,
                 notes=[f"still_proxy={dest.name}", f"still {w}x{h}→{tw}x{th}"],
             )
     except Exception as exc:
@@ -157,6 +158,44 @@ def _motion_needs_proxy(
     if duration_s is not None and duration_s > max_duration_s + 0.25:
         reasons.append(f"duration {duration_s:.1f}s > {max_duration_s:.0f}s")
     return bool(reasons), reasons
+
+
+def still_will_need_proxy(
+    path: str | Path,
+    *,
+    max_side: int = MAX_STILL_SIDE,
+) -> bool:
+    """True if character still would be downscaled before upload (UI preview)."""
+    src = Path(path)
+    if not src.is_file():
+        return False
+    try:
+        from PIL import Image
+
+        with Image.open(src) as im:
+            return max(im.size) > int(max_side)
+    except Exception:
+        return False
+
+
+def motion_will_need_proxy(
+    path: str | Path,
+    *,
+    duration_s: float | None = None,
+    max_duration_s: float = TARGET_MOTION_MAX_S,
+    max_bytes: int = MAX_MOTION_BYTES,
+) -> bool:
+    """True if driving clip would be auto-proxied (UI preview; original kept)."""
+    src = Path(path)
+    if not src.is_file():
+        return False
+    dur = duration_s
+    if dur is None:
+        dur = probe_video_duration(src)
+    needs, _ = _motion_needs_proxy(
+        src, duration_s=dur, max_duration_s=max_duration_s, max_bytes=max_bytes
+    )
+    return needs
 
 
 def prepare_motion_video(
@@ -215,7 +254,7 @@ def prepare_motion_video(
         return PrepResult(
             path=dest.resolve(),
             used_proxy=True,
-            note="Using optimized proxy for API (original kept)",
+            note=PROXY_NOTE,
             duration_s=d2,
             notes=[
                 f"motion_proxy={dest.name}",
@@ -312,7 +351,7 @@ def prepare_motion_video(
     return PrepResult(
         path=dest.resolve(),
         used_proxy=True,
-        note="Using optimized proxy for API (original kept)",
+        note=PROXY_NOTE,
         duration_s=out_dur,
         notes=notes,
     )

@@ -293,6 +293,35 @@ class DirectorView:
         self.cost_text.value = self._cost_label()
         self.apply_key_gates()
 
+        # Orientation only — does not change models, cost, or Generate
+        self.howto_box = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(
+                        "How to use Director",
+                        size=FONT_SM,
+                        color=TEXT,
+                        weight=ft.FontWeight.W_700,
+                    ),
+                    ft.Text(
+                        "1. Set total duration and pick a multi-shot model.\n"
+                        "2. Add 2–6 shots with start/end times (no overlaps).\n"
+                        "3. Optional: ref still + camera + action per shot.\n"
+                        "4. Write a master brief (story, location, character).\n"
+                        "5. Enhance if you want, then Generate.",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                    ),
+                ],
+                spacing=4,
+                tight=True,
+            ),
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, BORDER),
+            border_radius=8,
+            padding=10,
+        )
+
     # ----- layout -----
 
     def build(self) -> ft.Control:
@@ -307,6 +336,7 @@ class DirectorView:
                 size=FONT_SM,
                 color=TEXT_MUTED,
             ),
+            self.howto_box,
             ft.Divider(height=1, color=BORDER),
             label("Master", muted=True),
             ft.Row([self.model_dd], spacing=0),

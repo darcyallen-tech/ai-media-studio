@@ -127,11 +127,9 @@ def run_motion_sync(
         prep_motion_dur = motion_prep.duration_s
         if char_prep.used_proxy or motion_prep.used_proxy:
             used_proxy = True
-            proxy_note = (
-                char_prep.note
-                or motion_prep.note
-                or "Using optimized proxy for API (original kept)"
-            )
+            from media_studio.motion_sync_prep import PROXY_NOTE
+
+            proxy_note = char_prep.note or motion_prep.note or PROXY_NOTE
             progress(proxy_note)
     except Exception as prep_exc:
         return MotionSyncResult(
