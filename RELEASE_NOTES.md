@@ -37,8 +37,10 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 ### Characters tab
 - New main tab **Characters** — save reusable character stills (local store only)
 - **Identity pack** Front / Side / Close-up; large preview on thumb click
+- **Generate profile** fills missing Front/Side/Close-up from existing stills (multi-ref, black plate)
+- **New character**: upload any slot; T2I builder with helpers + sequential Close-up→Front→Side confirm
 - **Remove background** (Bria RMBG) per slot or all angles; cost shown; Confirm before replace
-- **Costume swap** → child under parent (collapsed Costumes); per-slot regen; Use in Motion Sync on both
+- **Costume swap** model picker, per-slot errors, child under parent; Use in Motion Sync on both
 - **Lock** protects from retention cleanup; delete parent confirms if costumes exist
 - Shortcuts from Motion Sync / Director / Studio; Voice Clone stays under Audio
 

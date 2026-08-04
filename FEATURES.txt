@@ -43,14 +43,19 @@ Peer tab to save realtor / talent / hero stills for one-click reuse — local on
 (data/characters.json + data/character_stills/). Not a Library replacement;
 Voice Clone stays under Audio.
 
+- New character (primary): upload into any slot (Front/Side/Close-up; one still enough)
+  → name → Save; or T2I builder (helpers + Enhance + sequential Front→Side→Close-up
+  with confirm each; full-body Front/Side; pure black clean plate)
 - Upload still, or pick from Previously used / From Resolve; optional Open Library
 - Name (required) + optional notes / tags → Save
 - Identity pack (up to 3): Front (primary) · Side (profile) · Close-up (face);
   list thumb = Front (or first available); Edit manages slots; click thumb → large preview
+- Generate missing Front/Side/Close-up from existing identity stills (multi-ref I2I;
+  pure black clean plate by default; preview + Confirm; base + costume variants)
 - Remove background (Bria RMBG, manual): per slot + all-angles batch; cost shown;
   preview Confirm/Dismiss (no auto-overwrite on upload)
-- Costume swap: multi-ref I2I per filled slot; per-slot Regenerate; saves as child
-  costume under parent (collapsed Costumes section); replace angles optional
+- Costume swap: multi-ref model + resolution picker; cost × slots × resolution;
+  per-slot errors/retry; black clean plate; named costume child under parent
 - Lock / protect: skips retention auto-delete; lock icon on list; unlock anytime
 - Generate variation (optional); Use in Motion Sync on base + costumes
 - Shortcuts: Save as character from Motion Sync, Director, Studio Image
