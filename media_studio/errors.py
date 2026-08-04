@@ -272,9 +272,16 @@ def friendly_error(exc: BaseException | str, *, context: str = "") -> str:
 
     # Aspect ratio / dimension enum rejections
     if "aspect" in low or "aspect_ratio" in low:
+        # Keep any "Sent aspect_ratio=…" detail already attached by Director
+        if "sent aspect_ratio=" in low or "this endpoint accepts" in low:
+            if prefix and not raw.startswith(prefix.rstrip(": ")):
+                return f"{prefix}{raw}"
+            return raw or f"{prefix}Aspect ratio not accepted by this model."
         return (
             f"{prefix}Aspect ratio not accepted by this model. "
-            "Pick a listed ratio (e.g. 16:9, 1:1, 9:16) or Auto, then retry."
+            "For Kling multi-shot with a start still, aspect follows the still "
+            "(do not send aspect_ratio). For pure text multi-shot use exactly "
+            "16:9, 9:16, or 1:1. Pick a listed ratio or Auto, then retry."
         )
     if any(x in low for x in ("invalid resolution", "resolution", "unsupported size")) and (
         "422" in low or "enum" in low or "allowed" in low or "must be" in low

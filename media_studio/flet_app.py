@@ -803,6 +803,14 @@ class StudioImageView:
             style=ft.ButtonStyle(color=ACCENT),
             tooltip="Open Characters with this source still ready — add a name and Save",
         )
+        from media_studio.flet_character_picker import CharacterPicker
+
+        self.char_picker = CharacterPicker(
+            page,
+            on_select=self._on_character_picked,
+            on_clear=self._on_character_picker_clear,
+            label_text="Saved character",
+        )
 
         # --- comparison workspace (inline: left rail + large smooth overlay) ---
         self.compare_label = ft.Text("Generate to compare versions", size=FONT_SM, color=TEXT_MUTED)
@@ -1002,6 +1010,7 @@ class StudioImageView:
                 height=120,
                 width=RAIL_WIDTH - 40,
             ),
+            self.char_picker.root,
             self.refs_panel,
             label("Previously used", muted=True),
             self.prev_row,
@@ -2134,6 +2143,25 @@ class StudioImageView:
         self._update_compare_pane()
         self._set_status(status or f"Source still: {p.name}")
         return True
+
+    def _on_character_picked(self, path: str, choice) -> None:
+        """Character picker → fill Image source still (Front preferred)."""
+        label = getattr(choice, "label", None) or Path(path).name
+        self.load_source_path(path, status=f"Character: {label}")
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _on_character_picker_clear(self) -> None:
+        # Unlink picker only — keep uploaded / strip source still
+        pass
+
+    def refresh_character_picker(self) -> None:
+        try:
+            self.char_picker.refresh()
+        except Exception:
+            pass
 
     def _model_max_refs(self) -> int:
         from media_studio.fal.models import max_ref_images_for_choice
@@ -4292,6 +4320,11 @@ def main(page: ft.Page) -> None:
                 studio_video.sync_from_state()
             except Exception:
                 pass
+        else:
+            try:
+                studio_image.refresh_character_picker()
+            except Exception:
+                pass
         try:
             page.update()
         except Exception:
@@ -4427,6 +4460,10 @@ def main(page: ft.Page) -> None:
                     image_mod_nav.set_selected(modality, notify=False)
                 except Exception:
                     pass
+            try:
+                studio_image.refresh_character_picker()
+            except Exception:
+                pass
             page.update()
         except Exception:
             pass
@@ -4487,6 +4524,10 @@ def main(page: ft.Page) -> None:
                 pass
             # Role is applied by receive_* before switch; no mode wipe here
             _ = role
+            try:
+                vision_view.refresh_character_picker()
+            except Exception:
+                pass
             page.update()
         except Exception:
             pass
@@ -4501,6 +4542,10 @@ def main(page: ft.Page) -> None:
                 pass
             try:
                 director_view.apply_key_gates()
+            except Exception:
+                pass
+            try:
+                director_view.refresh_character_picker()
             except Exception:
                 pass
             page.update()
@@ -4541,6 +4586,10 @@ def main(page: ft.Page) -> None:
                 pass
             try:
                 motion_sync_view.apply_key_gates()
+            except Exception:
+                pass
+            try:
+                motion_sync_view.refresh_character_picker()
             except Exception:
                 pass
             page.update()
@@ -4649,6 +4698,7 @@ def main(page: ft.Page) -> None:
             elif idx == 5:  # Motion Sync
                 try:
                     motion_sync_view.apply_key_gates()
+                    motion_sync_view.refresh_character_picker()
                     page.update()
                 except Exception:
                     pass
@@ -4661,6 +4711,13 @@ def main(page: ft.Page) -> None:
             elif idx == 3:  # Director
                 try:
                     director_view.apply_key_gates()
+                    director_view.refresh_character_picker()
+                    page.update()
+                except Exception:
+                    pass
+            elif idx == 2:  # Creative Vision
+                try:
+                    vision_view.refresh_character_picker()
                     page.update()
                 except Exception:
                     pass
@@ -4669,6 +4726,9 @@ def main(page: ft.Page) -> None:
                     if media_nav.selected == "video":
                         studio_video.sync_from_state()
                         studio_video._refresh_resolve_recent()
+                        page.update()
+                    else:
+                        studio_image.refresh_character_picker()
                         page.update()
                 except Exception:
                     pass

@@ -443,6 +443,119 @@ def list_costume_children(parent_id: str | None) -> list[SavedCharacter]:
     return [c for c in load_characters() if (c.parent_id or "") == pid]
 
 
+@dataclass(frozen=True)
+class CharacterPickerChoice:
+    """One row for app-wide Character picker (base or costume variant)."""
+
+    id: str
+    label: str
+    still_path: str
+    is_costume: bool = False
+    parent_id: str | None = None
+    parent_name: str | None = None
+
+    @property
+    def has_still(self) -> bool:
+        try:
+            return bool(self.still_path) and Path(self.still_path).is_file()
+        except OSError:
+            return False
+
+
+def _costume_display_name(costume_name: str, parent_name: str | None) -> str:
+    """
+    Outfit part of picker labels like ``Alice / Red Dress``.
+    Strips leading ``Parent – `` when costume was named ``Alice – Red Dress``.
+    """
+    name = (costume_name or "").strip() or "Outfit"
+    parent = (parent_name or "").strip()
+    if parent:
+        for sep in (" – ", " — ", " - ", " –", " —", " -"):
+            prefix = parent + sep
+            if name.lower().startswith(prefix.lower()):
+                rest = name[len(prefix) :].strip()
+                if rest:
+                    return rest
+        if name.lower().startswith(parent.lower() + " "):
+            rest = name[len(parent) :].strip(" -–—")
+            if rest:
+                return rest
+    return name
+
+
+def character_picker_choices() -> list[CharacterPickerChoice]:
+    """
+    Flat list for dropdowns: bases first, then each costume as ``Parent / Costume``.
+    Only entries with at least one usable still (Front preferred).
+    """
+    migrate_orphan_costume_links()
+    all_chars = load_characters()
+    by_id = {c.id: c for c in all_chars}
+    bases = [c for c in all_chars if c.is_base()]
+    out: list[CharacterPickerChoice] = []
+    for base in bases:
+        still = base.primary_still()
+        if still and Path(still).is_file():
+            out.append(
+                CharacterPickerChoice(
+                    id=base.id,
+                    label=base.name,
+                    still_path=still,
+                    is_costume=False,
+                )
+            )
+        for kid in list_costume_children(base.id):
+            kstill = kid.primary_still()
+            if not kstill or not Path(kstill).is_file():
+                continue
+            outfit = _costume_display_name(kid.name, base.name)
+            out.append(
+                CharacterPickerChoice(
+                    id=kid.id,
+                    label=f"{base.name} / {outfit}",
+                    still_path=kstill,
+                    is_costume=True,
+                    parent_id=base.id,
+                    parent_name=base.name,
+                )
+            )
+    # Orphan costumes (parent missing) still appear
+    for c in all_chars:
+        if c.is_base() or c.id in {x.id for x in out}:
+            continue
+        still = c.primary_still()
+        if not still or not Path(still).is_file():
+            continue
+        parent = by_id.get(c.parent_id or "")
+        if parent:
+            outfit = _costume_display_name(c.name, parent.name)
+            label = f"{parent.name} / {outfit}"
+            parent_name = parent.name
+        else:
+            label = c.name
+            parent_name = None
+        out.append(
+            CharacterPickerChoice(
+                id=c.id,
+                label=label,
+                still_path=still,
+                is_costume=True,
+                parent_id=c.parent_id,
+                parent_name=parent_name,
+            )
+        )
+    return out
+
+
+def find_picker_choice(char_id: str | None) -> CharacterPickerChoice | None:
+    if not char_id:
+        return None
+    for ch in character_picker_choices():
+        if ch.id == char_id:
+            return ch
+    return None
+
+
 _COSTUME_NAME_SEPS = (" – ", " — ", " - ")
 
 

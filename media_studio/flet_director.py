@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import flet as ft
 
 from media_studio.director_registry import (
+    ASPECT_AUTO_FROM_STILL,
     AUDIO_STYLES,
     CAMERA_PRESETS,
     OUTPUT_MODES,
@@ -22,14 +23,21 @@ from media_studio.director_registry import (
     DirectorShot,
     assemble_director_brief,
     default_director_model,
+    director_aspect_ui_choices,
     director_model_labels,
     estimate_director_cost,
     find_director_model,
     format_director_cost,
+    multi_prompt_char_counts,
+    multi_prompt_from_shots,
     normalize_transition,
+    preferred_character_still_bundle,
+    still_is_low_res,
+    validate_multi_prompt_limits,
     validate_shots,
 )
 from media_studio.director_service import run_director
+from media_studio.flet_character_picker import CharacterPicker
 from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_image
 from media_studio.flet_progress import JobProgress, classify_progress
@@ -101,12 +109,22 @@ class DirectorView:
             on_select=self._on_duration,
             expand=True,
         )
+        _aspect_opts0, _aspect_def0 = director_aspect_ui_choices(
+            spec0, has_start_image=False
+        )
         self.aspect_dd = styled_dropdown(
             label_text="Aspect",
-            options=list(spec0.aspect_choices),
-            value=spec0.default_aspect,
+            options=_aspect_opts0,
+            value=_aspect_def0,
             on_select=self._refresh_cost,
             expand=True,
+        )
+        self.aspect_hint = ft.Text(
+            "",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=2,
+            visible=False,
         )
         self.style_dd = styled_dropdown(
             label_text="Style / genre pack",
@@ -142,7 +160,7 @@ class DirectorView:
         self.cont_character = ft.Checkbox(
             label="Same character",
             value=True,
-            on_change=self._on_polish_change,
+            on_change=self._on_same_character_toggle,
         )
         self.cont_location = ft.Checkbox(
             label="Same location",
@@ -153,6 +171,23 @@ class DirectorView:
             label="Same time of day",
             value=True,
             on_change=self._on_polish_change,
+        )
+        self.btn_apply_char_all = ft.TextButton(
+            content="Apply character to all shots",
+            icon=ft.Icons.PERSON_ADD_ALT,
+            on_click=self._apply_character_to_all_shots,
+            style=ft.ButtonStyle(color=ACCENT),
+            tooltip=(
+                "Copy the first bound character onto every shot "
+                "(when Same character is on)."
+            ),
+            visible=True,
+        )
+        self.same_char_hint = ft.Text(
+            "Same character on: use Apply to fill all shots. Off: Alice on Shot 1, Charlie on Shot 2, etc.",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=2,
         )
         self.transition_dd = styled_dropdown(
             label_text="Default transition (all gaps)",
@@ -224,6 +259,14 @@ class DirectorView:
             border_color=BORDER,
             color=TEXT,
             text_size=FONT_SM,
+            on_change=self._on_polish_change,
+        )
+        self.prompt_count_label = ft.Text(
+            "",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=3,
+            selectable=True,
         )
         self._sync_audio_polish_visibility()
 
@@ -252,6 +295,14 @@ class DirectorView:
             media_kind="image",
         )
         self._ref_target_index: int = 0  # which shot receives strip stills
+        # Global picker kept as a quick “active shot / apply source” helper only
+        self.char_picker = CharacterPicker(
+            page,
+            on_select=self._on_global_character_picked,
+            on_clear=self._on_character_picker_clear,
+            label_text="Quick character (active shot)",
+            compact=True,
+        )
         self.btn_save_character = ft.TextButton(
             content="Save current still as character",
             icon=ft.Icons.PERSON_ADD_ALT_1_OUTLINED,
@@ -296,6 +347,7 @@ class DirectorView:
         self._add_shot_row(start=0, end=5, camera="Push in")
         self._add_shot_row(start=5, end=10, camera="Orbit")
         self._sync_shots_meta()
+        self._sync_apply_char_visibility()
         self._rebuild_assembled_text()
         self.cost_text.value = self._cost_label()
         self.apply_key_gates()
@@ -350,6 +402,7 @@ class DirectorView:
             self.model_best_for,
             self.model_notes,
             ft.Row([self.dur_dd, self.aspect_dd, self.style_dd], spacing=8),
+            self.aspect_hint,
             label("Audio intent", muted=True),
             self.gen_audio,
             self.audio_style_dd,
@@ -360,6 +413,12 @@ class DirectorView:
                 spacing=8,
                 wrap=True,
             ),
+            ft.Row(
+                [self.btn_apply_char_all],
+                spacing=8,
+                wrap=True,
+            ),
+            self.same_char_hint,
             ft.Row([self.transition_dd, self.output_mode_dd], spacing=8),
             self.transition_hint,
             self.energy_curve,
@@ -370,11 +429,17 @@ class DirectorView:
             self.shots_meta,
             self.shots_host,
             ft.Row([self.btn_add_shot], spacing=8),
-            label("Still refs for active shot (Previously used / From Resolve)", muted=True),
+            label(
+                "Extra stills for active shot (Previously used / From Resolve) — "
+                "Character is on each shot card",
+                muted=True,
+            ),
+            self.char_picker.root,
             self.prev_strip.root,
             self.resolve_strip.root,
             self.btn_save_character,
             self.assembled,
+            self.prompt_count_label,
             ft.Row([self.btn_rebuild, self.btn_enhance, self.btn_generate], spacing=8),
             self.cost_box,
             self.job_progress.control,
@@ -430,11 +495,16 @@ class DirectorView:
         try:
             spec = self._current_spec()
             audio = bool(self.gen_audio.value) if spec.supports_audio else False
-            n_refs = sum(
-                1
-                for row in self._shots
-                if row.get("ref_path") and Path(str(row["ref_path"])).is_file()
-            )
+            seen_paths: set[str] = set()
+            for row in self._shots:
+                for key in ("character_path", "ref_path"):
+                    p = row.get(key)
+                    if p and Path(str(p)).is_file():
+                        try:
+                            seen_paths.add(str(Path(str(p)).resolve()))
+                        except OSError:
+                            seen_paths.add(str(p))
+            n_refs = len(seen_paths)
             res = None
             if getattr(spec, "default_resolution", None):
                 res = spec.default_resolution
@@ -471,20 +541,56 @@ class DirectorView:
         self.dur_dd.options = dropdown_options(opts)
         if _dd(self.dur_dd) not in opts:
             self.dur_dd.value = str(spec.default_duration_s)
-        self.aspect_dd.options = dropdown_options(list(spec.aspect_choices))
-        if _dd(self.aspect_dd) not in spec.aspect_choices:
-            self.aspect_dd.value = spec.default_aspect
+        self._sync_aspect_options()
         self.gen_audio.visible = bool(spec.supports_audio)
         self.gen_audio.value = bool(spec.default_generate_audio)
         self._sync_audio_polish_visibility()
         self._trim_shots_to_max()
         self._sync_shots_meta()
         self.cost_text.value = self._cost_label()
-        self._rebuild_assembled_text()
+        self._rebuild_assembled_text()  # also refreshes multi_prompt char counts
         try:
             self.page.update()
         except Exception:
             pass
+
+    def _has_any_shot_ref(self) -> bool:
+        for row in self._shots:
+            rp = row.get("ref_path")
+            if rp and Path(rp).is_file():
+                return True
+            cp = row.get("character_path")
+            if cp and Path(cp).is_file():
+                return True
+        return False
+
+    def _sync_aspect_options(self) -> None:
+        """Only list ratios the selected model/path accepts; Auto when I2V."""
+        spec = self._current_spec()
+        has_ref = self._has_any_shot_ref()
+        opts, default = director_aspect_ui_choices(spec, has_start_image=has_ref)
+        self.aspect_dd.options = dropdown_options(opts)
+        cur = _dd(self.aspect_dd)
+        if cur not in opts:
+            self.aspect_dd.value = default
+        uses_i2v_auto = (
+            has_ref
+            and bool(spec.i2v_endpoint)
+            and (getattr(spec, "engine", None) or "kling_multi") == "kling_multi"
+            and not bool(getattr(spec, "i2v_accepts_aspect", False))
+        )
+        if uses_i2v_auto:
+            self.aspect_hint.value = (
+                "Start still attached — output aspect follows that image "
+                f"({ASPECT_AUTO_FROM_STILL}). T2V ratios apply only with no refs."
+            )
+            self.aspect_hint.visible = True
+        else:
+            allowed = ", ".join(spec.aspect_choices or ())
+            self.aspect_hint.value = (
+                f"Accepted for this model: {allowed or '—'}"
+            )
+            self.aspect_hint.visible = bool(allowed)
 
     async def _on_duration(self, e: ft.ControlEvent) -> None:
         self.cost_text.value = self._cost_label()
@@ -572,6 +678,9 @@ class DirectorView:
                 end = float(row["end"].value or 0)
             except (TypeError, ValueError):
                 end = 0.0
+            extras = row.get("character_extra_paths") or ()
+            if isinstance(extras, list):
+                extras = tuple(extras)
             out.append(
                 DirectorShot(
                     start_s=start,
@@ -579,6 +688,10 @@ class DirectorView:
                     camera=_dd(row["camera"]) or "Static",
                     action=(row["action"].value or "").strip(),
                     ref_path=row.get("ref_path"),
+                    character_path=row.get("character_path"),
+                    character_label=row.get("character_label"),
+                    character_id=row.get("character_id"),
+                    character_extra_paths=tuple(extras) if extras else (),
                 )
             )
         return out
@@ -611,6 +724,47 @@ class DirectorView:
             generate_audio=gen_audio,
         )
         self.assembled.value = brief
+        self._sync_prompt_counts()
+
+    def _sync_prompt_counts(self) -> None:
+        """Live multi_prompt character counts when model has a hard limit."""
+        try:
+            spec = self._current_spec()
+            max_c = getattr(spec, "multi_prompt_max_chars", None)
+            if not max_c:
+                self.prompt_count_label.value = ""
+                self.prompt_count_label.visible = False
+                return
+            gen_audio = bool(self.gen_audio.value) if self.gen_audio.visible else False
+            shots = self._collect_shots()
+            counts = multi_prompt_char_counts(
+                shots,
+                master=self.master.value or "",
+                style_pack=_dd(self.style_dd),
+                polish=self._collect_polish(),
+                generate_audio=gen_audio,
+                max_chars=int(max_c),
+            )
+            parts = [f"Shot {i + 1}: {n}/{max_c}" for i, (n, _, _) in enumerate(counts)]
+            over = [i + 1 for i, (n, _, _) in enumerate(counts) if n > int(max_c)]
+            line = " · ".join(parts) if parts else ""
+            if over:
+                self.prompt_count_label.value = (
+                    f"multi_prompt (after compact): {line} — OVER limit on shot(s) "
+                    f"{', '.join(str(x) for x in over)}. Shorten master/actions."
+                )
+                self.prompt_count_label.color = "#ef9a9a"
+            else:
+                self.prompt_count_label.value = (
+                    f"multi_prompt (Kling ≤{max_c}/shot, auto-compacted): {line}"
+                )
+                self.prompt_count_label.color = TEXT_MUTED
+            self.prompt_count_label.visible = True
+        except Exception:
+            try:
+                self.prompt_count_label.visible = False
+            except Exception:
+                pass
 
     async def _rebuild_assembled(self, e: ft.ControlEvent | None = None) -> None:
         self._rebuild_assembled_text()
@@ -728,6 +882,36 @@ class DirectorView:
             color=TEXT,
             weight=ft.FontWeight.W_700,
         )
+        # Placeholder row dict first so handlers can close over it
+        row: dict[str, Any] = {
+            "start": start_tf,
+            "end": end_tf,
+            "camera": cam_dd,
+            "action": action_tf,
+            "ref_label": ref_label,
+            "ref_thumb": ref_thumb,
+            "ref_empty": ref_empty,
+            "ref_path": None,
+            "character_path": None,
+            "character_label": None,
+            "character_id": None,
+            "character_extra_paths": (),
+            "title": title,
+            "btn_ref": btn_ref,
+            "btn_clear_ref": btn_clear_ref,
+            "btn_remove": btn_remove,
+            "gap_dd": None,
+            "gap_label": None,
+            "gap_host": None,
+        }
+        char_picker = CharacterPicker(
+            self.page,
+            on_select=self._make_shot_char_select(row),
+            on_clear=self._make_shot_char_clear(row),
+            label_text="Character (this shot)",
+            compact=True,
+        )
+        row["char_picker"] = char_picker
         card = ft.Container(
             content=ft.Column(
                 [
@@ -738,6 +922,8 @@ class DirectorView:
                     ),
                     ft.Row([start_tf, end_tf, cam_dd], spacing=8),
                     action_tf,
+                    label("Character (this shot)", muted=True),
+                    char_picker.root,
                     ft.Row(
                         [
                             ft.Container(
@@ -752,6 +938,7 @@ class DirectorView:
                                         [btn_ref, btn_clear_ref],
                                         spacing=4,
                                         tight=True,
+                                        wrap=True,
                                     ),
                                 ],
                                 spacing=4,
@@ -771,24 +958,7 @@ class DirectorView:
             border_radius=8,
             padding=10,
         )
-        row = {
-            "card": card,
-            "start": start_tf,
-            "end": end_tf,
-            "camera": cam_dd,
-            "action": action_tf,
-            "ref_label": ref_label,
-            "ref_thumb": ref_thumb,
-            "ref_empty": ref_empty,
-            "ref_path": None,
-            "title": title,
-            "btn_ref": btn_ref,
-            "btn_clear_ref": btn_clear_ref,
-            "btn_remove": btn_remove,
-            "gap_dd": None,
-            "gap_label": None,
-            "gap_host": None,
-        }
+        row["card"] = card
         self._shots.append(row)
         self._reindex_shots()
 
@@ -939,25 +1109,44 @@ class DirectorView:
 
         return _click
 
-    def _set_shot_ref(self, index: int, path: str | None) -> None:
-        if not (0 <= index < len(self._shots)):
-            return
-        row = self._shots[index]
-        if path and Path(path).is_file():
-            resolved = str(Path(path).resolve())
-            name = Path(resolved).name
-            row["ref_path"] = resolved
-            row["ref_label"].value = name
+    def _refresh_shot_still_ui(self, row: dict[str, Any]) -> None:
+        """Update main thumb / labels from scene ref + character bind."""
+        scene = row.get("ref_path")
+        char = row.get("character_path")
+        char_label = row.get("character_label")
+        show_path = None
+        if char and Path(str(char)).is_file():
+            # Character bind is the primary identity still on the row
+            show_path = str(char)
+            label = char_label or Path(str(char)).name
+            if scene and Path(str(scene)).is_file():
+                try:
+                    same = Path(str(scene)).resolve() == Path(str(char)).resolve()
+                except OSError:
+                    same = scene == char
+                if same:
+                    row["ref_label"].value = f"Character: {label}"
+                else:
+                    row["ref_label"].value = (
+                        f"Character: {label} · scene {Path(str(scene)).name}"
+                    )
+                    # Prefer showing character thumb for identity clarity
+            else:
+                row["ref_label"].value = f"Character: {label}"
             row["ref_label"].color = TEXT
-            try:
-                row["ref_label"].tooltip = resolved
-            except Exception:
-                pass
-            thumb = row.get("ref_thumb")
-            empty = row.get("ref_empty")
+        elif scene and Path(str(scene)).is_file():
+            show_path = str(scene)
+            row["ref_label"].value = Path(str(scene)).name
+            row["ref_label"].color = TEXT
+        else:
+            row["ref_label"].value = "No ref still"
+            row["ref_label"].color = TEXT_MUTED
+        thumb = row.get("ref_thumb")
+        empty = row.get("ref_empty")
+        if show_path:
             if thumb is not None:
                 try:
-                    thumb.src = resolved
+                    thumb.src = show_path
                     thumb.visible = True
                 except Exception:
                     pass
@@ -966,20 +1155,7 @@ class DirectorView:
                     empty.visible = False
                 except Exception:
                     pass
-            try:
-                self.prev_strip.record_and_refresh(resolved)
-            except Exception:
-                pass
         else:
-            row["ref_path"] = None
-            row["ref_label"].value = "No ref still"
-            row["ref_label"].color = TEXT_MUTED
-            try:
-                row["ref_label"].tooltip = "No ref still"
-            except Exception:
-                pass
-            thumb = row.get("ref_thumb")
-            empty = row.get("ref_empty")
             if thumb is not None:
                 try:
                     thumb.src = ""
@@ -991,9 +1167,149 @@ class DirectorView:
                     empty.visible = True
                 except Exception:
                     pass
-        # Grok Imagine Director cost scales with ref count
+
+    def _sync_row_char_picker(self, row: dict[str, Any]) -> None:
+        """Keep per-shot Character dropdown in sync with bound character_id."""
+        picker = row.get("char_picker")
+        if picker is None:
+            return
+        try:
+            cid = row.get("character_id")
+            picker.set_selection_silent(cid if cid else None)
+        except Exception:
+            pass
+
+    def _make_shot_char_select(self, row: dict[str, Any]):
+        def _on(path: str, choice) -> None:
+            try:
+                idx = self._shots.index(row)
+            except ValueError:
+                return
+            self._ref_target_index = idx
+            cid = getattr(choice, "id", None)
+            label = getattr(choice, "label", None) or Path(path).name
+            bundle = preferred_character_still_bundle(cid, still_path=path)
+            still = bundle.get("path") or path
+            extras = bundle.get("extras") or []
+            self._set_shot_character(
+                idx,
+                still,
+                label=bundle.get("label") or label,
+                char_id=bundle.get("id") or cid,
+                extras=extras,
+                sync_picker=False,
+            )
+            self._highlight_shot(idx)
+            warn = ""
+            if bundle.get("low_res") or still_is_low_res(still):
+                warn = " · low-res still — prefer 1K–2K Front"
+            self.status.value = (
+                f"Shot {idx + 1} · character: {bundle.get('label') or label}{warn}"
+            )
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _on
+
+    def _make_shot_char_clear(self, row: dict[str, Any]):
+        def _on() -> None:
+            try:
+                idx = self._shots.index(row)
+            except ValueError:
+                return
+            self._set_shot_character(idx, None, sync_picker=False)
+            self.status.value = f"Shot {idx + 1} · character cleared"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _on
+
+    def _set_shot_ref(self, index: int, path: str | None) -> None:
+        if not (0 <= index < len(self._shots)):
+            return
+        row = self._shots[index]
+        if path and Path(path).is_file():
+            resolved = str(Path(path).resolve())
+            row["ref_path"] = resolved
+            try:
+                self.prev_strip.record_and_refresh(resolved)
+            except Exception:
+                pass
+        else:
+            row["ref_path"] = None
+        self._refresh_shot_still_ui(row)
+        # Aspect dropdown: Auto when any ref (Kling I2V path)
+        try:
+            self._sync_aspect_options()
+        except Exception:
+            pass
         try:
             self.cost_text.value = self._cost_label()
+        except Exception:
+            pass
+        try:
+            self._sync_prompt_counts()
+        except Exception:
+            pass
+
+    def _set_shot_character(
+        self,
+        index: int,
+        path: str | None,
+        *,
+        label: str | None = None,
+        char_id: str | None = None,
+        extras: list[str] | tuple[str, ...] | None = None,
+        sync_picker: bool = True,
+    ) -> None:
+        """Bind (or clear) a saved character still on a shot — real image ref."""
+        if not (0 <= index < len(self._shots)):
+            return
+        row = self._shots[index]
+        if path and Path(path).is_file():
+            resolved = str(Path(path).resolve())
+            row["character_path"] = resolved
+            row["character_label"] = label or Path(resolved).name
+            row["character_id"] = char_id
+            row["character_extra_paths"] = tuple(extras or ())
+            # Selecting a character always binds preferred still as this shot's ref
+            row["ref_path"] = resolved
+            try:
+                self.prev_strip.record_and_refresh(resolved)
+            except Exception:
+                pass
+        else:
+            # Clearing character: if ref_path was the character still, clear it too
+            cp = row.get("character_path")
+            rp = row.get("ref_path")
+            if cp and rp:
+                try:
+                    if Path(str(cp)).resolve() == Path(str(rp)).resolve():
+                        row["ref_path"] = None
+                except OSError:
+                    if cp == rp:
+                        row["ref_path"] = None
+            row["character_path"] = None
+            row["character_label"] = None
+            row["character_id"] = None
+            row["character_extra_paths"] = ()
+        self._refresh_shot_still_ui(row)
+        if sync_picker:
+            self._sync_row_char_picker(row)
+        try:
+            self._sync_aspect_options()
+        except Exception:
+            pass
+        try:
+            self.cost_text.value = self._cost_label()
+        except Exception:
+            pass
+        try:
+            self._sync_prompt_counts()
         except Exception:
             pass
 
@@ -1121,6 +1437,119 @@ class DirectorView:
         except Exception:
             pass
 
+    def _on_global_character_picked(self, path: str, choice) -> None:
+        """Bottom quick picker → bind on active shot (each shot also has its own picker)."""
+        idx = int(getattr(self, "_ref_target_index", 0) or 0)
+        if not self._shots:
+            self._add_shot_row(start=0, end=5, camera="Push in")
+            idx = 0
+            self._ref_target_index = 0
+        if idx < 0 or idx >= len(self._shots):
+            idx = max(0, len(self._shots) - 1)
+            self._ref_target_index = idx
+        cid = getattr(choice, "id", None)
+        label = getattr(choice, "label", None) or Path(path).name
+        bundle = preferred_character_still_bundle(cid, still_path=path)
+        still = bundle.get("path") or path
+        extras = bundle.get("extras") or []
+        self._set_shot_character(
+            idx,
+            still,
+            label=bundle.get("label") or label,
+            char_id=bundle.get("id") or cid,
+            extras=extras,
+            sync_picker=True,
+        )
+        self._highlight_shot(idx)
+        warn = ""
+        if bundle.get("low_res") or still_is_low_res(still):
+            warn = " · low-res still — prefer 1K–2K Front"
+        self.status.value = (
+            f"Shot {idx + 1} · character: {bundle.get('label') or label}{warn}"
+        )
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _on_character_picker_clear(self) -> None:
+        # Global quick picker cleared — does not wipe per-shot binds
+        pass
+
+    async def _on_same_character_toggle(self, e: ft.ControlEvent | None = None) -> None:
+        self._sync_apply_char_visibility()
+        await self._on_polish_change(e)
+
+    def _sync_apply_char_visibility(self) -> None:
+        on = bool(self.cont_character.value)
+        self.btn_apply_char_all.visible = on
+        self.same_char_hint.value = (
+            "Same character on: pick on one shot, then Apply to all shots."
+            if on
+            else "Same character off: each shot can use a different character (Alice, Charlie, …)."
+        )
+
+    async def _apply_character_to_all_shots(self, e: ft.ControlEvent) -> None:
+        """Copy first bound character onto every shot (Same character workflow)."""
+        if not self._shots:
+            self.status.value = "Add a shot first."
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+        src: dict[str, Any] | None = None
+        for row in self._shots:
+            cp = row.get("character_path")
+            if cp and Path(str(cp)).is_file():
+                src = row
+                break
+        if src is None:
+            self.status.value = (
+                "Set a character on one shot first, then Apply to all shots."
+            )
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+        label = src.get("character_label")
+        cid = src.get("character_id")
+        path = src.get("character_path")
+        extras = src.get("character_extra_paths") or ()
+        for i in range(len(self._shots)):
+            self._set_shot_character(
+                i,
+                path,
+                label=label,
+                char_id=cid,
+                extras=extras,
+                sync_picker=True,
+            )
+        self.status.value = (
+            f"Applied character “{label or Path(str(path)).name}” to all "
+            f"{len(self._shots)} shot(s)."
+        )
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def refresh_character_picker(self) -> None:
+        try:
+            self.char_picker.refresh()
+        except Exception:
+            pass
+        for row in self._shots:
+            picker = row.get("char_picker")
+            if picker is None:
+                continue
+            try:
+                picker.refresh()
+                self._sync_row_char_picker(row)
+            except Exception:
+                pass
+
     async def _on_shot_field(self, e: ft.ControlEvent | None = None) -> None:
         self._rebuild_assembled_text()
         try:
@@ -1165,7 +1594,9 @@ class DirectorView:
                         "end_s": s.end_s,
                         "camera": s.camera,
                         "action": s.action,
-                        "has_ref": bool(s.ref_path),
+                        "has_ref": bool(s.ref_path or s.character_path),
+                        "has_character": bool(s.character_path),
+                        "character_label": s.character_label,
                         "transition_into_next": (
                             polish.gap_at(i) if i < len(shots) - 1 else None
                         ),
@@ -1271,6 +1702,50 @@ class DirectorView:
                 self.page.update()
                 return
 
+        # Kling multi_prompt 512 hard limit — compact then block if still over
+        max_c = getattr(spec, "multi_prompt_max_chars", None)
+        if max_c:
+            try:
+                multi = multi_prompt_from_shots(
+                    shots,
+                    master=master,
+                    style_pack=_dd(self.style_dd),
+                    polish=polish,
+                    generate_audio=bool(self.gen_audio.value)
+                    if self.gen_audio.visible
+                    else False,
+                    max_chars=int(max_c),
+                )
+                limit_errs = validate_multi_prompt_limits(multi, max_chars=int(max_c))
+                if limit_errs:
+                    self.status.value = "Cannot Generate — " + " · ".join(limit_errs)
+                    self._sync_prompt_counts()
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+                    return
+            except Exception as exc:
+                self.status.value = f"Cannot Generate — prompt check failed: {exc}"
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+                return
+
+        # Character bind must have a readable still file
+        for i, sh in enumerate(shots):
+            if sh.character_path and not Path(sh.character_path).is_file():
+                self.status.value = (
+                    f"Cannot Generate — Shot {i + 1} character still missing: "
+                    f"{sh.character_path}"
+                )
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+                return
+
         # Cost guard optional
         try:
             from media_studio.flet_dialogs import confirm_cost_if_needed
@@ -1316,7 +1791,11 @@ class DirectorView:
                 shots=shots,
                 model_label=_dd(self.model_dd),
                 duration_s=total,
-                aspect_ratio=_dd(self.aspect_dd),
+                aspect_ratio=(
+                    None
+                    if (_dd(self.aspect_dd) or "").lower().startswith("auto")
+                    else _dd(self.aspect_dd)
+                ),
                 style_pack=_dd(self.style_dd),
                 generate_audio=bool(self.gen_audio.value)
                 if self.gen_audio.visible

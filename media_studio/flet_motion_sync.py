@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import flet as ft
 
+from media_studio.flet_character_picker import CharacterPicker
 from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_image, pick_video
 from media_studio.flet_progress import JobProgress, classify_progress
@@ -256,6 +257,12 @@ class MotionSyncView:
             style=ft.ButtonStyle(color=ACCENT),
             tooltip="Open Characters tab with this still ready — add a name and Save",
         )
+        self.char_picker = CharacterPicker(
+            page,
+            on_select=self._on_character_picked,
+            on_clear=self._on_character_picker_clear,
+            label_text="Saved character",
+        )
         self.char_prev = PreviousSourcesStrip(
             page,
             get_output_dir=lambda: self.state.output_dir,
@@ -341,6 +348,7 @@ class MotionSyncView:
                         [self.char_empty, self.char_preview], width=140, height=140
                     ),
                     self.char_label,
+                    self.char_picker.root,
                     ft.Row(
                         [
                             self.btn_char,
@@ -752,6 +760,26 @@ class MotionSyncView:
 
     def _on_char_from_strip(self, path: str) -> None:
         self._set_character(path)
+
+    def _on_character_picked(self, path: str, choice) -> None:
+        """Character picker → fill character still (Front preferred)."""
+        ok = self._set_character(path, update=True)
+        if ok:
+            self.status.value = f"Character: {getattr(choice, 'label', Path(path).name)}"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+    def _on_character_picker_clear(self) -> None:
+        # Do not clear uploaded still automatically — only unlink picker selection
+        pass
+
+    def refresh_character_picker(self) -> None:
+        try:
+            self.char_picker.refresh()
+        except Exception:
+            pass
 
     def _set_character(self, path: str, *, update: bool = True) -> bool:
         p = Path(path)

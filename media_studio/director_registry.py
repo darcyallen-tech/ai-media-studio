@@ -6,9 +6,27 @@ Kling V3 / O3 multi_prompt (customize): up to 6 shots, total ≤ 15s.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+
+
+# UI label when I2V multi-shot derives frame size from the start still (no aspect param)
+ASPECT_AUTO_FROM_STILL = "Auto (from start still)"
+
+# Labels that mean "omit aspect_ratio from the API payload"
+_ASPECT_AUTO_LABELS = frozenset(
+    {
+        "auto",
+        "auto (from start still)",
+        "auto (from ref still)",
+        "default",
+        "—",
+        "none",
+        "",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -16,7 +34,7 @@ class DirectorModelSpec:
     key: str
     label: str
     endpoint: str
-    # image-to-video multi-shot uses start_image_url when any shot has a still
+    # image-to-video multi-shot when any shot has a still
     i2v_endpoint: str | None = None
     # Optional pure T2V when no shot refs (Grok Imagine)
     t2v_endpoint: str | None = None
@@ -25,8 +43,15 @@ class DirectorModelSpec:
     max_duration_s: int = 15
     allowed_durations: tuple[int, ...] = tuple(range(3, 16))
     default_duration_s: int = 10
+    # Exact API enum strings for T2V / R2V (never invent values)
     aspect_choices: tuple[str, ...] = ("16:9", "9:16", "1:1")
     default_aspect: str = "16:9"
+    # fal field name for aspect on T2V (None = endpoint has no aspect param)
+    aspect_param: str | None = "aspect_ratio"
+    # I2V: Kling O3/V3 have no aspect_ratio — frame follows the start image
+    i2v_accepts_aspect: bool = False
+    # I2V image field: V3 = start_image_url; O3 = image_url
+    i2v_image_param: str = "start_image_url"
     cost_per_second: float = 0.112  # ballpark @ no-audio / standard
     cost_per_second_audio: float | None = 0.168
     cost_per_second_by_resolution: dict[str, float] = field(default_factory=dict)
@@ -39,6 +64,10 @@ class DirectorModelSpec:
     # fal multi_prompt shot duration is integer seconds as string
     shot_min_s: int = 1
     shot_max_s: int = 15
+    # Runtime multi_prompt.prompt cap (Kling enforces 512 even when OpenAPI omits maxLength)
+    multi_prompt_max_chars: int | None = 512
+    # V3 I2V supports elements[] for real character binding (frontal + side refs)
+    supports_kling_elements: bool = False
     # "kling_multi" = multi_prompt; "grok_imagine" = single clip from refs + brief
     engine: str = "kling_multi"
 
@@ -54,9 +83,12 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         max_duration_s=15,
         cost_per_second=0.112,
         cost_per_second_audio=0.168,
+        multi_prompt_max_chars=512,
+        supports_kling_elements=True,
         notes=(
             "Kling V3 Pro multi-shot storyboard — up to 6 shots, total ≤15s. "
-            "Each shot has its own prompt + duration. Est. ~$0.11–0.17/s."
+            "multi_prompt ≤512 chars/shot. Character stills → elements + I2V. "
+            "Est. ~$0.11–0.17/s."
         ),
     ),
     "kling v3 standard multi-shot": DirectorModelSpec(
@@ -69,8 +101,11 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         max_duration_s=15,
         cost_per_second=0.084,
         cost_per_second_audio=0.126,
+        multi_prompt_max_chars=512,
+        supports_kling_elements=True,
         notes=(
             "Kling V3 Standard multi-shot — faster/cheaper than Pro. "
+            "multi_prompt ≤512 chars/shot. Character stills → elements + I2V. "
             "Up to 6 shots, total ≤15s. Est. ~$0.08–0.13/s."
         ),
     ),
@@ -85,9 +120,14 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         cost_per_second=0.112,
         cost_per_second_audio=0.168,
         default_generate_audio=False,
+        # OpenAPI: I2V required field is image_url (not start_image_url); no aspect_ratio
+        i2v_image_param="image_url",
+        i2v_accepts_aspect=False,
+        multi_prompt_max_chars=512,
+        supports_kling_elements=False,
         notes=(
-            "Kling O3 Pro multi-shot / director — multi-prompt storyboard, "
-            "optional native audio. Up to 6 shots, total ≤15s."
+            "Kling O3 Pro multi-shot / director — multi-prompt ≤512 chars/shot. "
+            "Character still → image_url I2V (identity). T2V: 16:9 / 9:16 / 1:1."
         ),
     ),
     "kling o3 standard multi-shot": DirectorModelSpec(
@@ -101,9 +141,13 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         cost_per_second=0.084,
         cost_per_second_audio=0.126,
         default_generate_audio=False,
+        i2v_image_param="image_url",
+        i2v_accepts_aspect=False,
+        multi_prompt_max_chars=512,
+        supports_kling_elements=False,
         notes=(
-            "Kling O3 Standard multi-shot — multi_prompt storyboard, cheaper than Pro. "
-            "Up to 6 shots, total ≤15s. Seedance / Wan / H3 are single-clip (not multi-shot)."
+            "Kling O3 Standard multi-shot — multi_prompt ≤512 chars/shot. "
+            "Character still → image_url I2V. Up to 6 shots, total ≤15s."
         ),
     ),
     "grok imagine 1.5 director": DirectorModelSpec(
@@ -127,12 +171,13 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         default_resolution="720p",
         supports_audio=False,  # native audio always
         default_generate_audio=False,
+        multi_prompt_max_chars=None,  # single prompt, not Kling multi_prompt
         engine="grok_imagine",
         notes=(
             "Grok Imagine Video 1.5 — one clip from master + ordered shot refs (up to 7). "
+            "Character stills are real image refs (not text-only). "
             "0 refs → T2V; 1 ref → I2V; 2+ refs → R2V with <IMAGE_n> tags. "
-            "Strong reference consistency, native audio, motion quality. "
-            "Est. $0.08–0.25/s by resolution + $0.01/ref. Not Kling multi_prompt."
+            "Est. $0.08–0.25/s by resolution + $0.01/ref."
         ),
     ),
 }
@@ -260,6 +305,16 @@ def normalize_transition(value: str | None) -> str:
     return "Hard cut"
 
 
+# Injected when a character still is bound (image ref on the API request)
+CHARACTER_IDENTITY_LOCK = (
+    "Same person as the reference character image — identical face, hair, body, and outfit."
+)
+
+# Compact continuity for multi_prompt (fits 512 budget)
+_CONT_COMPACT = "Lock: same person, place, time."
+_CONTINUE_COMPACT = "Continue same person/place/time."
+
+
 @dataclass
 class DirectorShot:
     """One ordered shot row."""
@@ -268,11 +323,39 @@ class DirectorShot:
     end_s: float = 5.0
     camera: str = "Push in"
     action: str = ""
+    # Scene / establishing / generic still (optional)
     ref_path: str | None = None
+    # Bound saved character still (real image ref — not text-only)
+    character_path: str | None = None
+    character_label: str | None = None
+    character_id: str | None = None
+    # Extra identity angles (Side / Close-up) when pack has them
+    character_extra_paths: tuple[str, ...] = ()
 
     @property
     def duration_s(self) -> float:
         return max(0.0, float(self.end_s) - float(self.start_s))
+
+    def has_character_bind(self) -> bool:
+        p = (self.character_path or "").strip()
+        return bool(p and Path(p).is_file())
+
+    def has_scene_ref(self) -> bool:
+        p = (self.ref_path or "").strip()
+        if not p or not Path(p).is_file():
+            return False
+        # Scene distinct from character still
+        if self.has_character_bind():
+            try:
+                return Path(p).resolve() != Path(self.character_path or "").resolve()
+            except OSError:
+                return p != self.character_path
+        return True
+
+    def has_any_still(self) -> bool:
+        return self.has_character_bind() or bool(
+            self.ref_path and Path(self.ref_path).is_file()
+        )
 
 
 @dataclass
@@ -383,6 +466,122 @@ def find_director_model(label_or_key: str | None) -> DirectorModelSpec | None:
 
 def default_director_model() -> DirectorModelSpec:
     return DIRECTOR_MODELS["kling v3 pro multi-shot"]
+
+
+def coerce_director_aspect_token(raw: str | None) -> str | None:
+    """
+    Normalize UI aspect to an API enum token, or None for Auto/omit.
+
+    Strips spaces, maps fullwidth colon, drops Auto labels.
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if s.lower() in _ASPECT_AUTO_LABELS or s.lower().startswith("auto"):
+        return None
+    s = s.replace("：", ":").replace("／", "/").replace(" ", "")
+    # Some UIs use 16x9
+    if "x" in s.lower() and ":" not in s:
+        parts = s.lower().split("x", 1)
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            s = f"{parts[0]}:{parts[1]}"
+    return s or None
+
+
+def director_aspect_ui_choices(
+    spec: DirectorModelSpec,
+    *,
+    has_start_image: bool,
+) -> tuple[list[str], str]:
+    """
+    Dropdown options + default for the selected model / path.
+
+    Kling multi-shot I2V (any shot ref): only Auto — API has no aspect_ratio.
+    T2V / models that accept aspect: exact enum list from the model.
+    """
+    uses_i2v = bool(
+        has_start_image
+        and spec.i2v_endpoint
+        and (getattr(spec, "engine", None) or "kling_multi") == "kling_multi"
+    )
+    if uses_i2v and not bool(getattr(spec, "i2v_accepts_aspect", False)):
+        return [ASPECT_AUTO_FROM_STILL], ASPECT_AUTO_FROM_STILL
+    choices = [c for c in (spec.aspect_choices or ()) if c]
+    if not choices:
+        choices = ["16:9"]
+    default = (spec.default_aspect or choices[0]).strip()
+    if default not in choices:
+        default = choices[0]
+    return list(choices), default
+
+
+def resolve_director_aspect_for_api(
+    spec: DirectorModelSpec,
+    aspect_ratio: str | None,
+    *,
+    has_start_image: bool,
+) -> tuple[str | None, str]:
+    """
+    Map UI aspect to API value (or None to omit).
+
+    Returns (api_value_or_None, note).
+    """
+    uses_i2v = bool(has_start_image and spec.i2v_endpoint)
+    is_kling = (getattr(spec, "engine", None) or "kling_multi") == "kling_multi"
+
+    if uses_i2v and is_kling and not bool(getattr(spec, "i2v_accepts_aspect", False)):
+        return None, "I2V multi-shot: aspect omitted (follows start still)."
+
+    if uses_i2v and not is_kling and not bool(getattr(spec, "i2v_accepts_aspect", False)):
+        # Grok I2V also has no aspect_ratio in schema
+        return None, "I2V: aspect omitted (follows start still)."
+
+    token = coerce_director_aspect_token(aspect_ratio)
+    allowed = tuple(spec.aspect_choices or ())
+    if not allowed:
+        return None, "No aspect enum for this model; omitting aspect_ratio."
+
+    if token is None:
+        # Auto on T2V → model default
+        chosen = (spec.default_aspect or allowed[0]).strip()
+        if chosen not in allowed:
+            chosen = allowed[0]
+        return chosen, f"aspect_ratio Auto → {chosen} (model default)."
+
+    if token in allowed:
+        return token, f"aspect_ratio={token!r}."
+
+    # Fuzzy match e.g. 16/9
+    soft = token.replace("/", ":")
+    if soft in allowed:
+        return soft, f"aspect_ratio {token!r} → {soft}."
+
+    # Fall back to default rather than send an invalid enum
+    chosen = (spec.default_aspect or allowed[0]).strip()
+    if chosen not in allowed:
+        chosen = allowed[0]
+    return (
+        chosen,
+        f"aspect_ratio {token!r} not in {list(allowed)}; using {chosen}.",
+    )
+
+
+def director_accepted_aspects_label(
+    spec: DirectorModelSpec,
+    *,
+    has_start_image: bool,
+) -> str:
+    """Human list of what this endpoint path accepts (for error text)."""
+    uses_i2v = bool(has_start_image and spec.i2v_endpoint)
+    is_kling = (getattr(spec, "engine", None) or "kling_multi") == "kling_multi"
+    if uses_i2v and is_kling and not bool(getattr(spec, "i2v_accepts_aspect", False)):
+        return "none (I2V derives frame size from the start still — do not send aspect_ratio)"
+    if uses_i2v and not bool(getattr(spec, "i2v_accepts_aspect", False)):
+        return "none (I2V derives frame size from the start still)"
+    allowed = list(spec.aspect_choices or ())
+    if not allowed:
+        return "none"
+    return ", ".join(allowed)
 
 
 def estimate_director_cost(
@@ -502,15 +701,15 @@ def validate_shots(
             if mode != "Continuous":
                 continue
             a, b = shots[g], shots[g + 1]
-            if not (a.ref_path and Path(a.ref_path).is_file()):
+            if not a.has_any_still():
                 errors.append(
                     f"Continuous between Shot {g + 1} and {g + 2}: "
-                    f"assign a ref still on Shot {g + 1} (motion keyframe)."
+                    f"assign a ref still or character on Shot {g + 1} (motion keyframe)."
                 )
-            if not (b.ref_path and Path(b.ref_path).is_file()):
+            if not b.has_any_still():
                 errors.append(
                     f"Continuous between Shot {g + 1} and {g + 2}: "
-                    f"assign a ref still on Shot {g + 2} (motion keyframe)."
+                    f"assign a ref still or character on Shot {g + 2} (motion keyframe)."
                 )
     return errors
 
@@ -520,17 +719,31 @@ def assemble_shot_prompt(
     *,
     index: int,
     style_pack: str | None = None,
+    compact: bool = False,
+    include_identity: bool = True,
 ) -> str:
-    """One multi_prompt element text (camera + action)."""
+    """One multi_prompt element text (camera + action [+ identity lock])."""
     cam = CAMERA_PROMPT_LANG.get(shot.camera, shot.camera or "camera move")
     action = (shot.action or "").strip()
-    bits = [f"Camera: {cam}."]
+    if compact:
+        bits = [f"{cam}."]
+    else:
+        bits = [f"Camera: {cam}."]
     if action:
         bits.append(action if action.endswith(".") else f"{action}.")
-    # Style pack is mainly on master; light echo only if set
-    style = (STYLE_PACKS.get(style_pack or "None") or "").strip()
-    if style and index == 0:
-        bits.append(style)
+    if include_identity and shot.has_character_bind():
+        name = (shot.character_label or "").strip()
+        if name:
+            bits.append(
+                f"Same person as {name} reference image — identical face, hair, body, and outfit."
+            )
+        else:
+            bits.append(CHARACTER_IDENTITY_LOCK)
+    # Style pack is mainly on master; light echo only if set and not compact
+    if not compact:
+        style = (STYLE_PACKS.get(style_pack or "None") or "").strip()
+        if style and index == 0:
+            bits.append(style)
     return " ".join(bits).strip()
 
 
@@ -551,6 +764,174 @@ def expand_master_with_polish(
     if not m:
         return extra
     return f"{m.rstrip('.')}. {extra}".strip()
+
+
+def _squash_ws(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def clamp_prompt_chars(text: str, max_chars: int) -> str:
+    """Hard clamp to max_chars (ellipsis if truncated)."""
+    t = _squash_ws(text)
+    if max_chars <= 0:
+        return ""
+    if len(t) <= max_chars:
+        return t
+    if max_chars <= 1:
+        return t[:max_chars]
+    return t[: max_chars - 1].rstrip(" .,;:") + "…"
+
+
+def compact_master_for_multi(master: str, *, budget: int = 160) -> str:
+    """
+    Strip fluff from master for multi_prompt shot 0.
+    Keep identity + location + core story; drop long style essays.
+    """
+    m = _squash_ws(master)
+    if not m:
+        return ""
+    # Drop common verbose lead-ins
+    m = re.sub(
+        r"^(please |make sure |ensure that |the video should |create a )+",
+        "",
+        m,
+        flags=re.I,
+    )
+    # Prefer first 1–2 sentences within budget
+    parts = re.split(r"(?<=[.!?])\s+", m)
+    out: list[str] = []
+    for p in parts:
+        cand = _squash_ws(" ".join(out + [p]))
+        if len(cand) <= budget:
+            out.append(p)
+        else:
+            break
+    if out:
+        return clamp_prompt_chars(" ".join(out), budget)
+    return clamp_prompt_chars(m, budget)
+
+
+def still_image_size(path: str | Path | None) -> tuple[int, int] | None:
+    """(width, height) or None if unreadable."""
+    if not path:
+        return None
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return None
+        from PIL import Image
+
+        with Image.open(p) as im:
+            w, h = im.size
+            return int(w), int(h)
+    except Exception:
+        return None
+
+
+def still_is_low_res(path: str | Path | None, *, min_edge: int = 512) -> bool:
+    """True if shortest edge is below min_edge (or unreadable treated as not low)."""
+    sz = still_image_size(path)
+    if not sz:
+        return False
+    return min(sz) < min_edge
+
+
+def preferred_character_still_bundle(
+    char_id: str | None = None,
+    *,
+    still_path: str | None = None,
+) -> dict[str, Any]:
+    """
+    Resolve best character still for Director binding.
+
+    Front preferred; among pack, prefer higher-res Front if multiple paths.
+    Returns keys: path, label, id, extras (other angles), low_res (bool).
+    """
+    out: dict[str, Any] = {
+        "path": None,
+        "label": None,
+        "id": char_id,
+        "extras": [],
+        "low_res": False,
+    }
+    try:
+        from media_studio.character_store import find_picker_choice, load_characters
+    except Exception:
+        if still_path and Path(still_path).is_file():
+            out["path"] = str(Path(still_path).resolve())
+            out["low_res"] = still_is_low_res(out["path"])
+        return out
+
+    entry = None
+    if char_id:
+        for c in load_characters():
+            if c.id == char_id:
+                entry = c
+                break
+    if entry is None and still_path:
+        # Match by primary path
+        try:
+            target = str(Path(still_path).resolve())
+        except OSError:
+            target = still_path
+        for c in load_characters():
+            for s in c.all_stills():
+                try:
+                    if str(Path(s).resolve()) == target:
+                        entry = c
+                        break
+                except OSError:
+                    if s == still_path:
+                        entry = c
+                        break
+            if entry:
+                break
+
+    if entry is not None:
+        primary = entry.primary_still()
+        # Prefer highest-res Front if pack has front; else largest available
+        pack = entry.normalized_identity()
+        front = pack.get("front") or primary
+        chosen = front or primary
+        # If front missing, pick largest still
+        if not chosen:
+            best_px = -1
+            for s in entry.all_stills():
+                sz = still_image_size(s)
+                px = (sz[0] * sz[1]) if sz else 0
+                if px > best_px and Path(s).is_file():
+                    best_px = px
+                    chosen = s
+        extras: list[str] = []
+        for s in entry.all_stills():
+            if not s or not Path(s).is_file():
+                continue
+            try:
+                if chosen and Path(s).resolve() == Path(chosen).resolve():
+                    continue
+            except OSError:
+                if s == chosen:
+                    continue
+            extras.append(str(Path(s).resolve()))
+        # Prefer parent name / costume label via picker
+        label = entry.name
+        try:
+            ch = find_picker_choice(entry.id)
+            if ch:
+                label = ch.label
+        except Exception:
+            pass
+        out["path"] = str(Path(chosen).resolve()) if chosen and Path(chosen).is_file() else None
+        out["label"] = label
+        out["id"] = entry.id
+        out["extras"] = extras[:3]
+        out["low_res"] = still_is_low_res(out["path"])
+        return out
+
+    if still_path and Path(still_path).is_file():
+        out["path"] = str(Path(still_path).resolve())
+        out["low_res"] = still_is_low_res(out["path"])
+    return out
 
 
 def assemble_director_brief(
@@ -611,40 +992,80 @@ def multi_prompt_from_shots(
     master: str | None = None,
     polish: DirectorPolish | None = None,
     generate_audio: bool = False,
+    max_chars: int | None = 512,
+    force_compact: bool | None = None,
 ) -> list[dict[str, str]]:
     """
     fal multi_prompt payload: [{prompt, duration}, …].
 
     Duration is integer seconds (shot length), string enum for API.
-    Master + polish continuity is woven into shot 1; later shots get per-gap
-    cut / dissolve / continuous language from polish.gap_transitions.
+    When ``max_chars`` is set (Kling 512), uses compact continuity + short master
+    and clamps each prompt. Character-bound shots get identity lock language.
     """
-    # Master expansion uses summary transition line (not every gap twice)
-    master_txt = expand_master_with_polish(
-        master or "", polish, generate_audio=generate_audio
-    )
-    cont = (
-        polish.continuity_line()
-        if polish
-        else "Continuity: same location, characters, and overall tone across all shots."
-    )
-    cont_short = cont or "Keep overall tone continuous across shots."
-    cont_bits: list[str] = []
-    if polish is None or polish.same_character:
-        cont_bits.append("characters")
-    if polish is None or polish.same_location:
-        cont_bits.append("scene")
-    if polish is None or polish.same_time_of_day:
-        cont_bits.append("time of day")
-    continue_line = (
-        f"Continue the same {' / '.join(cont_bits)}."
-        if cont_bits
-        else "Continue the sequence."
-    )
+    limit = int(max_chars) if max_chars and max_chars > 0 else None
+    # Auto-compact whenever a hard limit exists
+    compact = bool(force_compact) if force_compact is not None else bool(limit)
+
+    if compact:
+        master_txt = compact_master_for_multi(master or "", budget=160)
+        # Respect Same character / location / time toggles (multi-character across shots)
+        lock_bits: list[str] = []
+        cont_bits2: list[str] = []
+        if polish is None or polish.same_character:
+            lock_bits.append("person")
+            cont_bits2.append("person")
+        if polish is None or polish.same_location:
+            lock_bits.append("place")
+            cont_bits2.append("place")
+        if polish is None or polish.same_time_of_day:
+            lock_bits.append("time")
+            cont_bits2.append("time")
+        if lock_bits:
+            cont_short = f"Lock: same {'/'.join(lock_bits)}."
+            continue_line = f"Continue same {'/'.join(cont_bits2)}."
+        else:
+            cont_short = "New setup."
+            continue_line = "Next shot."
+        # Light audio hint only if generating and room exists later
+        if generate_audio and polish is not None:
+            style = (polish.audio_style or "").strip()
+            if style and style.lower() not in ("no music", "none"):
+                # Keep very short — may be dropped by clamp
+                master_txt = clamp_prompt_chars(
+                    f"{master_txt} Audio: {style}.".strip(), 180
+                )
+    else:
+        master_txt = expand_master_with_polish(
+            master or "", polish, generate_audio=generate_audio
+        )
+        cont = (
+            polish.continuity_line()
+            if polish
+            else "Continuity: same location, characters, and overall tone across all shots."
+        )
+        cont_short = cont or "Keep overall tone continuous across shots."
+        cont_bits: list[str] = []
+        if polish is None or polish.same_character:
+            cont_bits.append("characters")
+        if polish is None or polish.same_location:
+            cont_bits.append("scene")
+        if polish is None or polish.same_time_of_day:
+            cont_bits.append("time of day")
+        continue_line = (
+            f"Continue the same {' / '.join(cont_bits)}."
+            if cont_bits
+            else "Continue the sequence."
+        )
 
     out: list[dict[str, str]] = []
     for i, sh in enumerate(shots):
-        body = assemble_shot_prompt(sh, index=i, style_pack=style_pack)
+        body = assemble_shot_prompt(
+            sh,
+            index=i,
+            style_pack=style_pack,
+            compact=compact,
+            include_identity=True,
+        )
         if i == 0:
             if master_txt:
                 prompt = f"{master_txt.rstrip('.')}. {cont_short} {body}"
@@ -653,16 +1074,100 @@ def multi_prompt_from_shots(
         else:
             gap_key = polish.gap_at(i - 1) if polish else "Hard cut"
             gap_lang = GAP_INCOMING_PROMPT.get(gap_key) or GAP_INCOMING_PROMPT["Hard cut"]
-            # Continuous keeps stronger motion language; cut is a clear edit
-            if gap_key == "Continuous":
-                bridge = f"{gap_lang} {continue_line}"
+            if compact:
+                # Shorter gap bridge
+                short_gap = {
+                    "Hard cut": "Cut.",
+                    "Soft dissolve": "Soft dissolve.",
+                    "Continuous": "Continuous action.",
+                }.get(gap_key, "Cut.")
+                bridge = f"{short_gap} {continue_line}"
             else:
                 bridge = f"{gap_lang} {continue_line}"
             prompt = f"{bridge} {body}"
+        prompt = _squash_ws(prompt)
+        if limit:
+            # Prioritize action + identity: if over, rebuild with tiny master
+            if len(prompt) > limit:
+                core = assemble_shot_prompt(
+                    sh,
+                    index=i,
+                    style_pack=None,
+                    compact=True,
+                    include_identity=True,
+                )
+                if i == 0:
+                    tiny_m = compact_master_for_multi(master or "", budget=80)
+                    prompt = _squash_ws(
+                        f"{tiny_m} {_CONT_COMPACT} {core}" if tiny_m else f"{_CONT_COMPACT} {core}"
+                    )
+                else:
+                    prompt = _squash_ws(f"{_CONTINUE_COMPACT} {core}")
+            # Last resort: drop identity line then clamp
+            if len(prompt) > limit:
+                core2 = assemble_shot_prompt(
+                    sh,
+                    index=i,
+                    style_pack=None,
+                    compact=True,
+                    include_identity=False,
+                )
+                # Keep a short identity tag if character bound
+                id_tag = " Same person as ref image." if sh.has_character_bind() else ""
+                prompt = clamp_prompt_chars(f"{core2}{id_tag}", limit)
+            else:
+                prompt = clamp_prompt_chars(prompt, limit)
         dur = max(1, int(round(float(sh.end_s) - float(sh.start_s))))
         dur = min(15, max(1, dur))
         out.append({"prompt": prompt.strip(), "duration": str(dur)})
     return out
+
+
+def multi_prompt_char_counts(
+    shots: list[DirectorShot],
+    *,
+    master: str | None = None,
+    style_pack: str | None = None,
+    polish: DirectorPolish | None = None,
+    generate_audio: bool = False,
+    max_chars: int | None = 512,
+) -> list[tuple[int, int | None, str]]:
+    """
+    Per-shot (length, max_or_None, prompt_preview) after compaction rules.
+    """
+    multi = multi_prompt_from_shots(
+        shots,
+        style_pack=style_pack,
+        master=master,
+        polish=polish,
+        generate_audio=generate_audio,
+        max_chars=max_chars,
+    )
+    out: list[tuple[int, int | None, str]] = []
+    for m in multi:
+        p = m.get("prompt") or ""
+        out.append((len(p), max_chars, p[:80]))
+    return out
+
+
+def validate_multi_prompt_limits(
+    multi: list[dict[str, str]],
+    *,
+    max_chars: int | None,
+) -> list[str]:
+    """Return human errors if any multi_prompt entry exceeds max_chars."""
+    if not max_chars or max_chars <= 0:
+        return []
+    errs: list[str] = []
+    for i, m in enumerate(multi):
+        p = m.get("prompt") or ""
+        n = len(p)
+        if n > max_chars:
+            errs.append(
+                f"Shot {i + 1} prompt is {n} chars (max {max_chars}). "
+                "Shorten the master brief or per-shot action."
+            )
+    return errs
 
 
 def format_shot_list_text(
@@ -776,6 +1281,19 @@ def build_grok_imagine_director_arguments(
     if brief:
         # Prefer full assembled brief for a single-pass model
         prompt = brief if not prompt else f"{prompt}\n{brief}"
+    # Real character image refs require identity lock language (not "the character" alone)
+    char_labels = [
+        (sh.character_label or "character").strip()
+        for sh in shots
+        if sh.has_character_bind()
+    ]
+    if char_labels or any(sh.has_character_bind() for sh in shots):
+        names = ", ".join(dict.fromkeys(char_labels)) or "the bound character"
+        id_line = (
+            f"{CHARACTER_IDENTITY_LOCK} "
+            f"Match reference image(s) for {names}; preserve hair, face, body, outfit."
+        )
+        prompt = f"{(prompt or '').rstrip()}\n{id_line}".strip()
     prompt = (prompt or "").strip()
     if not prompt:
         raise ValueError("Enter a master brief or shot actions for Grok Imagine Director.")
@@ -790,7 +1308,6 @@ def build_grok_imagine_director_arguments(
     res = (resolution or spec.default_resolution or "720p").strip()
     if spec.resolution_choices and res not in spec.resolution_choices:
         res = spec.default_resolution or "720p"
-    ar = (aspect_ratio or spec.default_aspect or "16:9").strip()
 
     if len(urls) >= 2:
         endpoint = spec.endpoint  # reference-to-video
@@ -806,17 +1323,22 @@ def build_grok_imagine_director_arguments(
                 + f". Use {tags} as ordered visual keyframes / style refs "
                 f"matching Shot 1…{len(urls)}."
             )
+        ar, _note = resolve_director_aspect_for_api(
+            spec, aspect_ratio, has_start_image=False
+        )
         args: dict[str, Any] = {
             "prompt": prompt,
             "reference_image_urls": urls,
             "duration": total,
             "resolution": res,
-            "aspect_ratio": ar,
         }
+        if ar and (spec.aspect_param or "aspect_ratio"):
+            args[spec.aspect_param or "aspect_ratio"] = ar
         return endpoint, args
 
     if len(urls) == 1:
         endpoint = spec.i2v_endpoint or spec.endpoint
+        # Grok I2V: image_url only — no aspect_ratio in OpenAPI
         args = {
             "prompt": prompt,
             "image_url": urls[0],
@@ -827,12 +1349,16 @@ def build_grok_imagine_director_arguments(
 
     # No refs — pure T2V
     endpoint = spec.t2v_endpoint or spec.endpoint
+    ar, _note = resolve_director_aspect_for_api(
+        spec, aspect_ratio, has_start_image=False
+    )
     args = {
         "prompt": prompt,
         "duration": total,
         "resolution": res if res in ("480p", "720p", "1080p") else "720p",
-        "aspect_ratio": ar,
     }
+    if ar and (spec.aspect_param or "aspect_ratio"):
+        args[spec.aspect_param or "aspect_ratio"] = ar
     return endpoint, args
 
 
@@ -850,12 +1376,17 @@ def build_director_arguments(
     polish: DirectorPolish | None = None,
     ref_image_urls: list[str] | None = None,
     resolution: str | None = None,
+    # Kling V3 I2V character binding
+    elements: list[dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
     Returns (endpoint, arguments) for fal subscribe.
 
-    Kling: multi_prompt + shot_type=customize.
+    Kling: multi_prompt + shot_type=customize (≤512 chars/shot when limited).
     Grok Imagine: single clip T2V / I2V / R2V from shot refs.
+
+    Kling I2V OpenAPI has no aspect_ratio (frame follows start still).
+    O3 I2V uses image_url; V3 I2V uses start_image_url + optional elements.
     """
     if (getattr(spec, "engine", None) or "kling_multi") == "grok_imagine":
         return build_grok_imagine_director_arguments(
@@ -877,15 +1408,21 @@ def build_director_arguments(
     )
     if not spec.supports_audio:
         use_audio = False
+    max_chars = getattr(spec, "multi_prompt_max_chars", None)
     multi = multi_prompt_from_shots(
         shots,
         style_pack=style_pack,
         master=master,
         polish=polish,
         generate_audio=use_audio,
+        max_chars=max_chars,
     )
     if not multi:
         raise ValueError("At least one shot is required.")
+    limit_errs = validate_multi_prompt_limits(multi, max_chars=max_chars)
+    if limit_errs:
+        raise ValueError(" · ".join(limit_errs))
+
     total = sum(int(m["duration"]) for m in multi)
     total = max(spec.min_duration_s, min(spec.max_duration_s, total))
     # Prefer user total if valid and ≥ shot sum
@@ -896,24 +1433,174 @@ def build_director_arguments(
     if user_total >= total:
         total = max(spec.min_duration_s, min(spec.max_duration_s, user_total))
 
+    # I2V when we have a start still OR character elements need I2V endpoint
+    use_elements = bool(
+        elements
+        and getattr(spec, "supports_kling_elements", False)
+        and spec.i2v_endpoint
+    )
+    has_start = bool(start_image_url and spec.i2v_endpoint) or use_elements
+    # elements-only still requires I2V; if no start_image, reuse character frontal as start
+    if use_elements and not start_image_url:
+        try:
+            frontal = (elements[0] or {}).get("frontal_image_url")
+            if frontal:
+                start_image_url = frontal
+                has_start = True
+        except Exception:
+            pass
+
+    ar, ar_note = resolve_director_aspect_for_api(
+        spec, aspect_ratio, has_start_image=has_start
+    )
+
     args: dict[str, Any] = {
         "multi_prompt": multi,
         "shot_type": "customize",
         "duration": str(total),
-        "aspect_ratio": (aspect_ratio or spec.default_aspect or "16:9").strip(),
     }
+    # Only send aspect_ratio when this path accepts it (T2V enums)
+    if ar and (spec.aspect_param or "aspect_ratio"):
+        args[spec.aspect_param or "aspect_ratio"] = ar
+
     if generate_audio is not None and spec.supports_audio:
         args["generate_audio"] = bool(generate_audio)
     elif spec.supports_audio:
         args["generate_audio"] = bool(spec.default_generate_audio)
     neg = (negative_prompt or "").strip()
     if neg:
-        args["negative_prompt"] = neg
+        # Kling negative max ~2500; keep modest
+        args["negative_prompt"] = clamp_prompt_chars(neg, 500)
 
     endpoint = spec.endpoint
-    if start_image_url and spec.i2v_endpoint:
+    if has_start and spec.i2v_endpoint:
         endpoint = spec.i2v_endpoint
-        args["start_image_url"] = start_image_url
-        # Some I2V multi-shot still need aspect omitted or kept — keep aspect
+        img_param = (getattr(spec, "i2v_image_param", None) or "start_image_url").strip()
+        if start_image_url:
+            args[img_param] = start_image_url
+        for other in ("start_image_url", "image_url"):
+            if other != img_param and other in args:
+                del args[other]
+        if use_elements and elements:
+            args["elements"] = elements
+
+    # Stash resolve note for callers that log payload details (not sent to API)
+    if ar_note:
+        args["_aspect_note"] = ar_note
+    if max_chars:
+        args["_multi_prompt_max_chars"] = max_chars
 
     return endpoint, args
+
+
+def strip_director_internal_args(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Remove client-only keys before fal subscribe."""
+    return {k: v for k, v in arguments.items() if not str(k).startswith("_")}
+
+
+def collect_director_image_plan(
+    shots: list[DirectorShot],
+) -> dict[str, Any]:
+    """
+    Plan which stills bind as character vs scene for API upload.
+
+    Multi-character across shots is supported: each shot can bind a different
+    character. Returns ordered per-shot stills for Grok, and unique character
+    entries for Kling elements.
+
+    Returns:
+      character_primary: first character still path
+      characters: list[{path, label, id, extras}] unique by path, shot order
+      character_extras: extra identity angles (first character pack)
+      character_labels: labels for notes
+      scene_start: first scene/establishing still (distinct from characters)
+      all_ref_paths: ordered unique paths (per-shot character then scene)
+      per_shot_paths: list of primary still path per shot (character preferred)
+    """
+    char_primary: str | None = None
+    char_extras: list[str] = []
+    char_labels: list[str] = []
+    characters: list[dict[str, Any]] = []
+    char_seen: set[str] = set()
+    scene_start: str | None = None
+    ordered: list[str] = []
+    seen: set[str] = set()
+    per_shot: list[str | None] = []
+
+    def _add(path: str | None) -> None:
+        if not path:
+            return
+        try:
+            p = str(Path(path).resolve())
+        except OSError:
+            p = path
+        if not Path(p).is_file():
+            return
+        if p in seen:
+            return
+        seen.add(p)
+        ordered.append(p)
+
+    for sh in shots:
+        shot_primary: str | None = None
+        if sh.has_character_bind():
+            cp = str(Path(sh.character_path).resolve())  # type: ignore[arg-type]
+            shot_primary = cp
+            if char_primary is None:
+                char_primary = cp
+            _add(cp)
+            if sh.character_label:
+                char_labels.append(str(sh.character_label))
+            if cp not in char_seen:
+                char_seen.add(cp)
+                characters.append(
+                    {
+                        "path": cp,
+                        "label": sh.character_label,
+                        "id": sh.character_id,
+                        "extras": [
+                            str(Path(ex).resolve())
+                            for ex in (sh.character_extra_paths or ())
+                            if ex and Path(ex).is_file()
+                        ][:4],
+                    }
+                )
+            for ex in sh.character_extra_paths or ():
+                if not ex:
+                    continue
+                try:
+                    exr = str(Path(ex).resolve())
+                except OSError:
+                    exr = ex
+                if char_primary and exr == char_primary:
+                    continue
+                if exr not in char_extras:
+                    char_extras.append(exr)
+                _add(exr)
+        if sh.has_scene_ref() or (
+            sh.ref_path
+            and Path(sh.ref_path).is_file()
+            and not sh.has_character_bind()
+        ):
+            rp = str(Path(sh.ref_path).resolve())  # type: ignore[arg-type]
+            if shot_primary is None:
+                shot_primary = rp
+            if scene_start is None:
+                if char_primary is None or rp != char_primary:
+                    scene_start = rp
+            _add(rp)
+        elif sh.ref_path and Path(sh.ref_path).is_file() and not sh.has_character_bind():
+            _add(sh.ref_path)
+            if shot_primary is None:
+                shot_primary = str(Path(sh.ref_path).resolve())
+        per_shot.append(shot_primary)
+
+    return {
+        "character_primary": char_primary,
+        "characters": characters,
+        "character_extras": char_extras[:4],
+        "character_labels": char_labels,
+        "scene_start": scene_start,
+        "all_ref_paths": ordered,
+        "per_shot_paths": per_shot,
+    }

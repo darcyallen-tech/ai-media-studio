@@ -12,8 +12,12 @@ from media_studio.director_registry import (
     DirectorPolish,
     DirectorShot,
     build_director_arguments,
+    collect_director_image_plan,
     default_director_model,
+    director_accepted_aspects_label,
     find_director_model,
+    still_is_low_res,
+    strip_director_internal_args,
     validate_shots,
     write_shot_list_sidecar,
 )
@@ -28,6 +32,30 @@ from media_studio.pricing import (
 )
 
 ProgressCallback = Callable[[str], None]
+
+
+def _enrich_director_aspect_error(
+    message: str,
+    *,
+    sent_aspect: Any,
+    accepted: str,
+    endpoint: str,
+    ui_aspect: str | None,
+) -> str:
+    """Append sent vs accepted aspect detail when the API rejects aspect_ratio."""
+    low = (message or "").lower()
+    if "aspect" not in low and "aspect_ratio" not in low:
+        return message
+    sent_disp = "omitted" if sent_aspect is None else repr(sent_aspect)
+    ui_disp = repr(ui_aspect) if ui_aspect else "—"
+    extra = (
+        f" Sent aspect_ratio={sent_disp} (UI={ui_disp}); "
+        f"this endpoint accepts: {accepted}. "
+        f"Endpoint: {endpoint}."
+    )
+    if extra.strip() in (message or ""):
+        return message
+    return f"{message.rstrip()}{extra}"
 
 
 @dataclass
@@ -89,33 +117,157 @@ def run_director(
     notes: list[str] = []
     start_url: str | None = None
     ref_urls: list[str] = []
+    elements: list[dict[str, Any]] | None = None
     is_grok = (getattr(spec, "engine", None) or "") == "grok_imagine"
+    plan = collect_director_image_plan(shots)
+
+    # Low-res character warning (non-blocking)
+    for sh in shots:
+        if sh.has_character_bind() and still_is_low_res(sh.character_path):
+            notes.append(
+                f"Low-res character still ({Path(sh.character_path or '').name}) — "
+                "prefer 1K–2K Front for identity lock."
+            )
+
+    def _upload(path: str, label: str) -> str | None:
+        try:
+            progress(f"Uploading {label}: {Path(path).name}")
+            return upload_file(Path(path), on_progress=progress)
+        except Exception as exc:
+            notes.append(f"Skip {label} upload: {exc}")
+            return None
 
     if is_grok:
-        # Upload all shot ref stills in order (up to model max, typically 7)
+        # Per-shot order: each shot’s character/scene still as a real image ref
         cap = max(1, int(spec.max_shots or 7))
-        for sh in shots:
+        # Prefer per_shot_paths (shot order) then any remaining unique refs
+        upload_list: list[str] = []
+        for p in plan.get("per_shot_paths") or []:
+            if p and p not in upload_list:
+                upload_list.append(p)
+        for p in plan.get("all_ref_paths") or []:
+            if p not in upload_list:
+                upload_list.append(p)
+        for p in upload_list:
             if len(ref_urls) >= cap:
                 break
-            if sh.ref_path and Path(sh.ref_path).is_file():
-                try:
-                    progress(f"Uploading shot ref: {Path(sh.ref_path).name}")
-                    url = upload_file(Path(sh.ref_path), on_progress=progress)
-                    ref_urls.append(url)
-                    notes.append(f"Ref {len(ref_urls)}: {Path(sh.ref_path).name}")
-                except Exception as exc:
-                    notes.append(f"Skip ref upload: {exc}")
+            url = _upload(p, "ref")
+            if url:
+                ref_urls.append(url)
+                notes.append(f"Ref {len(ref_urls)}: {Path(p).name}")
+        if plan.get("character_labels"):
+            notes.append(
+                "Characters: " + ", ".join(dict.fromkeys(plan["character_labels"]))
+            )
+        if not ref_urls and any(sh.has_character_bind() for sh in shots):
+            return DirectorResult(
+                ok=False,
+                model_key=spec.key,
+                endpoint=spec.endpoint,
+                status=(
+                    "Character selected but still could not be uploaded. "
+                    "Check the Characters still file and retry."
+                ),
+                notes=notes,
+            )
     else:
-        # Prefer first shot with a ref still as start frame (I2V multi-shot)
-        for sh in shots:
-            if sh.ref_path and Path(sh.ref_path).is_file():
-                try:
-                    progress(f"Uploading shot ref: {Path(sh.ref_path).name}")
-                    start_url = upload_file(Path(sh.ref_path), on_progress=progress)
-                    notes.append(f"Start frame from shot ref: {Path(sh.ref_path).name}")
-                    break
-                except Exception as exc:
-                    notes.append(f"Skip ref upload: {exc}")
+        # Kling multi-shot: real image refs — multi-character via elements (V3)
+        # or first character as image_url start (O3)
+        chars = list(plan.get("characters") or [])
+        scene_path = plan.get("scene_start")
+        scene_url: str | None = None
+        path_to_url: dict[str, str] = {}
+
+        for ch in chars:
+            p = ch.get("path")
+            if not p:
+                continue
+            u = _upload(p, f"character {ch.get('label') or Path(p).name}")
+            if u:
+                path_to_url[p] = u
+                notes.append(
+                    f"Character: {ch.get('label') or Path(p).name}"
+                )
+            for ex in ch.get("extras") or []:
+                if ex in path_to_url:
+                    continue
+                eu = _upload(ex, "character angle")
+                if eu:
+                    path_to_url[ex] = eu
+
+        if scene_path:
+            scene_url = _upload(scene_path, "scene ref")
+            if scene_url:
+                notes.append(f"Scene still: {Path(scene_path).name}")
+
+        char_url = None
+        primary = plan.get("character_primary")
+        if primary and primary in path_to_url:
+            char_url = path_to_url[primary]
+        elif path_to_url:
+            char_url = next(iter(path_to_url.values()))
+
+        # Fallback: first generic ref_path if no character/scene plan
+        if not char_url and not scene_url:
+            for sh in shots:
+                if sh.ref_path and Path(sh.ref_path).is_file():
+                    scene_url = _upload(sh.ref_path, "shot ref")
+                    if scene_url:
+                        notes.append(f"Start frame: {Path(sh.ref_path).name}")
+                        break
+
+        if getattr(spec, "supports_kling_elements", False) and path_to_url:
+            # V3 I2V: one element per unique character (multi-character across shots)
+            elements = []
+            for ch in chars:
+                p = ch.get("path")
+                frontal = path_to_url.get(p) if p else None
+                if not frontal:
+                    continue
+                el: dict[str, Any] = {"frontal_image_url": frontal}
+                refs = [
+                    path_to_url[ex]
+                    for ex in (ch.get("extras") or [])
+                    if ex in path_to_url
+                ][:4]
+                if scene_url and scene_url not in refs and scene_url != frontal:
+                    refs.append(scene_url)
+                if refs:
+                    el["reference_image_urls"] = refs[:4]
+                elements.append(el)
+            if not elements and char_url:
+                elements = [{"frontal_image_url": char_url}]
+            start_url = scene_url or char_url
+            notes.append(
+                f"Kling elements: {len(elements or [])} character(s)"
+            )
+        elif char_url:
+            # O3 (no elements): first character is I2V start; others in multi_prompt text
+            start_url = char_url
+            n_chars = len(chars)
+            if n_chars > 1:
+                notes.append(
+                    f"O3 I2V: {n_chars} characters bound in prompts; "
+                    "single image_url uses first character still."
+                )
+            if scene_url and scene_url != char_url:
+                notes.append(
+                    "Scene still noted in prompt only — O3 I2V has a single image_url."
+                )
+        else:
+            start_url = scene_url
+
+        if any(sh.has_character_bind() for sh in shots) and not char_url:
+            return DirectorResult(
+                ok=False,
+                model_key=spec.key,
+                endpoint=spec.endpoint,
+                status=(
+                    "Character selected but still could not be uploaded as an image ref. "
+                    "Check the still file and retry."
+                ),
+                notes=notes,
+            )
 
     try:
         endpoint, arguments = build_director_arguments(
@@ -130,6 +282,7 @@ def run_director(
             negative_prompt=negative_prompt,
             polish=polish,
             ref_image_urls=ref_urls or None,
+            elements=elements,
         )
     except ValueError as exc:
         return DirectorResult(
@@ -140,6 +293,41 @@ def run_director(
             notes=notes,
         )
 
+    aspect_note = str(arguments.pop("_aspect_note", "") or "")
+    if aspect_note:
+        notes.append(aspect_note)
+    mp_max = arguments.pop("_multi_prompt_max_chars", None)
+    multi = arguments.get("multi_prompt") or []
+    if isinstance(multi, list) and multi:
+        counts = [len((m or {}).get("prompt") or "") for m in multi if isinstance(m, dict)]
+        if counts:
+            mx = max(counts)
+            notes.append(
+                f"multi_prompt chars: {counts}"
+                + (f" (max {mp_max})" if mp_max else "")
+            )
+            progress(
+                f"multi_prompt lengths: {counts}"
+                + (f" · limit {mp_max}/shot" if mp_max else "")
+            )
+            if mp_max and mx > int(mp_max):
+                return DirectorResult(
+                    ok=False,
+                    model_key=spec.key,
+                    endpoint=endpoint,
+                    status=(
+                        f"Prompt still over limit after compact — max shot is {mx} chars "
+                        f"(limit {mp_max}). Shorten master brief or shot actions."
+                    ),
+                    notes=notes,
+                )
+    api_args = strip_director_internal_args(arguments)
+    sent_aspect = api_args.get("aspect_ratio")
+    has_start = bool(start_url) or bool(
+        api_args.get("image_url") or api_args.get("start_image_url")
+    )
+    accepted = director_accepted_aspects_label(spec, has_start_image=has_start)
+
     kind = (
         f"Grok Imagine · {len(ref_urls)} ref(s)"
         if is_grok
@@ -147,28 +335,46 @@ def run_director(
     )
     progress(f"{spec.label} · {kind}")
     progress(f"Endpoint: {endpoint}")
+    if sent_aspect is not None:
+        progress(f"aspect_ratio={sent_aspect!r} (accepts: {accepted})")
+    else:
+        progress(f"aspect_ratio omitted (accepts: {accepted})")
     progress("Running Director on fal…")
 
     t0 = time.perf_counter()
     try:
-        result = subscribe(endpoint, arguments, on_progress=progress)
+        result = subscribe(endpoint, api_args, on_progress=progress)
     except FalClientError as exc:
         render_s = time.perf_counter() - t0
+        status = _enrich_director_aspect_error(
+            str(exc),
+            sent_aspect=sent_aspect,
+            accepted=accepted,
+            endpoint=endpoint,
+            ui_aspect=aspect_ratio,
+        )
         return DirectorResult(
             ok=False,
             model_key=spec.key,
             endpoint=endpoint,
-            status=str(exc),
+            status=status,
             notes=notes,
             metrics_line=format_render_metrics(render_s, None, cost_is_estimate=True),
         )
     except Exception as exc:
         render_s = time.perf_counter() - t0
+        status = _enrich_director_aspect_error(
+            friendly_error(exc, context="Director"),
+            sent_aspect=sent_aspect,
+            accepted=accepted,
+            endpoint=endpoint,
+            ui_aspect=aspect_ratio,
+        )
         return DirectorResult(
             ok=False,
             model_key=spec.key,
             endpoint=endpoint,
-            status=friendly_error(exc, context="Director"),
+            status=status,
             notes=notes,
             metrics_line=format_render_metrics(render_s, None, cost_is_estimate=True),
         )

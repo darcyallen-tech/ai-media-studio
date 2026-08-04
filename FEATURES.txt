@@ -59,6 +59,11 @@ Voice Clone stays under Audio.
 - Lock / protect: skips retention auto-delete; lock icon on list; unlock anytime
 - Generate variation (optional); Use in Motion Sync on base + costumes
 - Shortcuts: Save as character from Motion Sync, Director, Studio Image
+- **Character picker** (app-wide): one-click fill of person still slots from
+  saved characters / costume variants (Front preferred; “Alice / Red Dress”
+  labels). Motion Sync · Director shot ref · Creative Vision start/source ·
+  Studio Image I2I/R2I. Clear character unlinks picker only; Upload /
+  Previously used / From Resolve / Library paths remain.
 - Survives app restart (local store); Voice Clone stays under Audio
 
 ==============================================================================
@@ -67,8 +72,8 @@ MOTION SYNC (character + driving video)
 Peer tab for motion transfer: a character still performs actions from a driving
 clip (realtor hooks, trend content) while preserving identity.
 
-- Character still: upload / Previously used / From Resolve (full-body or clear
-  upper body, good light, simple background preferred)
+- Character still: **Saved character** picker + upload / Previously used /
+  From Resolve (full-body or clear upper body, good light, simple background preferred)
 - Motion reference: upload video / From Resolve; duration shown when loaded
   (clean single subject, 3–10s ideal; long/large clips auto-proxy — original kept)
 - Best-practice tips always visible on the tab
@@ -113,6 +118,17 @@ from a master brief + ordered shot list (not for editing existing plates).
 
 - Master: global prompt, total duration (model max, e.g. 3–15s), aspect, style pack
   (None | Cinematic | Marvel-style | Documentary | Luxury RE), multi-shot model only
+- Aspect: only ratios the selected model/path accepts (Kling T2V: 16:9 · 9:16 · 1:1).
+  With a shot ref still, Kling I2V multi-shot uses Auto (from start still) — API has no
+  aspect_ratio (frame follows the still). O3 I2V field is image_url; V3 uses start_image_url.
+  Errors show sent vs accepted when aspect is rejected.
+- multi_prompt ≤512 chars/shot (Kling): auto-compact master/continuity; live counts;
+  Generate blocked if still over after compact.
+- Character bind: every shot card has Character (this shot) picker + thumb + Clear;
+  multi-character across shots (Alice on 1, Charlie on 2). Same character + Apply to all
+  shots for speed. Real image ref on request + identity language. V3 → elements[] per
+  character; O3 → image_url; Grok → ordered refs. Manual Ref still / Previously used /
+  From Resolve remain. Low-res warn when short edge <512.
 - Models (multi-shot / reference): Kling V3 Pro / Standard Multi-Shot, Kling O3 Pro /
   Standard Multi-Shot; **Grok Imagine 1.5 · Reference storyboard** (single clip from
   ordered shot refs via T2V/I2V/R2V — not Kling multi_prompt). Seedance / Wan / H3
@@ -121,8 +137,8 @@ from a master brief + ordered shot list (not for editing existing plates).
   duration / audio
 - Shot list 2–6 rows (hard-capped by model): start/end time, camera preset
   (Push in / Orbit / Crane / Static / Pan / Tilt / Handheld…), per-shot action,
-  optional ref still (upload / Previously used / From Resolve) with ~64px thumbnail
-  + filename (Clear ref; empty state “No ref still”)
+  optional ref still (**Saved character** picker / upload / Previously used /
+  From Resolve) with ~64px thumbnail + filename (Clear ref; empty state “No ref still”)
 - Phase 2 polish (prompt-level): audio intent (Generate audio + No music | Soft bed |
   Full score + optional SFX notes); continuity toggles (Same character / location /
   time of day); per-gap transition (Hard cut | Soft dissolve | Continuous — no cut,
@@ -183,7 +199,7 @@ Same-row modality sub-tabs (to the right of Image | Video):
 - T2I — no source required; text-to-image models; Size/aspect from T2I presets
 - R2I — primary + multi-ref stills; only models with max_refs > 1
 - Region — colored boxes + per-box prompts (Seedream annotation); was Standard/Region toggle
-- Source still upload + Previously used + From Resolve (handoff stills)
+- Source still: **Saved character** picker + upload + Previously used + From Resolve
 - Multi-reference stills (R2I only):
     Primary source + optional “Add reference” slots up to model max
     Nano Banana family / Seedream / Flux multi-ref / Grok Imagine: multi-ref
@@ -372,7 +388,8 @@ Shared Vision UI:
     never a bare unit rate alone
   - Optional cost guard (Settings: warn at $2+ / $5+; default off)
   - Result: play (video, CONTAIN) / preview (still), Library, Resolve, Send to ▾
-  - Previously used + From Resolve stills on I2I / I2V / bridge start where relevant
+  - **Saved character** picker + Previously used + From Resolve on I2I / I2V /
+    bridge start (person stills)
 
 Helper (None) also applies to Studio scene-builder helpers (style / density /
 camera) and Audio prompt builders (Music / SFX / Ambience / Video→SFX chips)

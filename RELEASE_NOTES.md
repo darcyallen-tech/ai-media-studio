@@ -43,6 +43,7 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - **Costume swap** model picker, per-slot errors, child under parent; Use in Motion Sync on both
 - **Lock** protects from retention cleanup; delete parent confirms if costumes exist
 - Shortcuts from Motion Sync / Director / Studio; Voice Clone stays under Audio
+- **Phase 3 — Character picker**: compact **Saved character** dropdown (thumb + name; costumes as `Parent / Outfit`) on Motion Sync, Director (active shot ref), Creative Vision (start/source still), and Studio Image (I2I/R2I source). One click fills Front (or best available); Clear character unlinks picker only; Upload / Previously used / From Resolve / Library still work beside it
 
 ### Motion Sync tab
 - New main tab **Motion Sync** — character still + driving video → motion transfer
@@ -63,6 +64,9 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 ### Director tab (multi-shot)
 - New main tab **Director** (peer to Studio / Creative Vision / Frame Editor)
 - Master brief + total duration/aspect/style pack; multi-shot models only (Kling V3 Pro/Standard, O3 Pro/Standard)
+- **Aspect fix**: Kling I2V multi-shot (any shot ref) no longer sends `aspect_ratio` (not in OpenAPI — frame follows start still; UI shows **Auto (from start still)**). O3 I2V uses `image_url`; V3 uses `start_image_url`. T2V lists only `16:9` / `9:16` / `1:1`. Errors report sent vs accepted.
+- **Prompt 512 + character bind**: Kling multi_prompt auto-compacts to ≤512 chars/shot (live counts; block Generate if still over). Saved character binds a real still (Front preferred) as image ref — V3 `elements`, O3 `image_url`, Grok ref list — plus identity-lock language; shot-row badge/thumb; low-res warn.
+- **Per-shot Character control**: each Director shot card has its own Character (this shot) picker; multi-character across shots; **Apply character to all shots** when Same character is on.
 - **Est. cost** chrome matches Studio (bordered block under Generate; live on model / duration / audio)
 - Ordered shot list (up to model max, typically 6): start/end times, camera presets, per-shot action, optional ref still with **thumbnail** (~64px) + filename
 - Fail-safes: times within total duration, no overlap, clear Generate blocks

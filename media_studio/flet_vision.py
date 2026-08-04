@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import flet as ft
 
+from media_studio.flet_character_picker import CharacterPicker
 from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_audio, pick_image, pick_video
 from media_studio.flet_progress import JobProgress, classify_progress
@@ -337,6 +338,12 @@ class CreativeVisionView:
             icon=ft.Icons.IMAGE_OUTLINED,
             on_click=self._pick_end,
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+        )
+        self.char_picker = CharacterPicker(
+            page,
+            on_select=self._on_character_picked,
+            on_clear=self._on_character_picker_clear,
+            label_text="Saved character",
         )
         # Strength for Image→Image when model supports it
         self.strength_label = ft.Text(
@@ -713,6 +720,7 @@ class CreativeVisionView:
                 spacing=16,
                 tight=True,
             ),
+            self.char_picker.root,
             self.refs_hint,
             self.refs_actions_row,
             self.refs_chips,
@@ -2340,6 +2348,30 @@ class CreativeVisionView:
         else:
             self.receive_start_frame(files[0].path)
         self.page.update()
+
+    def _on_character_picked(self, path: str, choice) -> None:
+        """Character picker → fill source / start still (Front preferred)."""
+        label = getattr(choice, "label", None) or Path(path).name
+        status = f"Character: {label}"
+        if self._mode == "image_to_image":
+            ok = self.receive_i2i_source(path, status=status)
+        else:
+            ok = self.receive_start_frame(path, status=status)
+        if ok:
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+    def _on_character_picker_clear(self) -> None:
+        # Unlink picker only — keep manual / strip stills
+        pass
+
+    def refresh_character_picker(self) -> None:
+        try:
+            self.char_picker.refresh()
+        except Exception:
+            pass
 
     async def _pick_end(self, e: ft.ControlEvent) -> None:
         try:
