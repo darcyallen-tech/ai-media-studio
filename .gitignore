@@ -67,3 +67,10 @@ desktop.ini
 # Local studio path markers (machine-specific)
 **/studio_root.txt
 !resolve_scripts/studio_root.txt.example
+
+# Local character data (do not ship)
+data/character_stills/
+data/characters.json
+data/characters/
+**/character_stills/
+characters.json
