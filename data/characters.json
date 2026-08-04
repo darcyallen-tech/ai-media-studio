@@ -1,12 +1,36 @@
 {
   "characters": [
     {
+      "id": "6ac291689122",
+      "name": "Camera Man – Secret Identity",
+      "still_path": "C:\\Users\\Darcy\\ai-media-studio\\data\\character_stills\\camera-man-secret-identity_6ac291689122_front.png",
+      "still_paths": [
+        "C:\\Users\\Darcy\\ai-media-studio\\data\\character_stills\\camera-man-secret-identity_6ac291689122_front.png"
+      ],
+      "identity": {
+        "front": "C:\\Users\\Darcy\\ai-media-studio\\data\\character_stills\\camera-man-secret-identity_6ac291689122_front.png"
+      },
+      "notes": "Costume variant: Change the outfit only: dress the subject in a professional tailored business suit — structured single-breasted blazer with clean lapels, matching dress trousers with a sharp crease, crisp dress shirt, and a refined necktie. Fabrics look premium (smooth wool-blend suit, cotton shirt). Add thick-rimmed eyeglasses with a solid, bold frame. Keep fit natural to the body, correct drape and tailoring, realistic fabric folds and seams. Do not alter face, hair, body, pose, background, or camera.",
+      "created_at": "2026-08-04T03:34:28+00:00",
+      "updated_at": "2026-08-04T04:14:25+00:00",
+      "parent_id": "9397d0c4ca3f",
+      "locked": false
+    },
+    {
       "id": "9397d0c4ca3f",
       "name": "Camera Man",
-      "still_path": "C:\\Users\\Darcy\\ai-media-studio\\data\\character_stills\\camera-man_9397d0c4ca3f.png",
+      "still_path": "C:\\Users\\Darcy\\ai-media-studio\\data\\character_stills\\camera-man_9397d0c4ca3f_front.png",
+      "still_paths": [
+        "C:\\Users\\Darcy\\ai-media-studio\\data\\character_stills\\camera-man_9397d0c4ca3f_front.png"
+      ],
+      "identity": {
+        "front": "C:\\Users\\Darcy\\ai-media-studio\\data\\character_stills\\camera-man_9397d0c4ca3f_front.png"
+      },
       "notes": "",
       "created_at": "2026-08-04T02:28:55+00:00",
-      "updated_at": "2026-08-04T02:28:55+00:00"
+      "updated_at": "2026-08-04T04:13:12+00:00",
+      "parent_id": null,
+      "locked": false
     }
   ]
 }

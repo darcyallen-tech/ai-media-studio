@@ -124,7 +124,7 @@ Dashboards:
 | **Motion Sync** | Character still + driving video → motion transfer (Kling Motion Control, Wan Motion) |
 | **Frame Editor** | Aleph 2.0 keyframe edit via **Runware** + optional fal 1080p proxy |
 | **Audio** | Music, SFX, Ambience, VO, Voice clone, **Video → SFX** |
-| **Characters** | Save reusable character stills for Motion Sync, Director, Creative Vision (multi-angle + I2I variation) |
+| **Characters** | Identity pack, costume children, bg-remove, lock, Motion Sync handoff |
 | **Library** | History; filters including **From Resolve**; Send to Studio / Tools / Frame Editor / Resolve |
 
 ### Creative Vision highlights

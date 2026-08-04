@@ -45,16 +45,16 @@ Voice Clone stays under Audio.
 
 - Upload still, or pick from Previously used / From Resolve; optional Open Library
 - Name (required) + optional notes / tags → Save
-- Multi-angle: up to 3 stills per character (primary + optional extras); list shows
-  primary thumb; Edit manages angles
-- Generate variation: simple I2I face-lock (Flux 2 Pro) from primary still — save as
-  new character, add as angle, or replace primary
-- Shortcuts: “Save as character” / “Save current still as character” from Motion Sync,
-  Director (active shot ref), and Studio Image (source or result) prefills Characters
-- Saved list: thumbnail, name, notes; Edit · Delete · Show in folder ·
-  Use in Motion Sync (sets primary still + switches to Motion Sync)
-- Empty state explains one-click use in Motion Sync, Director, and more
-- Survives app restart (local store)
+- Identity pack (up to 3): Front (primary) · Side (profile) · Close-up (face);
+  list thumb = Front (or first available); Edit manages slots; click thumb → large preview
+- Remove background (Bria RMBG, manual): per slot + all-angles batch; cost shown;
+  preview Confirm/Dismiss (no auto-overwrite on upload)
+- Costume swap: multi-ref I2I per filled slot; per-slot Regenerate; saves as child
+  costume under parent (collapsed Costumes section); replace angles optional
+- Lock / protect: skips retention auto-delete; lock icon on list; unlock anytime
+- Generate variation (optional); Use in Motion Sync on base + costumes
+- Shortcuts: Save as character from Motion Sync, Director, Studio Image
+- Survives app restart (local store); Voice Clone stays under Audio
 
 ==============================================================================
 MOTION SYNC (character + driving video)

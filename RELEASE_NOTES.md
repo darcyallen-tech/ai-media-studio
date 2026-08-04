@@ -36,10 +36,11 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 ### Characters tab
 - New main tab **Characters** — save reusable character stills (local store only)
-- Upload / Previously used / From Resolve; name + optional notes/tags; Edit · Delete · Show in folder
-- **Use in Motion Sync** sets the character still and focuses Motion Sync
-- **Phase 2:** multi-angle (1–3 stills), **Generate variation** (I2I face-lock), shortcuts from Motion Sync / Director / Studio
-- Curated subset of Library (not a replacement); Voice Clone remains under Audio
+- **Identity pack** Front / Side / Close-up; large preview on thumb click
+- **Remove background** (Bria RMBG) per slot or all angles; cost shown; Confirm before replace
+- **Costume swap** → child under parent (collapsed Costumes); per-slot regen; Use in Motion Sync on both
+- **Lock** protects from retention cleanup; delete parent confirms if costumes exist
+- Shortcuts from Motion Sync / Director / Studio; Voice Clone stays under Audio
 
 ### Motion Sync tab
 - New main tab **Motion Sync** — character still + driving video → motion transfer

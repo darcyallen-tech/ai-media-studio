@@ -317,6 +317,23 @@ def apply_retention(
         stats.details.append(f"handoff: deleted {h.get('deleted', 0)}")
     except Exception as exc:
         stats.errors += 1
+
+    # Characters store: age-prune unlocked only (locked skip)
+    if retention_days and retention_days > 0:
+        try:
+            from media_studio.character_store import prune_unlocked_characters
+
+            cs = prune_unlocked_characters(retention_days=int(retention_days))
+            stats.deleted += int(cs.get("deleted_files") or 0)
+            if cs.get("deleted_chars") or cs.get("skipped_locked"):
+                stats.details.append(
+                    "characters: removed "
+                    f"{cs.get('deleted_chars', 0)} unlocked · "
+                    f"skipped locked {cs.get('skipped_locked', 0)}"
+                )
+        except Exception as exc:
+            stats.errors += 1
+            stats.details.append(f"characters: {exc}")
         stats.details.append(f"handoff: {exc}")
 
     return stats
