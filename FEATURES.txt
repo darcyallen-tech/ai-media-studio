@@ -43,16 +43,19 @@ Peer tab for motion transfer: a character still performs actions from a driving
 clip (realtor hooks, trend content) while preserving identity.
 
 - Character still: upload / Previously used / From Resolve (full-body or clear
-  upper body works best)
+  upper body, good light, simple background preferred)
 - Motion reference: upload video / From Resolve; duration shown when loaded
-  (clean subject motion, roughly 3–30s depending on model)
+  (clean single subject, 3–10s ideal; long/large clips auto-proxy — original kept)
+- Best-practice tips always visible on the tab
 - Models (true motion-control only):
     Kling Motion Control V3 Pro · V3 Standard · Kling 2.6 Motion Control · Wan Motion
-- Keep original audio (Kling, default on); Wan: adapt motion / enhance identity
-- Optional prompt (environment, style, clothing) + Enhance
+- Kling: keep original audio (default on); character orientation match video / image
+- Wan: adapt motion · enhance identity · acceleration
+- Optional prompt + light helper chips + Enhance
 - Est. cost under Generate (Studio chrome; duration × $/s)
 - Generate → Library / Show in folder / Send to Resolve
-- Clear blocks if still or motion clip is missing
+- Clear blocks if still or motion clip is missing; friendly errors for no-person /
+  too short / too large / unsupported format
 
 ==============================================================================
 VFX (in-scene + element plates)

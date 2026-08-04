@@ -149,6 +149,41 @@ def format_motion_sync_cost(
     return format_job_cost(amt, unit=f"{secs}s", model=spec.label)
 
 
+def normalize_character_orientation(value: str | None) -> str:
+    """Map UI labels / keys to API enum ``image`` | ``video``."""
+    raw = (value or "video").strip().lower()
+    if raw.startswith("image") or "match image" in raw:
+        return "image"
+    if raw.startswith("video") or "match video" in raw:
+        return "video"
+    if raw in ("image", "video"):
+        return raw
+    return "video"
+
+
+def max_motion_duration_for_orientation(orientation: str | None) -> float:
+    """
+    Kling docs: orientation=video → up to 30s complex motion;
+    orientation=image → up to 10s (camera follows image pose).
+    Proxy prep prefers ≤10s for reliability; image ori hard-caps at 10s.
+    """
+    ori = normalize_character_orientation(orientation)
+    if ori == "image":
+        return 10.0
+    return 10.0  # API allows 30s for video ori; we still prefer 10s for size/stability
+
+
+def orientation_ui_labels() -> list[str]:
+    return [
+        "Match video (complex motion, ≤30s API)",
+        "Match image (camera / pose lock, ≤10s)",
+    ]
+
+
+def orientation_ui_to_api(label: str | None) -> str:
+    return normalize_character_orientation(label)
+
+
 def build_motion_sync_arguments(
     spec: MotionSyncModelSpec,
     *,
@@ -159,6 +194,7 @@ def build_motion_sync_arguments(
     character_orientation: str | None = None,
     adapt_motion: bool | None = None,
     enhance_identity: bool | None = None,
+    acceleration: str | None = None,
 ) -> dict[str, Any]:
     """Build fal subscribe arguments for a motion-control endpoint."""
     if not image_url:
@@ -184,9 +220,9 @@ def build_motion_sync_arguments(
         args["keep_original_sound"] = keep
 
     if spec.supports_character_orientation:
-        ori = (character_orientation or spec.default_character_orientation or "video").strip()
-        if ori not in ("image", "video"):
-            ori = "video"
+        ori = normalize_character_orientation(
+            character_orientation or spec.default_character_orientation
+        )
         args["character_orientation"] = ori
 
     if spec.supports_adapt_motion:
@@ -203,4 +239,66 @@ def build_motion_sync_arguments(
             else bool(spec.default_enhance_identity)
         )
 
+    # Wan acceleration (none | regular) — only when endpoint is wan-motion
+    if "wan-motion" in (spec.endpoint or "") and acceleration:
+        acc = str(acceleration).strip().lower()
+        if acc in ("none", "regular"):
+            args["acceleration"] = acc
+
     return args
+
+
+# Optional prompt seed chips (UI only — never required)
+PROMPT_HELPER_CHIPS: tuple[str, ...] = (
+    "modern porch exterior",
+    "keep wardrobe",
+    "photoreal natural light",
+    "soft office interior",
+    "listing outdoor walk-through",
+)
+
+
+def friendly_motion_sync_error(raw: str | Exception) -> str:
+    """Map fal / prep errors to short user-facing copy."""
+    msg = str(raw or "").strip()
+    low = msg.lower()
+
+    if not msg:
+        return "Motion Sync failed."
+
+    if "no person" in low or "person detected" in low or "no face" in low or "face not" in low:
+        return (
+            "No clear person detected in the character still or motion clip. "
+            "Use a full-body or clear upper-body subject with the head visible and unobstructed."
+        )
+    if "too short" in low or "duration is too short" in low or "minimum duration" in low:
+        return (
+            "Motion reference is too short after prep. Use a driving clip of at least ~3s "
+            "with clear subject motion."
+        )
+    if "too long" in low and "proxy" not in low:
+        return (
+            "Motion reference is still too long for this orientation/model. "
+            "Try Match image (≤10s) or a shorter 3–10s clip."
+        )
+    if "unsupported" in low and ("format" in low or "codec" in low or "media" in low):
+        return (
+            "Unsupported media format. Use a common still (PNG/JPG) and video (MP4/MOV) "
+            "and retry — or re-export a Render-in-Place proxy from Resolve."
+        )
+    if "file too large" in low or "too large for the api" in low:
+        return (
+            "File still too large for the API after auto-proxy. "
+            "Export a shorter 3–8s 1080p (or 720p) Render-in-Place clip and retry."
+        )
+    if "ffmpeg" in low and ("not found" in low or "missing" in low):
+        return (
+            "Could not build an optimized proxy (ffmpeg not available). "
+            "Install ffmpeg or export a shorter ≤10s / ≤100 MB motion clip yourself."
+        )
+    if "could not prepare" in low:
+        return msg
+    # Keep original if already friendly
+    if msg.startswith("Motion Sync"):
+        return msg
+    return f"Motion Sync: {msg}"

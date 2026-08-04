@@ -22,6 +22,7 @@ from media_studio.flet_theme import (
     TEXT,
     TEXT_MUTED,
     dropdown_options,
+    make_estimated_cost_box,
     panel,
     section_title,
     styled_dropdown,
@@ -214,6 +215,7 @@ class _VideoOnlyCardBase:
         pass
 
     def _source_column(self) -> ft.Control:
+        """Source block — full width of the tools form (no side-by-side squeeze)."""
         return ft.Column(
             [
                 self.src_placeholder,
@@ -225,6 +227,22 @@ class _VideoOnlyCardBase:
             spacing=6,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             tight=True,
+        )
+
+    @staticmethod
+    def _slider_row(caption: str, slider: ft.Slider, value_txt: ft.Text) -> ft.Control:
+        """Horizontal label + slider + value; avoids vertical text in narrow rails."""
+        return ft.Row(
+            [
+                ft.Container(
+                    content=ft.Text(caption, size=FONT_SM, color=TEXT, max_lines=1),
+                    width=110,
+                ),
+                ft.Container(content=slider, expand=True),
+                value_txt,
+            ],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
 
 
@@ -259,7 +277,6 @@ class VideoDenoiseCard(_VideoOnlyCardBase):
             label="Noise {value}",
             active_color=ACCENT,
             on_change=self._on_slider,
-            expand=True,
         )
         self.comp_sl = ft.Slider(
             min=0,
@@ -269,7 +286,6 @@ class VideoDenoiseCard(_VideoOnlyCardBase):
             label="Compression {value}",
             active_color=ACCENT,
             on_change=self._on_slider,
-            expand=True,
         )
         self.detail_sl = ft.Slider(
             min=0,
@@ -279,7 +295,6 @@ class VideoDenoiseCard(_VideoOnlyCardBase):
             label="Recover detail {value}",
             active_color=ACCENT,
             on_change=self._on_slider,
-            expand=True,
         )
         self.halo_sl = ft.Slider(
             min=0,
@@ -289,7 +304,6 @@ class VideoDenoiseCard(_VideoOnlyCardBase):
             label="Halo {value}",
             active_color=ACCENT,
             on_change=self._on_slider,
-            expand=True,
         )
         self.scale_dd = styled_dropdown(
             label_text="Optional scale",
@@ -298,21 +312,23 @@ class VideoDenoiseCard(_VideoOnlyCardBase):
             on_select=self._on_model,
             expand=True,
         )
-        self.noise_val = ft.Text("0.35", size=FONT_SM, color=TEXT_MUTED, width=36)
-        self.comp_val = ft.Text("0.25", size=FONT_SM, color=TEXT_MUTED, width=36)
-        self.detail_val = ft.Text("0.20", size=FONT_SM, color=TEXT_MUTED, width=36)
-        self.halo_val = ft.Text("0.15", size=FONT_SM, color=TEXT_MUTED, width=36)
-        self.cost_text = ft.Text(
-            self._cost(), size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600
-        )
+        self.noise_val = ft.Text("0.35", size=FONT_SM, color=TEXT_MUTED, width=40)
+        self.comp_val = ft.Text("0.25", size=FONT_SM, color=TEXT_MUTED, width=40)
+        self.detail_val = ft.Text("0.20", size=FONT_SM, color=TEXT_MUTED, width=40)
+        self.halo_val = ft.Text("0.15", size=FONT_SM, color=TEXT_MUTED, width=40)
+        self.cost_text, self.cost_box = make_estimated_cost_box(initial="Est. cost: —")
+        self.cost_text.value = self._cost()
         self.btn = ft.FilledButton(
             content="Run denoise",
             on_click=self._run,
             style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+            height=40,
         )
         self.apply_key_gates()
         self._sync_notes()
 
+        # Vertical form (same pattern as Upscale) — avoids crushed side-by-side
+        # columns that rotated button/label text in a narrow tools rail.
         self.root = panel(
             ft.Column(
                 [
@@ -324,60 +340,21 @@ class VideoDenoiseCard(_VideoOnlyCardBase):
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
-                    ft.Row(
-                        [
-                            self._source_column(),
-                            ft.Column(
-                                [
-                                    self.model_dd,
-                                    self.model_notes,
-                                    self.scale_dd,
-                                    ft.Row(
-                                        [
-                                            ft.Text("Noise", size=FONT_SM, color=TEXT, width=88),
-                                            self.noise_sl,
-                                            self.noise_val,
-                                        ],
-                                        spacing=4,
-                                    ),
-                                    ft.Row(
-                                        [
-                                            ft.Text("Compression", size=FONT_SM, color=TEXT, width=88),
-                                            self.comp_sl,
-                                            self.comp_val,
-                                        ],
-                                        spacing=4,
-                                    ),
-                                    ft.Row(
-                                        [
-                                            ft.Text("Recover detail", size=FONT_SM, color=TEXT, width=88),
-                                            self.detail_sl,
-                                            self.detail_val,
-                                        ],
-                                        spacing=4,
-                                    ),
-                                    ft.Row(
-                                        [
-                                            ft.Text("Halo", size=FONT_SM, color=TEXT, width=88),
-                                            self.halo_sl,
-                                            self.halo_val,
-                                        ],
-                                        spacing=4,
-                                    ),
-                                    self.cost_text,
-                                    self.btn,
-                                    self.job_progress.control,
-                                    self.status,
-                                ],
-                                expand=True,
-                                spacing=6,
-                            ),
-                        ],
-                        spacing=12,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
-                    ),
+                    self._source_column(),
+                    ft.Row([self.model_dd], spacing=0),
+                    self.model_notes,
+                    ft.Row([self.scale_dd], spacing=0),
+                    self._slider_row("Noise", self.noise_sl, self.noise_val),
+                    self._slider_row("Compression", self.comp_sl, self.comp_val),
+                    self._slider_row("Recover detail", self.detail_sl, self.detail_val),
+                    self._slider_row("Halo", self.halo_sl, self.halo_val),
+                    self.btn,
+                    self.cost_box,
+                    self.job_progress.control,
+                    self.status,
                 ],
                 spacing=8,
+                tight=True,
             ),
         )
 
@@ -514,17 +491,18 @@ class VideoInterpolateCard(_VideoOnlyCardBase):
             value=False,
             active_color=ACCENT_BRIGHT,
         )
-        self.cost_text = ft.Text(
-            self._cost(), size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600
-        )
+        self.cost_text, self.cost_box = make_estimated_cost_box(initial="Est. cost: —")
+        self.cost_text.value = self._cost()
         self.btn = ft.FilledButton(
             content="Run interpolate",
             on_click=self._run,
             style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+            height=40,
         )
         self.apply_key_gates()
         self._sync_notes()
 
+        # Vertical form matching Upscale / Denoise — full-width readable controls
         self.root = panel(
             ft.Column(
                 [
@@ -536,29 +514,18 @@ class VideoInterpolateCard(_VideoOnlyCardBase):
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
-                    ft.Row(
-                        [
-                            self._source_column(),
-                            ft.Column(
-                                [
-                                    self.model_dd,
-                                    self.model_notes,
-                                    self.factor_dd,
-                                    self.scene_sw,
-                                    self.cost_text,
-                                    self.btn,
-                                    self.job_progress.control,
-                                    self.status,
-                                ],
-                                expand=True,
-                                spacing=6,
-                            ),
-                        ],
-                        spacing=12,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
-                    ),
+                    self._source_column(),
+                    ft.Row([self.model_dd], spacing=0),
+                    self.model_notes,
+                    ft.Row([self.factor_dd], spacing=0),
+                    self.scene_sw,
+                    self.btn,
+                    self.cost_box,
+                    self.job_progress.control,
+                    self.status,
                 ],
                 spacing=8,
+                tight=True,
             ),
         )
 

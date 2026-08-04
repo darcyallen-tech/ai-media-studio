@@ -22,6 +22,9 @@ from media_studio.motion_sync_registry import (
     estimate_motion_sync_cost,
     find_motion_sync_model,
     format_motion_sync_cost,
+    friendly_motion_sync_error,
+    max_motion_duration_for_orientation,
+    normalize_character_orientation,
 )
 from media_studio.naming import job_media_dir, make_output_stem, timestamp_now, unique_path
 from media_studio.pricing import (
@@ -60,6 +63,7 @@ def run_motion_sync(
     character_orientation: str | None = "video",
     adapt_motion: bool | None = None,
     enhance_identity: bool | None = None,
+    acceleration: str | None = None,
     output_dir: str | Path,
     on_progress: ProgressCallback | None = None,
 ) -> MotionSyncResult:
@@ -93,6 +97,7 @@ def run_motion_sync(
     proxy_note = ""
     prep_motion_dur: float | None = None
 
+    ori = normalize_character_orientation(character_orientation)
     # --- Auto-prep before size/duration checks ---
     try:
         from media_studio.motion_sync_prep import (
@@ -100,8 +105,13 @@ def run_motion_sync(
             prepare_motion_sync_inputs,
         )
 
-        # Prefer 3–10s for API; never exceed model soft max
-        max_dur = min(float(TARGET_MOTION_MAX_S), float(spec.max_duration_s or 30))
+        # Prefer 3–10s for API; image orientation hard-caps at 10s (Kling)
+        ori_cap = max_motion_duration_for_orientation(ori)
+        max_dur = min(
+            float(TARGET_MOTION_MAX_S),
+            float(ori_cap),
+            float(spec.max_duration_s or 30),
+        )
         progress("Checking inputs for API limits…")
         char_prep, motion_prep = prepare_motion_sync_inputs(
             character_path=char,
@@ -128,7 +138,7 @@ def run_motion_sync(
             ok=False,
             model_key=spec.key,
             endpoint=spec.endpoint,
-            status=(
+            status=friendly_motion_sync_error(
                 f"Could not prepare inputs for the API: {prep_exc}. "
                 "Export a shorter 3–10s Render-in-Place proxy (≤ ~100 MB) or "
                 "downscale the still, then retry."
@@ -145,9 +155,20 @@ def run_motion_sync(
     else:
         notes.append(f"driving_clip≈{dur:.1f}s")
 
+    # Soft validation after proxy
     if dur < float(spec.min_duration_s) - 0.05:
-        notes.append(
-            f"clip shorter than typical min ({spec.min_duration_s:.0f}s) — model may reject"
+        return MotionSyncResult(
+            ok=False,
+            model_key=spec.key,
+            endpoint=spec.endpoint,
+            status=friendly_motion_sync_error(
+                "Motion reference is too short after prep. "
+                f"Need at least ~{spec.min_duration_s:.0f}s of clear subject motion."
+            ),
+            notes=notes,
+            used_proxy=used_proxy,
+            proxy_note=proxy_note,
+            duration_s=dur,
         )
 
     est = estimate_motion_sync_cost(spec, duration_s=dur)
@@ -170,25 +191,23 @@ def run_motion_sync(
             video_url=video_url,
             prompt=prompt,
             keep_original_sound=keep_original_sound,
-            character_orientation=character_orientation,
+            character_orientation=ori,
             adapt_motion=adapt_motion,
             enhance_identity=enhance_identity,
+            acceleration=acceleration,
         )
+        # Confirm orientation was applied for Kling
+        if spec.supports_character_orientation:
+            notes.append(f"character_orientation={args.get('character_orientation')}")
         progress("Running motion transfer on fal…")
         result = subscribe(spec.endpoint, args, on_progress=progress)
     except FalClientError as exc:
         render_s = time.perf_counter() - t0
-        msg = str(exc)
-        if "too large" in msg.lower() or "file too large" in msg.lower():
-            msg = (
-                f"{msg}  Even after auto-proxy, the API rejected the upload. "
-                "Try a shorter 3–8s clip or a smaller still."
-            )
         return MotionSyncResult(
             ok=False,
             model_key=spec.key,
             endpoint=spec.endpoint,
-            status=msg,
+            status=friendly_motion_sync_error(exc),
             notes=notes,
             cost_label=est_lbl,
             metrics_line=format_render_metrics(render_s, None, cost_is_estimate=True),
@@ -198,11 +217,12 @@ def run_motion_sync(
         )
     except Exception as exc:
         render_s = time.perf_counter() - t0
+        raw = friendly_error(exc, context="Motion Sync")
         return MotionSyncResult(
             ok=False,
             model_key=spec.key,
             endpoint=spec.endpoint,
-            status=friendly_error(exc, context="Motion Sync"),
+            status=friendly_motion_sync_error(raw),
             notes=notes,
             cost_label=est_lbl,
             metrics_line=format_render_metrics(render_s, None, cost_is_estimate=True),

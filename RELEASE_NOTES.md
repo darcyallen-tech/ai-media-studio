@@ -37,8 +37,9 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 ### Motion Sync tab
 - New main tab **Motion Sync** — character still + driving video → motion transfer
 - Models: Kling Motion Control V3 Pro / Standard, Kling 2.6 Motion Control, Wan Motion
-- Keep original audio (Kling); Wan adapt-motion / enhance-identity; optional prompt + Enhance
-- Est. cost under Generate (duration × $/s); Library + Resolve
+- Keep original audio (Kling); orientation match video/image; Wan adapt-motion / enhance-identity
+- Auto-proxy long/large clips + oversized stills (original kept); best-practice tips on tab
+- Optional prompt helper chips + Enhance; Est. cost under Generate; Library + Resolve
 
 ### VFX tab
 - New main tab **VFX** (peer to Studio / Creative Vision / Director / Frame Editor)

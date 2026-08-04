@@ -33,10 +33,13 @@ from media_studio.flet_theme import (
 )
 from media_studio.flet_video_player import VideoResultPlayer
 from media_studio.motion_sync_registry import (
+    PROMPT_HELPER_CHIPS,
     default_motion_sync_model,
     find_motion_sync_model,
     format_motion_sync_cost,
     motion_sync_model_labels,
+    orientation_ui_labels,
+    orientation_ui_to_api,
 )
 from media_studio.motion_sync_service import run_motion_sync
 from media_studio.pricing import probe_video_duration
@@ -87,12 +90,20 @@ class MotionSyncView:
             value=bool(spec0.default_keep_audio),
             on_change=self._refresh_cost,
         )
+        orient_opts = orientation_ui_labels()
         self.orient_dd = styled_dropdown(
-            label_text="Character orientation",
-            options=["video", "image"],
-            value=spec0.default_character_orientation or "video",
-            on_select=self._refresh_cost,
+            label_text="Character orientation (Kling)",
+            options=orient_opts,
+            value=orient_opts[0],
+            on_select=self._on_orient,
             expand=True,
+        )
+        self.orient_hint = ft.Text(
+            "Match video: complex body motion (API up to 30s). "
+            "Match image: follow camera/pose of the still (API ≤10s).",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=3,
         )
         self.adapt_motion = ft.Checkbox(
             label="Adapt motion to body proportions (Wan)",
@@ -100,10 +111,21 @@ class MotionSyncView:
             visible=False,
         )
         self.enhance_identity = ft.Checkbox(
-            label="Enhance identity (Wan preprocess)",
+            label="Enhance identity (Wan · Flux preprocess)",
             value=False,
             visible=False,
+            tooltip=(
+                "Runs a light identity-preserving preprocess before animation "
+                "(more faithful face, slightly longer)"
+            ),
         )
+        self.accel_dd = styled_dropdown(
+            label_text="Acceleration (Wan)",
+            options=["regular", "none"],
+            value="regular",
+            expand=True,
+        )
+        self.accel_dd.visible = False
 
         self.prompt = ft.TextField(
             label="Optional prompt (environment, style, clothing)",
@@ -119,10 +141,61 @@ class MotionSyncView:
             color=TEXT,
             text_size=FONT_SM,
         )
+        self.prompt_chips = ft.Row(
+            [
+                ft.TextButton(
+                    content=chip,
+                    on_click=self._make_prompt_chip(chip),
+                    style=ft.ButtonStyle(color=ACCENT),
+                )
+                for chip in PROMPT_HELPER_CHIPS
+            ],
+            spacing=2,
+            wrap=True,
+            run_spacing=0,
+        )
+        self.prompt_chip_hint = ft.Text(
+            "Optional seeds — click to append to the prompt (safe to ignore)",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+        )
+
+        # Always-visible best-practice tips
+        self.tips_box = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(
+                        "Best practices",
+                        size=FONT_SM,
+                        color=TEXT,
+                        weight=ft.FontWeight.W_700,
+                    ),
+                    ft.Text(
+                        "• Character still: full-body or clear upper body, good lighting, "
+                        "simple background preferred; head visible and unobstructed.",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                    ),
+                    ft.Text(
+                        "• Motion reference: clean single subject, 3–10s ideal for most "
+                        "models; matching rough framing helps identity lock. "
+                        "Long/large clips auto-proxy (original kept).",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                    ),
+                ],
+                spacing=4,
+                tight=True,
+            ),
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, BORDER),
+            border_radius=8,
+            padding=10,
+        )
 
         # Character still
         self.char_tip = ft.Text(
-            "Full-body or clear upper body works best",
+            "Full-body or clear upper body · good light · simple background",
             size=FONT_SM,
             color=TEXT_MUTED,
         )
@@ -174,7 +247,7 @@ class MotionSyncView:
 
         # Motion reference
         self.motion_tip = ft.Text(
-            "Clean subject motion, roughly 3–30s depending on model",
+            "Clean single-subject motion · 3–10s ideal · matching framing helps",
             size=FONT_SM,
             color=TEXT_MUTED,
         )
@@ -269,6 +342,7 @@ class MotionSyncView:
                 size=FONT_SM,
                 color=TEXT_MUTED,
             ),
+            self.tips_box,
             ft.Divider(height=1, color=BORDER),
             label("Character / subject", muted=True),
             self.char_tip,
@@ -291,9 +365,13 @@ class MotionSyncView:
             self.model_notes,
             self.keep_audio,
             ft.Row([self.orient_dd], spacing=0),
+            self.orient_hint,
             self.adapt_motion,
             self.enhance_identity,
+            self.accel_dd,
             self.prompt,
+            self.prompt_chip_hint,
+            self.prompt_chips,
             ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
             self.cost_box,
             self.job_progress.control,
@@ -361,12 +439,57 @@ class MotionSyncView:
 
     def _sync_model_controls(self) -> None:
         spec = self._current_spec()
+        is_wan = "wan" in (spec.key or "")
         self.keep_audio.visible = bool(spec.supports_keep_audio)
         if spec.supports_keep_audio:
-            self.keep_audio.value = bool(spec.default_keep_audio)
+            # Only reset default when switching onto a Kling-class model
+            if self.keep_audio.value is None:
+                self.keep_audio.value = bool(spec.default_keep_audio)
         self.orient_dd.visible = bool(spec.supports_character_orientation)
+        self.orient_hint.visible = bool(spec.supports_character_orientation)
         self.adapt_motion.visible = bool(spec.supports_adapt_motion)
         self.enhance_identity.visible = bool(spec.supports_enhance_identity)
+        self.accel_dd.visible = is_wan
+        if is_wan:
+            self.adapt_motion.value = bool(spec.default_adapt_motion)
+            # leave enhance_identity as user left it after first Wan visit
+
+    def _orientation_api(self) -> str:
+        if not self.orient_dd.visible:
+            return "video"
+        return orientation_ui_to_api(_dd(self.orient_dd))
+
+    async def _on_orient(self, e: ft.ControlEvent | None = None) -> None:
+        ori = self._orientation_api()
+        if ori == "image":
+            self.orient_hint.value = (
+                "Match image: orientation follows the still — better for camera moves "
+                "(API max ~10s). Long clips auto-proxy to ≤10s."
+            )
+        else:
+            self.orient_hint.value = (
+                "Match video: orientation follows the driving clip — better for complex "
+                "body motion (API up to 30s). We still auto-proxy long/large clips to "
+                "≤10s for reliability."
+            )
+        self.cost_text.value = self._cost_label()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _make_prompt_chip(self, chip: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            cur = (self.prompt.value or "").strip()
+            if chip.lower() in cur.lower():
+                return
+            self.prompt.value = f"{cur}, {chip}".lstrip(", ").strip()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click
 
     async def _on_model(self, e: ft.ControlEvent | None = None) -> None:
         spec = self._current_spec()
@@ -379,6 +502,9 @@ class MotionSyncView:
             )
         except Exception:
             pass
+        # Apply model defaults for audio when switching models
+        if spec.supports_keep_audio:
+            self.keep_audio.value = bool(spec.default_keep_audio)
         self._sync_model_controls()
         self.cost_text.value = self._cost_label()
         try:
@@ -626,7 +752,7 @@ class MotionSyncView:
                 keep_original_sound=bool(self.keep_audio.value)
                 if self.keep_audio.visible
                 else None,
-                character_orientation=_dd(self.orient_dd)
+                character_orientation=self._orientation_api()
                 if self.orient_dd.visible
                 else None,
                 adapt_motion=bool(self.adapt_motion.value)
@@ -635,6 +761,7 @@ class MotionSyncView:
                 enhance_identity=bool(self.enhance_identity.value)
                 if self.enhance_identity.visible
                 else None,
+                acceleration=_dd(self.accel_dd) if self.accel_dd.visible else None,
                 output_dir=self.state.output_dir,
                 on_progress=on_progress,
             )
