@@ -72,6 +72,7 @@ SCENES (reusable location stills)
 Peer tab for location / establishing plates — Character = who; Scene = where.
 Local only (data/scenes.json + data/scene_stills/). Not a Library replacement.
 
+- **New scene** primary button (top): clears form, focuses Name + still/generate
 - New scene: upload still, or Generate (T2I) from a location description
   (optional Enhance + model); separate Aspect (16:9 Horizontal · 9:16 Vertical ·
   1:1 · 4:3 / 3:4) and Quality (1K/2K or Standard/HD — not mixed into one blob);
@@ -80,13 +81,15 @@ Local only (data/scenes.json + data/scene_stills/). Not a Library replacement.
 - List: **Name** primary (user title, never long T2I prompt), notes secondary,
   aspect badge on thumb; missing/broken still → placeholder (path repair from
   scene_stills/); Edit · Delete · Lock · Show in folder; click thumb to enlarge
+  (form / generate result / list)
 - Location description box is tall (~2×) so Enhance text is readable
-- **Variations** (like Character costumes): Create variation (I2I transform —
-  season / weather / era); nested under parent; delete parent confirms if kids exist
+- **Create variation** (I2I): parent still as ref; name + transform prompt + model +
+  quality + Enhance + cost; Generate → preview → Confirm / Regenerate / Dismiss;
+  saves child under parent’s Variations; clear error if parent still missing
 - Lock protects from retention auto-delete (same idea as Characters)
-- Empty state: “Save gym, street, living room plates here for Director scene refs.”
-- Survives app restart; ready for Director multi-ref scene slots (and later
-  Motion Sync / Creative Vision)
+- Empty state points to **New scene**
+- Local only: data/scenes.json + scene_stills/ (gitignored like Characters)
+- Survives app restart; Director multi-ref scene slots
 
 ==============================================================================
 MOTION SYNC (character + driving video)

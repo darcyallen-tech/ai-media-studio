@@ -67,10 +67,33 @@ class SavedScene:
     parent_id: str | None = None
 
     def display_notes(self) -> str:
+        """Secondary list line — short notes only, never a full T2I dump."""
         n = (self.notes or "").strip()
-        # Don't surface long T2I prompt blobs as notes if name is short
-        if len(n) > 160:
-            return n[:157].rstrip() + "…"
+        if not n:
+            return ""
+        low = n.lower()
+        looks_like_prompt = len(n) > 80 and any(
+            tok in low
+            for tok in (
+                "photoreal",
+                "establishing",
+                "location plate",
+                "empty or lightly",
+                "no hero",
+                "creative intent",
+                "no text",
+                "no logo",
+                "watermark",
+            )
+        )
+        if looks_like_prompt:
+            # First clause only
+            first = re.split(r"[.!\n]", n, maxsplit=1)[0].strip()
+            if len(first) > 72:
+                first = first[:69].rstrip() + "…"
+            return first or n[:72].rstrip() + "…"
+        if len(n) > 120:
+            return n[:117].rstrip() + "…"
         return n
 
     def display_name(self) -> str:
@@ -80,7 +103,7 @@ class SavedScene:
         """
         n = (self.name or "").strip() or "Untitled scene"
         low = n.lower()
-        looks_like_prompt = len(n) > 48 and any(
+        looks_like_prompt = len(n) > 40 and any(
             tok in low
             for tok in (
                 "photoreal",
@@ -89,9 +112,16 @@ class SavedScene:
                 "empty or lightly",
                 "no hero",
                 "creative intent",
+                "natural light",
+                "no text",
+                "no logo",
             )
         )
         if looks_like_prompt:
+            # Prefer first short phrase before comma/period
+            first = re.split(r"[,.\n]", n, maxsplit=1)[0].strip()
+            if 3 <= len(first) <= 48:
+                return first
             return n[:40].rstrip(" .,;:-") + "…"
         if len(n) > 56:
             return n[:53].rstrip() + "…"

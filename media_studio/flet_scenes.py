@@ -75,6 +75,10 @@ class ScenesView:
         self._t2i_pending_path: str | None = None
         self._pending_aspect: str = "16:9"  # last generate / detected still aspect
         self._variations_expanded: set[str] = set()
+        # "form" = add/edit + T2I; "variation" = I2I panel only (never shares New Scene reset)
+        self._ui_mode: str = "form"
+        # Library selection highlight (parent scene during variation)
+        self._selected_scene_id: str | None = None
         # Variation transform state
         self._var_parent_id: str | None = None
         self._var_parent_name: str = ""
@@ -163,17 +167,30 @@ class ScenesView:
             min_lines=1,
             max_lines=3,
         )
-        self.btn_save = ft.FilledButton(
-            content="Save scene",
-            on_click=self._save,
+        self.btn_new_scene = ft.FilledButton(
+            content="New scene",
+            icon=ft.Icons.ADD,
+            on_click=self._open_new_scene,
             style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
             height=40,
         )
+        self.btn_save = ft.FilledButton(
+            content="Save scene",
+            on_click=self._save,
+            style=ft.ButtonStyle(bgcolor=ACCENT, color=TEXT),
+            height=40,
+        )
         self.btn_cancel_edit = ft.TextButton(
-            content="Cancel edit",
+            content="Cancel",
             on_click=self._cancel_edit,
             style=ft.ButtonStyle(color=TEXT_MUTED),
             visible=False,
+        )
+        self.form_heading = ft.Text(
+            "Add / edit scene",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            weight=ft.FontWeight.W_600,
         )
 
         # --- Generate (T2I) ---
@@ -307,10 +324,69 @@ class ScenesView:
             if pref_edit.lower() in lab.lower() or lab.lower() in pref_edit.lower():
                 edit_default = lab
                 break
-        self.var_parent_label = ft.Text("", size=FONT_SM, color=TEXT_MUTED)
+        # --- Variation I2I fields (always real controls; mounted by replacing work_host) ---
+        self.var_title = ft.Text(
+            "Create variation (I2I)",
+            size=FONT_MD,
+            color=TEXT,
+            weight=ft.FontWeight.W_700,
+        )
+        self.var_parent_label = ft.Text(
+            "Parent: —",
+            size=FONT_SM,
+            color=TEXT,
+            weight=ft.FontWeight.W_600,
+            max_lines=2,
+        )
+        self.var_parent_sub = ft.Text(
+            "Reference still for I2I",
+            size=11,
+            color=TEXT_MUTED,
+            max_lines=2,
+        )
+        self.var_error = ft.Text(
+            "",
+            size=FONT_SM,
+            color="#ef9a9a",
+            max_lines=4,
+            visible=False,
+        )
+        # Fixed-size parent thumb (never expand inside ListView)
+        _VAR_THUMB_W, _VAR_THUMB_H = 120, 90
+        self.var_parent_thumb = ft.Image(
+            src="",
+            width=_VAR_THUMB_W,
+            height=_VAR_THUMB_H,
+            fit=ft.BoxFit.COVER,
+            border_radius=6,
+            visible=True,
+        )
+        self.var_parent_thumb_empty = ft.Container(
+            width=_VAR_THUMB_W,
+            height=_VAR_THUMB_H,
+            bgcolor=PANEL,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+            alignment=ft.Alignment.CENTER,
+            content=ft.Column(
+                [
+                    ft.Icon(ft.Icons.BROKEN_IMAGE_OUTLINED, size=28, color=TEXT_MUTED),
+                    ft.Text("No still", size=11, color=TEXT_MUTED),
+                ],
+                tight=True,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=2,
+            ),
+            visible=True,
+        )
+        self.var_parent_thumb_host = ft.Container(
+            width=_VAR_THUMB_W,
+            height=_VAR_THUMB_H,
+            content=self.var_parent_thumb_empty,
+        )
         self.var_prompt = ft.TextField(
-            label="Transform (season, time of day, weather, era…)",
-            hint_text='e.g. "winter snow, overcast afternoon" or "post-apocalyptic ruin"',
+            label="Transform prompt (season, weather, time of day, style…)",
+            hint_text='e.g. "winter snow, overcast afternoon" or "golden hour sunset"',
             dense=True,
             filled=True,
             fill_color=PANEL_ELEVATED,
@@ -318,12 +394,12 @@ class ScenesView:
             color=TEXT,
             text_size=FONT_SM,
             multiline=True,
-            min_lines=3,
-            max_lines=8,
+            min_lines=5,
+            max_lines=12,
         )
         self.var_name = ft.TextField(
-            label="Variation name (required to save)",
-            hint_text='e.g. "Neighborhood Park – Winter"',
+            label="Variation name",
+            hint_text='e.g. "Winter" or "Modern Gym – Winter"',
             dense=True,
             filled=True,
             fill_color=PANEL_ELEVATED,
@@ -332,9 +408,26 @@ class ScenesView:
             text_size=FONT_SM,
         )
         self.var_model_dd = styled_dropdown(
-            label_text="Edit model",
+            label_text="Model",
             options=edit_labs or [pref_edit],
             value=edit_default,
+            on_select=self._on_var_model,
+            expand=True,
+        )
+        try:
+            from media_studio.character_store import (
+                default_practical_resolution,
+                edit_resolution_options,
+            )
+
+            _vres = edit_resolution_options(edit_default) or ["1K", "2K"]
+            _vdef = default_practical_resolution(_vres) if _vres else "1K"
+        except Exception:
+            _vres, _vdef = ["1K", "2K"], "1K"
+        self.var_quality_dd = styled_dropdown(
+            label_text="Quality",
+            options=list(_vres),
+            value=_vdef,
             on_select=self._refresh_var_cost,
             expand=True,
         )
@@ -343,80 +436,68 @@ class ScenesView:
         )
         self.btn_var_enhance = make_enhance_button(on_click=self._on_var_enhance)
         self.btn_var_gen = ft.FilledButton(
-            content="Generate variation",
+            content="Generate",
             icon=ft.Icons.AUTO_FIX_HIGH,
             on_click=self._run_variation,
             style=ft.ButtonStyle(bgcolor=ACCENT, color=TEXT),
-            height=40,
+            height=42,
         )
         self.btn_var_save = ft.FilledButton(
-            content="Confirm & save variation",
+            content="Confirm & save",
             on_click=self._save_variation,
             style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
-            height=40,
+            height=42,
             visible=False,
         )
-        self.btn_var_close = ft.TextButton(
-            content="Close",
+        self.btn_var_close = ft.OutlinedButton(
+            content="Cancel",
             on_click=self._close_variation_panel,
-            style=ft.ButtonStyle(color=TEXT_MUTED),
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=42,
         )
         self.var_preview = ft.Image(
             src="",
-            width=140,
-            height=100,
+            width=160,
+            height=120,
             fit=ft.BoxFit.COVER,
             border_radius=6,
             visible=False,
         )
+        self.var_preview_empty = ft.Container(
+            width=160,
+            height=120,
+            bgcolor=PANEL,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+            alignment=ft.Alignment.CENTER,
+            content=ft.Text("Preview", size=FONT_SM, color=TEXT_MUTED),
+            visible=True,
+        )
+        self.var_preview_host = ft.Container(
+            width=160,
+            height=120,
+            content=self.var_preview_empty,
+        )
         self.var_preview_tap = ft.GestureDetector(
-            content=self.var_preview,
+            content=self.var_preview_host,
             on_tap=self._on_tap_var_preview,
         )
-        self.var_box = ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text(
-                        "Create variation (I2I)",
-                        size=FONT_SM,
-                        color=TEXT,
-                        weight=ft.FontWeight.W_600,
-                    ),
-                    self.var_parent_label,
-                    ft.Text(
-                        "Keeps the same place; changes season, weather, time, era, etc. "
-                        "Click preview to enlarge.",
-                        size=FONT_SM,
-                        color=TEXT_MUTED,
-                    ),
-                    self.var_prompt,
-                    self.var_name,
-                    ft.Row([self.var_model_dd], spacing=0),
-                    ft.Row(
-                        [self.btn_var_enhance, self.btn_var_gen],
-                        spacing=8,
-                    ),
-                    self.var_cost_box,
-                    ft.Row(
-                        [self.var_preview_tap, self.btn_var_save, self.btn_var_close],
-                        spacing=8,
-                        wrap=True,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                ],
-                spacing=6,
-                tight=True,
-            ),
-            bgcolor=PANEL_ELEVATED,
-            border=ft.Border.all(1, ACCENT),
-            border_radius=8,
-            padding=10,
-            visible=False,
-        )
+        # Built fresh each open via _assemble_variation_panel() — not empty toggles
+        self._var_panel_shell: ft.Container | None = None
+
+        # Dynamic left workspace — form OR variation (swap .controls; never blank)
+        self.work_host = ft.Column(spacing=8, tight=True)
 
         self.status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=4)
         self.job_progress = JobProgress()
 
+        self.btn_empty_new = ft.FilledButton(
+            content="New scene",
+            icon=ft.Icons.ADD,
+            on_click=self._open_new_scene,
+            style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+            height=40,
+        )
         self.empty_state = ft.Column(
             [
                 ft.Text(
@@ -426,12 +507,14 @@ class ScenesView:
                     weight=ft.FontWeight.W_600,
                 ),
                 ft.Text(
-                    "Save gym, street, living room plates here for Director scene refs.",
+                    "Click New scene to upload or generate a location plate "
+                    "(gym, street, park…) for Director scene refs.",
                     size=FONT_SM,
                     color=TEXT_MUTED,
                 ),
+                self.btn_empty_new,
             ],
-            spacing=4,
+            spacing=8,
             tight=True,
             visible=True,
         )
@@ -439,24 +522,15 @@ class ScenesView:
         self.list_count = ft.Text("", size=FONT_SM, color=TEXT_MUTED)
 
         self._refresh_t2i_cost_sync()
+        self._mount_form_workspace()
         self.refresh()
 
-    # ----- layout -----
+    # ----- layout / modes -----
 
-    def build(self) -> ft.Control:
-        from media_studio.flet_layout import make_split_workspace
-        from media_studio.flet_theme import RAIL_WIDTH
-
-        left = [
-            section_title("Scenes"),
-            ft.Text(
-                "Location / establishing stills — where the action happens. "
-                "Local store only (like Characters). Use in Director as scene refs.",
-                size=FONT_SM,
-                color=TEXT_MUTED,
-            ),
-            ft.Divider(height=1, color=BORDER),
-            label("Add / edit scene", muted=True),
+    def _form_workspace_controls(self) -> list[ft.Control]:
+        """Add/edit + T2I controls (New Scene path). Never used for Create variation."""
+        return [
+            self.form_heading,
             ft.GestureDetector(
                 content=ft.Stack(
                     [self.preview_empty, self.preview],
@@ -479,7 +553,131 @@ class ScenesView:
             ft.Row([self.btn_save, self.btn_cancel_edit], spacing=8),
             ft.Divider(height=1, color=BORDER),
             self.t2i_box,
-            self.var_box,
+        ]
+
+    def _set_var_parent_thumb(self, still: str | None) -> None:
+        """Show parent plate or fixed-size placeholder (never zero-height)."""
+        if still and Path(still).is_file():
+            try:
+                self.var_parent_thumb.src = str(Path(still).resolve())
+            except Exception:
+                self.var_parent_thumb.src = still
+            self.var_parent_thumb_host.content = self.var_parent_thumb
+        else:
+            self.var_parent_thumb.src = ""
+            self.var_parent_thumb_host.content = self.var_parent_thumb_empty
+
+    def _set_var_result_preview(self, path: str | None) -> None:
+        if path and Path(path).is_file():
+            try:
+                self.var_preview.src = str(Path(path).resolve())
+            except Exception:
+                self.var_preview.src = path
+            self.var_preview.visible = True
+            self.var_preview_host.content = self.var_preview
+        else:
+            self.var_preview.src = ""
+            self.var_preview.visible = False
+            self.var_preview_host.content = self.var_preview_empty
+
+    def _assemble_variation_panel(self) -> ft.Container:
+        """
+        Full I2I variation form with real controls and forced min height.
+
+        Built every open so ListView never keeps an empty/zero-height shell.
+        No expand=True children (that collapses height inside left-rail ListView).
+        """
+        parent_row = ft.Row(
+            [
+                self.var_parent_thumb_host,
+                ft.Column(
+                    [self.var_parent_label, self.var_parent_sub, self.var_error],
+                    spacing=4,
+                    tight=True,
+                ),
+            ],
+            spacing=12,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        )
+        body = ft.Column(
+            [
+                self.var_title,
+                ft.Text(
+                    "Parent still is the I2I reference. Change season / weather / "
+                    "time / style only. Cancel returns to Scenes form (no New Scene wipe).",
+                    size=FONT_SM,
+                    color=TEXT_MUTED,
+                ),
+                parent_row,
+                self.var_name,
+                self.var_prompt,
+                ft.Row(
+                    [self.var_model_dd, self.var_quality_dd],
+                    spacing=8,
+                ),
+                ft.Row(
+                    [self.btn_var_enhance, self.btn_var_gen, self.btn_var_close],
+                    spacing=8,
+                    wrap=True,
+                ),
+                self.var_cost_box,
+                ft.Text("Result preview (click to enlarge)", size=11, color=TEXT_MUTED),
+                ft.Row(
+                    [self.var_preview_tap, self.btn_var_save],
+                    spacing=10,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    wrap=True,
+                ),
+            ],
+            spacing=8,
+            tight=True,
+            scroll=ft.ScrollMode.AUTO,
+            # expand only within fixed-height shell below — NOT as ListView direct child
+            expand=True,
+        )
+        return ft.Container(
+            content=body,
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(2, ACCENT),
+            border_radius=8,
+            padding=12,
+            # Force ListView to reserve vertical space (prevents empty collapse)
+            height=580,
+        )
+
+    def _mount_form_workspace(self) -> None:
+        self._ui_mode = "form"
+        self.t2i_box.visible = True
+        # Replace controls list entirely (Flet: assign new list, then update)
+        self.work_host.controls = list(self._form_workspace_controls())
+
+    def _mount_variation_workspace(self) -> None:
+        """
+        Install a full I2I variation panel into the left work area.
+
+        Does NOT call _reset_form. Uses a fixed-height shell so ListView
+        cannot collapse to blank.
+        """
+        self._ui_mode = "variation"
+        panel = self._assemble_variation_panel()
+        self._var_panel_shell = panel
+        self.work_host.controls = [panel]
+
+    def build(self) -> ft.Control:
+        from media_studio.flet_layout import make_split_workspace
+        from media_studio.flet_theme import RAIL_WIDTH
+
+        left = [
+            section_title("Scenes"),
+            ft.Text(
+                "Location / establishing stills — where the action happens. "
+                "Local store only (like Characters). Use in Director as scene refs.",
+                size=FONT_SM,
+                color=TEXT_MUTED,
+            ),
+            self.btn_new_scene,
+            ft.Divider(height=1, color=BORDER),
+            self.work_host,
             self.job_progress.control,
             self.status,
         ]
@@ -578,17 +776,57 @@ class ScenesView:
             self.still_label.color = TEXT_MUTED
 
     def _reset_form(self) -> None:
+        """Full add/edit reset — still, name, notes, T2I prompt + generate preview.
+
+        Used only by New Scene / cancel / after save — NEVER by Create variation.
+        """
         self._edit_id = None
+        self._selected_scene_id = None
         self._set_still(None)
         self.name_field.value = ""
         self.notes_field.value = ""
+        # Location description / T2I prompt (so user can generate scenes in a row)
+        try:
+            self.t2i_desc.value = ""
+        except Exception:
+            pass
         self.btn_save.content = "Save scene"
         self.btn_cancel_edit.visible = False
+        self.form_heading.value = "Add / edit scene"
         self._t2i_pending_path = None
         self._pending_aspect = normalize_scene_aspect(self.t2i_aspect_dd.value) or "16:9"
+        try:
+            self.t2i_preview.src = ""
+        except Exception:
+            pass
         self.t2i_preview.visible = False
         self.t2i_aspect_badge.visible = False
         self.btn_t2i_use.visible = False
+        self.t2i_box.visible = True
+
+    async def _open_new_scene(self, e: ft.ControlEvent | None = None) -> None:
+        """Primary entry: fully clear form, focus name + still/generate."""
+        # Exit variation mode without treating it as “discard parent” wipe of library
+        self._var_parent_id = None
+        self._var_parent_path = None
+        self._var_pending_path = None
+        self._reset_form()
+        self._mount_form_workspace()
+        self.btn_cancel_edit.visible = True
+        self.form_heading.value = "New scene"
+        self.btn_save.content = "Save scene"
+        self.refresh()  # clear selection highlight
+        self._set_status(
+            "New scene — enter a short Name, upload a still or Generate a plate, then Save."
+        )
+        try:
+            self.name_field.focus()
+        except Exception:
+            pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     async def _pick_still(self, e: ft.ControlEvent) -> None:
         try:
@@ -668,12 +906,16 @@ class ScenesView:
                 badge = f" · {entry.aspect}" if entry.aspect else ""
                 self._set_status(f"Saved scene: {entry.name}{badge}")
             self._reset_form()
+            self._mount_form_workspace()
             self.refresh()
         except Exception as exc:
             self._set_status(str(exc), error=True)
 
     async def _cancel_edit(self, e: ft.ControlEvent) -> None:
+        self._exit_variation_mode(clear_parent=True)
         self._reset_form()
+        self._mount_form_workspace()
+        self.refresh()
         self._set_status("Edit cancelled.")
         try:
             self.page.update()
@@ -988,12 +1230,14 @@ class ScenesView:
         badge_txt = s.aspect_badge()
         title = s.display_name()
         if still_ok and still_src:
+            # Absolute path — avoids blank/green thumbs when relative path is stale
             img = ft.Image(
-                src=still_src,
+                src=str(Path(still_src).resolve()),
                 width=_THUMB,
                 height=_THUMB,
                 fit=ft.BoxFit.COVER,
                 border_radius=6,
+                gapless_playback=True,
             )
             badge = ft.Container(
                 content=ft.Text(
@@ -1035,7 +1279,7 @@ class ScenesView:
             )
         lock_icon = " 🔒" if s.locked else ""
         notes = s.display_notes()
-        # Primary = user Name (display_name), never the long T2I prompt
+        # Primary = user Name (display_name); secondary = short notes only
         name_txt = ft.Text(
             f"{title}{lock_icon}",
             size=FONT_SM,
@@ -1044,8 +1288,9 @@ class ScenesView:
             max_lines=1,
             overflow=ft.TextOverflow.ELLIPSIS,
         )
+        secondary = notes if notes else ("Variation" if nested else "No notes")
         notes_txt = ft.Text(
-            notes if notes else ("—" if nested else "No notes"),
+            secondary,
             size=FONT_SM,
             color=TEXT_MUTED,
             max_lines=2,
@@ -1086,13 +1331,14 @@ class ScenesView:
             style=ft.ButtonStyle(color="#ef9a9a"),
             height=36,
         )
+        # Always clickable on base scenes (open panel even if still missing — show error)
         btn_var = ft.OutlinedButton(
             content="Create variation",
             icon=ft.Icons.AUTO_FIX_HIGH,
-            on_click=self._make_open_variation(s),
+            on_click=self._make_open_variation(s.id),
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
             height=36,
-            disabled=not still_ok or nested,
+            disabled=nested,
             visible=not nested,
             tooltip="Season / weather / era transform from this plate (I2I)",
         )
@@ -1151,6 +1397,12 @@ class ScenesView:
         if variations_col is not None:
             body.controls.append(variations_col)
 
+        selected = (not nested) and self._selected_scene_id == s.id
+        border_col = (
+            ACCENT_BRIGHT
+            if selected
+            else (ACCENT if s.locked else BORDER)
+        )
         return ft.Container(
             content=ft.Row(
                 [thumb, body],
@@ -1158,7 +1410,7 @@ class ScenesView:
                 vertical_alignment=ft.CrossAxisAlignment.START,
             ),
             bgcolor=PANEL if nested else PANEL_ELEVATED,
-            border=ft.Border.all(1, ACCENT if s.locked else BORDER),
+            border=ft.Border.all(2 if selected else 1, border_col),
             border_radius=8,
             padding=10 if not nested else 8,
             margin=ft.Margin.only(left=16) if nested else None,
@@ -1174,25 +1426,58 @@ class ScenesView:
 
         return _click
 
-    def _make_open_variation(self, s: SavedScene):
-        async def _click(_e: ft.ControlEvent) -> None:
-            self._open_variation_panel(s)
+    def _make_open_variation(self, scene_id: str):
+        """Open I2I variation panel for scene id — must never call New Scene / _reset_form."""
+
+        def _click(_e: ft.ControlEvent) -> None:
+            try:
+                print(f"[Scenes] Create variation click id={scene_id!r}")
+            except Exception:
+                pass
+            try:
+                from media_studio.scene_store import find_scene
+
+                scene = find_scene(scene_id)
+                if scene is None:
+                    self._set_status(
+                        "Scene not found — refresh the list and try again.",
+                        error=True,
+                    )
+                    return
+                # Critical: only open variation — never _open_new_scene / _reset_form
+                self._open_variation_panel(scene)
+            except Exception as exc:
+                try:
+                    print(traceback.format_exc())
+                except Exception:
+                    pass
+                self._set_status(f"Create variation failed: {exc}", error=True)
 
         return _click
 
     def _make_edit(self, s: SavedScene):
         async def _click(_e: ft.ControlEvent) -> None:
+            # Leave variation mode without wiping form first, then load this scene
+            self._exit_variation_mode(clear_parent=True)
+            self._mount_form_workspace()
             self._edit_id = s.id
+            self._selected_scene_id = s.id
             self.name_field.value = s.name
             self.notes_field.value = s.notes or ""
-            if s.has_still():
-                self._set_still(s.still_path, aspect=s.aspect)
+            still = s.resolved_still_path()
+            if still:
+                self._set_still(still, aspect=s.aspect)
             else:
                 self._set_still(None)
             self.btn_save.content = "Save changes"
             self.btn_cancel_edit.visible = True
+            self.form_heading.value = f"Edit · {s.display_name()}"
+            self.t2i_box.visible = True
             ar = s.aspect_badge()
-            self._set_status(f"Editing: {s.name}" + (f" · {ar}" if ar else ""))
+            self.refresh()
+            self._set_status(
+                f"Editing: {s.display_name()}" + (f" · {ar}" if ar else "")
+            )
             try:
                 self.page.update()
             except Exception:
@@ -1216,10 +1501,11 @@ class ScenesView:
 
     def _make_show_folder(self, s: SavedScene):
         async def _click(_e: ft.ControlEvent) -> None:
-            if not s.has_still():
+            still = s.resolved_still_path()
+            if not still:
                 self._set_status("Still missing.", error=True)
                 return
-            msg = show_in_folder(s.still_path)
+            msg = show_in_folder(still)
             self._set_status(msg)
 
         return _click
@@ -1311,38 +1597,177 @@ class ScenesView:
 
     # ----- variations (I2I) -----
 
-    def _open_variation_panel(self, s: SavedScene) -> None:
-        if not s.has_still():
-            self._set_status("Base scene still missing.", error=True)
-            return
-        self._var_parent_id = s.id
-        self._var_parent_name = s.name
-        self._var_parent_path = s.still_path
+    def _exit_variation_mode(self, *, clear_parent: bool = True) -> None:
+        """Leave variation UI without calling New Scene reset."""
+        if clear_parent:
+            self._var_parent_id = None
+            self._var_parent_name = ""
+            self._var_parent_path = None
         self._var_pending_path = None
-        self.var_parent_label.value = f"Base: {s.name}" + (
-            f" · {s.aspect_badge()}" if s.aspect_badge() else ""
-        )
-        self.var_prompt.value = ""
-        self.var_name.value = f"{s.name} – "
-        self.var_preview.src = ""
-        self.var_preview.visible = False
-        self.btn_var_save.visible = False
-        self.var_box.visible = True
-        self._variations_expanded.add(s.id)
-        self._refresh_var_cost_sync()
-        self._set_status(f"Create variation under “{s.name}”.")
         try:
-            self.page.update()
+            self._set_var_result_preview(None)
+        except Exception:
+            pass
+        self.btn_var_save.visible = False
+        self.btn_var_gen.content = "Generate"
+        self.btn_var_gen.disabled = False
+        self._var_panel_shell = None
+
+    def _open_variation_panel(self, s: SavedScene) -> None:
+        """
+        Open I2I variation editor for parent scene.
+
+        MUST NOT call _reset_form / _open_new_scene. Parent stays selected in the
+        library list; left work_host is replaced with a full fixed-height form.
+        """
+        try:
+            title = s.display_name()
+            still = None
+            try:
+                still = s.resolved_still_path()
+            except Exception:
+                still = None
+            if not still:
+                raw = (s.still_path or "").strip()
+                if raw and Path(raw).is_file():
+                    still = str(Path(raw).resolve())
+
+            # Bind parent (library selection) — never New Scene reset
+            self._var_parent_id = s.id
+            self._var_parent_name = title
+            self._var_parent_path = still
+            self._var_pending_path = None
+            self._selected_scene_id = s.id
+            self._variations_expanded.add(s.id)
+            self._edit_id = None
+
+            badge = s.aspect_badge()
+            self.var_parent_label.value = (
+                f"Parent: {title}" + (f" · {badge}" if badge else "")
+            )
+            self.var_parent_sub.value = (
+                f"I2I reference · {Path(still).name}"
+                if still
+                else "I2I reference · (still missing)"
+            )
+            self._set_var_parent_thumb(still)
+
+            if still:
+                self.var_error.value = ""
+                self.var_error.visible = False
+                self.btn_var_gen.disabled = False
+                status_msg = (
+                    f"Create variation under “{title}” — transform, Generate, Confirm."
+                )
+                status_err = False
+            else:
+                self.var_error.value = (
+                    "Parent still file is missing. Re-upload or re-generate the plate "
+                    "on Edit, then try Create variation again. Panel stays open."
+                )
+                self.var_error.visible = True
+                self.btn_var_gen.disabled = True
+                status_msg = self.var_error.value
+                status_err = True
+
+            self.var_prompt.value = ""
+            self.var_name.value = f"{title} – "
+            self._set_var_result_preview(None)
+            self.btn_var_save.visible = False
+            self.btn_var_gen.content = "Generate"
+
+            try:
+                self._sync_var_quality_options()
+            except Exception as exc:
+                print(f"[Scenes] var quality sync: {exc}")
+                self._set_status(f"Variation quality setup: {exc}", error=True)
+            try:
+                self._refresh_var_cost_sync()
+            except Exception as exc:
+                print(f"[Scenes] var cost sync: {exc}")
+
+            # Replace left work area with full panel (fixed height — no blank ListView)
+            self._mount_variation_workspace()
+            # List selection highlight only (does not remount form)
+            self.refresh()
+            self._set_status(status_msg, error=status_err)
+            print(
+                f"[Scenes] variation panel open parent={title!r} still={still!r} "
+                f"mode={self._ui_mode} work_host_n={len(self.work_host.controls)}"
+            )
+        except Exception as exc:
+            try:
+                print(traceback.format_exc())
+            except Exception:
+                pass
+            self._set_status(f"Create variation failed: {exc}", error=True)
+            # Always try to show something non-blank
+            try:
+                self.work_host.controls = [
+                    ft.Container(
+                        content=ft.Column(
+                            [
+                                ft.Text(
+                                    "Create variation failed",
+                                    color="#ef9a9a",
+                                    weight=ft.FontWeight.W_700,
+                                ),
+                                ft.Text(str(exc), color=TEXT_MUTED, size=FONT_SM),
+                                ft.OutlinedButton(
+                                    content="Back to form",
+                                    on_click=self._close_variation_panel,
+                                ),
+                            ],
+                            tight=True,
+                            spacing=8,
+                        ),
+                        padding=12,
+                        height=200,
+                        border=ft.Border.all(1, "#ef9a9a"),
+                        border_radius=8,
+                    )
+                ]
+                self.page.update()
+            except Exception:
+                pass
+
+    async def _close_variation_panel(self, e: ft.ControlEvent | None = None) -> None:
+        """Cancel variation — restore form workspace; do not wipe parent library selection."""
+        try:
+            parent_id = self._var_parent_id
+            self._exit_variation_mode(clear_parent=True)
+            if parent_id:
+                self._selected_scene_id = parent_id
+            self._mount_form_workspace()
+            self.refresh()
+            self._set_status(
+                "Variation cancelled — form restored. Parent still selected in library."
+            )
+            try:
+                self.page.update()
+            except Exception:
+                pass
+        except Exception as exc:
+            self._set_status(f"Cancel variation failed: {exc}", error=True)
+
+    def _sync_var_quality_options(self) -> None:
+        try:
+            from media_studio.character_store import (
+                default_practical_resolution,
+                edit_resolution_options,
+            )
+            from media_studio.flet_theme import dropdown_options
+
+            labs = edit_resolution_options(self.var_model_dd.value) or ["1K", "2K"]
+            self.var_quality_dd.options = dropdown_options(labs)
+            if self.var_quality_dd.value not in labs:
+                self.var_quality_dd.value = default_practical_resolution(labs) or labs[0]
         except Exception:
             pass
 
-    async def _close_variation_panel(self, e: ft.ControlEvent | None = None) -> None:
-        self.var_box.visible = False
-        self._var_parent_id = None
-        self._var_parent_path = None
-        self._var_pending_path = None
-        self.var_preview.visible = False
-        self.btn_var_save.visible = False
+    async def _on_var_model(self, e: ft.ControlEvent | None = None) -> None:
+        self._sync_var_quality_options()
+        self._refresh_var_cost_sync()
         try:
             self.page.update()
         except Exception:
@@ -1357,11 +1782,13 @@ class ScenesView:
             es = resolve_image_edit_model(lab)
             per = float(getattr(es, "cost_estimate_usd", 0) or 0.04) if es else 0.04
             model = es.label if es else (lab or "I2I")
-            self.var_cost_text.value = format_job_cost(per, unit="1 edit", model=model)
+            q = (self.var_quality_dd.value or "").strip()
+            unit = f"1 edit · {q}" if q else "1 edit"
+            self.var_cost_text.value = format_job_cost(per, unit=unit, model=model)
         except Exception:
             try:
                 self.var_cost_text.value = estimate_scene_t2i_cost(
-                    t2i_label=None, quality="Standard"
+                    t2i_label=None, quality=self.var_quality_dd.value or "Standard"
                 )
             except Exception:
                 self.var_cost_text.value = "Est. cost: —"
@@ -1409,16 +1836,36 @@ class ScenesView:
         if not has_fal_key():
             self._set_status("FAL API key required — open Settings.", error=True)
             return
-        if not self._var_parent_path or not Path(self._var_parent_path).is_file():
-            self._set_status("Base scene still missing.", error=True)
+        parent_path = self._var_parent_path
+        if parent_path and not Path(parent_path).is_file():
+            # Retry resolve from store (path repair)
+            try:
+                from media_studio.scene_store import find_scene as _find
+
+                base = _find(self._var_parent_id)
+                if base is not None:
+                    parent_path = base.resolved_still_path()
+                    self._var_parent_path = parent_path
+            except Exception:
+                pass
+        if not parent_path or not Path(parent_path).is_file():
+            self._set_status(
+                "Parent still missing — cannot run I2I. Re-upload the base plate "
+                "or pick another scene.",
+                error=True,
+            )
             return
         transform = (self.var_prompt.value or "").strip()
         if not transform:
-            self._set_status("Describe the transform (e.g. winter snow).", error=True)
+            self._set_status(
+                "Describe the transform (e.g. winter snow, golden hour).",
+                error=True,
+            )
             return
         if not self.state.try_busy("scenes"):
             return
         self.btn_var_gen.disabled = True
+        self.btn_var_save.disabled = True
         self.job_progress.start("Generating scene variation…", self.page)
         self._set_status("Running variation (I2I)…")
         try:
@@ -1444,14 +1891,18 @@ class ScenesView:
             )
             model_choice = self.var_model_dd.value or preferred_scene_edit_model()
             res_opts = edit_resolution_options(model_choice)
-            edit_res = default_practical_resolution(res_opts) if res_opts else None
+            ui_q = (self.var_quality_dd.value or "").strip()
+            if ui_q and res_opts and ui_q in res_opts:
+                edit_res = ui_q
+            else:
+                edit_res = default_practical_resolution(res_opts) if res_opts else None
             params_json = edit_params_json_for_resolution(edit_res)
             result = await to_thread_with_job(
                 self.state,
                 generate,
                 prompt,
                 model_choice=model_choice,
-                image_file=self._var_parent_path,
+                image_file=str(parent_path),
                 extra_image_files=None,
                 output_dir=self.state.output_dir,
                 on_progress=on_progress,
@@ -1461,28 +1912,35 @@ class ScenesView:
             path = None
             err = None
             if result.ok:
-                path = result.primary_image or (
-                    result.image_paths[0] if result.image_paths else None
+                path = getattr(result, "primary_image", None) or (
+                    result.image_paths[0] if getattr(result, "image_paths", None) else None
                 )
+                if not path and getattr(result, "path", None):
+                    path = result.path
             else:
                 err = result.status or "Variation failed"
 
             if path and Path(path).is_file():
                 self._var_pending_path = str(Path(path).resolve())
-                self.var_preview.src = self._var_pending_path
-                self.var_preview.visible = True
+                self._set_var_result_preview(self._var_pending_path)
                 self.btn_var_save.visible = True
-                # Soft name if empty suffix only
-                if not (self.var_name.value or "").strip() or (
-                    self.var_name.value or ""
-                ).strip().endswith("–"):
-                    short = transform[:32].rstrip(" .,;")
+                self.btn_var_gen.content = "Regenerate"
+                # Soft name if empty / trailing dash only
+                cur_name = (self.var_name.value or "").strip()
+                if (
+                    not cur_name
+                    or cur_name.endswith("–")
+                    or cur_name.endswith("-")
+                    or cur_name == f"{self._var_parent_name} –"
+                ):
+                    short = transform.split(",")[0].strip()[:36].rstrip(" .,;")
                     self.var_name.value = f"{self._var_parent_name} – {short}"
                 self.job_progress.finish_ok(
                     "Variation ready — Confirm & save", self.page
                 )
                 self._set_status(
-                    "Variation ready — click preview to enlarge, then Confirm & save."
+                    "Variation ready — enlarge preview, Confirm & save, "
+                    "Regenerate, or Cancel."
                 )
             else:
                 msg = err or "Variation generate failed"
@@ -1498,6 +1956,7 @@ class ScenesView:
                 pass
         finally:
             self.btn_var_gen.disabled = False
+            self.btn_var_save.disabled = False
             try:
                 self.state.clear_busy("scenes")
             except Exception:
@@ -1515,8 +1974,11 @@ class ScenesView:
             self._set_status("Generate a variation first.", error=True)
             return
         name = (self.var_name.value or "").strip()
-        if not name:
-            self._set_status("Variation name is required.", error=True)
+        if not name or name.endswith("–") or name.endswith("-"):
+            self._set_status(
+                "Enter a variation name (e.g. Winter).",
+                error=True,
+            )
             return
         try:
             from media_studio.scene_store import find_scene as _find
@@ -1526,18 +1988,25 @@ class ScenesView:
                 self._var_pending_path
             )
             notes = (self.var_prompt.value or "").strip()
-            if len(notes) > 200:
-                notes = notes[:197].rstrip() + "…"
+            if len(notes) > 160:
+                notes = notes[:157].rstrip() + "…"
+            parent_id = self._var_parent_id
             entry = add_scene(
                 name=name,
                 still_path=self._var_pending_path,
                 notes=notes,
                 aspect=ar,
-                parent_id=self._var_parent_id,
+                parent_id=parent_id,
             )
-            self._variations_expanded.add(self._var_parent_id)
-            self._set_status(f"Saved variation: {entry.name}")
-            await self._close_variation_panel()
+            if parent_id:
+                self._variations_expanded.add(parent_id)
+                self._selected_scene_id = parent_id
+            self._set_status(
+                f"Saved variation: {entry.display_name()} under parent Variations."
+            )
+            # Return to form workspace; keep parent selected / expanded
+            self._exit_variation_mode(clear_parent=True)
+            self._mount_form_workspace()
             self.refresh()
         except Exception as exc:
             self._set_status(str(exc), error=True)

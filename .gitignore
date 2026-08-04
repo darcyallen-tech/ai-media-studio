@@ -75,8 +75,11 @@ data/characters/
 **/character_stills/
 characters.json
 
-# Local scene / location plates (do not ship)
+# Local scene / location plates (do not ship) — same pattern as characters
 data/scene_stills/
+data/scenes/
 data/scenes.json
+data/scenes*.json
 **/scene_stills/
+**/scenes.json
 scenes.json
