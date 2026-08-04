@@ -124,6 +124,7 @@ Dashboards:
 | **Motion Sync** | Character still + driving video → motion transfer (Kling Motion Control, Wan Motion) |
 | **Frame Editor** | Aleph 2.0 keyframe edit via **Runware** + optional fal 1080p proxy |
 | **Audio** | Music, SFX, Ambience, VO, Voice clone, **Video → SFX** |
+| **Characters** | Save reusable character stills for Motion Sync, Director, Creative Vision |
 | **Library** | History; filters including **From Resolve**; Send to Studio / Tools / Frame Editor / Resolve |
 
 ### Creative Vision highlights
@@ -229,7 +230,7 @@ Long jobs use **per-tab busy** scopes so one generate does not lock the whole ap
 
 - Top: Settings, **Help (?)**, fal / Runware / xAI chips, Import from Resolve, output folder  
 - App-level **scenario** bar + optional **Job / Listing** field  
-- Main tabs: Studio · Tools · Creative Vision · Director · VFX · Motion Sync · Frame Editor · Audio · Library  
+- Main tabs: Studio · Tools · Creative Vision · Director · VFX · Motion Sync · Frame Editor · Audio · Characters · Library  
 
 ### Job / Listing folders
 

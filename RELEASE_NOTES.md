@@ -34,10 +34,16 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - Pricing: $0.08/s @480p · $0.14/s @720p · $0.25/s @1080p (I2V/T2V) + $0.01 per ref image
 - fal: `xai/grok-imagine-video/v1.5/{image,text,reference}-to-video`
 
+### Characters tab
+- New main tab **Characters** — save reusable character stills (local store only)
+- Upload / Previously used / From Resolve; name + optional notes/tags; Edit · Delete · Show in folder
+- **Use in Motion Sync** sets the character still and focuses Motion Sync
+- Curated subset of Library (not a replacement); Voice Clone remains under Audio
+
 ### Motion Sync tab
 - New main tab **Motion Sync** — character still + driving video → motion transfer
 - Models: Kling Motion Control V3 Pro / Standard, Kling 2.6 Motion Control, Wan Motion
-- Keep original audio (Kling); orientation match video/image; Wan adapt-motion / enhance-identity
+- Keep original audio (Kling); orientation match video/image; Wan fit-body / face-identity wording
 - Auto-proxy long/large clips + oversized stills (original kept); best-practice tips on tab
 - Optional prompt helper chips + Enhance; Est. cost under Generate; Library + Resolve
 

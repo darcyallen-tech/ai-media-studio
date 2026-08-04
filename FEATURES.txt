@@ -37,6 +37,20 @@ TOP BAR
 - Output folder path (persisted) + Open folder
 
 ==============================================================================
+CHARACTERS (reusable stills)
+==============================================================================
+Peer tab to save realtor / talent / hero stills for one-click reuse — local only
+(data/characters.json + data/character_stills/). Not a Library replacement;
+Voice Clone stays under Audio.
+
+- Upload still, or pick from Previously used / From Resolve; optional Open Library
+- Name (required) + optional notes / tags → Save
+- Saved list: thumbnail, name, notes; Edit · Delete · Show in folder ·
+  Use in Motion Sync (sets character still + switches to Motion Sync)
+- Empty state explains one-click use in Motion Sync, Director, and more
+- Survives app restart (local store)
+
+==============================================================================
 MOTION SYNC (character + driving video)
 ==============================================================================
 Peer tab for motion transfer: a character still performs actions from a driving

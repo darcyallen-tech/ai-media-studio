@@ -60,7 +60,7 @@ APP_TITLE = "AI Media Studio"
 APP_DESCRIPTION = (
     "Local desktop workspace for personal AI image and video editing (Flet). "
     "Studio · Tools · Creative Vision · Director · VFX · Motion Sync · Frame Editor · "
-    "Audio · Library. "
+    "Audio · Characters · Library. "
     "Outputs: outputs/YYYY-MM-DD/."
 )
 
