@@ -249,6 +249,13 @@ class MotionSyncView:
             on_click=self._clear_character,
             style=ft.ButtonStyle(color=TEXT_MUTED),
         )
+        self.btn_save_character = ft.TextButton(
+            content="Save as character",
+            icon=ft.Icons.PERSON_ADD_ALT_1_OUTLINED,
+            on_click=self._save_as_character,
+            style=ft.ButtonStyle(color=ACCENT),
+            tooltip="Open Characters tab with this still ready — add a name and Save",
+        )
         self.char_prev = PreviousSourcesStrip(
             page,
             get_output_dir=lambda: self.state.output_dir,
@@ -334,7 +341,15 @@ class MotionSyncView:
                         [self.char_empty, self.char_preview], width=140, height=140
                     ),
                     self.char_label,
-                    ft.Row([self.btn_char, self.btn_char_clear], spacing=6),
+                    ft.Row(
+                        [
+                            self.btn_char,
+                            self.btn_char_clear,
+                            self.btn_save_character,
+                        ],
+                        spacing=6,
+                        wrap=True,
+                    ),
                     self.char_prev.root,
                     self.char_resolve.root,
                 ],
@@ -698,6 +713,38 @@ class MotionSyncView:
         self.char_empty.visible = True
         self.char_label.value = "No character still"
         self._refresh_proxy_note()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _save_as_character(self, e: ft.ControlEvent) -> None:
+        """Shortcut: open Characters with current still prefilled."""
+        if not self._character_path or not Path(self._character_path).is_file():
+            self.status.value = "Load a character still first, then Save as character."
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+        cv = getattr(self.state, "characters_view", None)
+        ok = False
+        if cv is not None and hasattr(cv, "open_with_still"):
+            ok = bool(
+                cv.open_with_still(
+                    self._character_path,
+                    suggested_name=Path(self._character_path).stem.replace("_", " "),
+                )
+            )
+        switch = getattr(self.state, "switch_to_characters", None)
+        if switch:
+            switch()
+        if ok:
+            self.status.value = (
+                f"Characters ← {Path(self._character_path).name} — add a name and Save."
+            )
+        else:
+            self.status.value = "Could not open Characters with this still."
         try:
             self.page.update()
         except Exception:

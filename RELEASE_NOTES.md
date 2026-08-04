@@ -38,6 +38,7 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - New main tab **Characters** — save reusable character stills (local store only)
 - Upload / Previously used / From Resolve; name + optional notes/tags; Edit · Delete · Show in folder
 - **Use in Motion Sync** sets the character still and focuses Motion Sync
+- **Phase 2:** multi-angle (1–3 stills), **Generate variation** (I2I face-lock), shortcuts from Motion Sync / Director / Studio
 - Curated subset of Library (not a replacement); Voice Clone remains under Audio
 
 ### Motion Sync tab

@@ -45,8 +45,14 @@ Voice Clone stays under Audio.
 
 - Upload still, or pick from Previously used / From Resolve; optional Open Library
 - Name (required) + optional notes / tags → Save
+- Multi-angle: up to 3 stills per character (primary + optional extras); list shows
+  primary thumb; Edit manages angles
+- Generate variation: simple I2I face-lock (Flux 2 Pro) from primary still — save as
+  new character, add as angle, or replace primary
+- Shortcuts: “Save as character” / “Save current still as character” from Motion Sync,
+  Director (active shot ref), and Studio Image (source or result) prefills Characters
 - Saved list: thumbnail, name, notes; Edit · Delete · Show in folder ·
-  Use in Motion Sync (sets character still + switches to Motion Sync)
+  Use in Motion Sync (sets primary still + switches to Motion Sync)
 - Empty state explains one-click use in Motion Sync, Director, and more
 - Survives app restart (local store)
 

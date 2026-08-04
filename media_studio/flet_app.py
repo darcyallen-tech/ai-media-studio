@@ -796,6 +796,13 @@ class StudioImageView:
             on_click=self._on_pick_source,
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
         )
+        self.btn_save_character = ft.TextButton(
+            content="Save as character",
+            icon=ft.Icons.PERSON_ADD_ALT_1_OUTLINED,
+            on_click=self._on_save_as_character,
+            style=ft.ButtonStyle(color=ACCENT),
+            tooltip="Open Characters with this source still ready — add a name and Save",
+        )
 
         # --- comparison workspace (inline: left rail + large smooth overlay) ---
         self.compare_label = ft.Text("Generate to compare versions", size=FONT_SM, color=TEXT_MUTED)
@@ -978,8 +985,13 @@ class StudioImageView:
             self._workspace_desc,
             ft.Divider(height=1, color=BORDER),
             ft.Row(
-                [section_title("Source still"), self.btn_pick],
+                [
+                    section_title("Source still"),
+                    self.btn_pick,
+                    self.btn_save_character,
+                ],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                wrap=True,
             ),
             ft.Stack(
                 [
@@ -2054,6 +2066,39 @@ class StudioImageView:
             self.page.update()
         except Exception:
             pass
+
+    async def _on_save_as_character(self, e: ft.ControlEvent) -> None:
+        """Shortcut: open Characters with current Studio Image source prefilled."""
+        path = self.state.source_path
+        if not path or not Path(path).is_file():
+            # Prefer selected result if no source
+            gen = None
+            try:
+                gen = self._selected_gen()
+            except Exception:
+                gen = None
+            if gen and Path(gen).is_file():
+                path = gen
+        if not path or not Path(path).is_file():
+            self._set_status("Load a source still first, then Save as character.")
+            return
+        cv = getattr(self.state, "characters_view", None)
+        ok = False
+        if cv is not None and hasattr(cv, "open_with_still"):
+            ok = bool(
+                cv.open_with_still(
+                    path,
+                    suggested_name=Path(path).stem.replace("_", " "),
+                )
+            )
+        switch = getattr(self.state, "switch_to_characters", None)
+        if switch:
+            switch()
+        self._set_status(
+            f"Characters ← {Path(path).name} — add a name and Save."
+            if ok
+            else "Could not open Characters with this still."
+        )
 
     def load_source_path(self, path: str, *, status: str | None = None) -> bool:
         """Sync load of a still as Image source (upload, previous, Resolve import)."""

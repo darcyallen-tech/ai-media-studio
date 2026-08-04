@@ -252,6 +252,13 @@ class DirectorView:
             media_kind="image",
         )
         self._ref_target_index: int = 0  # which shot receives strip stills
+        self.btn_save_character = ft.TextButton(
+            content="Save current still as character",
+            icon=ft.Icons.PERSON_ADD_ALT_1_OUTLINED,
+            on_click=self._save_as_character,
+            style=ft.ButtonStyle(color=ACCENT),
+            tooltip="Open Characters with the active shot's ref still (or last strip still)",
+        )
 
         self.btn_generate = ft.FilledButton(
             content="Generate multi-shot",
@@ -366,6 +373,7 @@ class DirectorView:
             label("Still refs for active shot (Previously used / From Resolve)", muted=True),
             self.prev_strip.root,
             self.resolve_strip.root,
+            self.btn_save_character,
             self.assembled,
             ft.Row([self.btn_rebuild, self.btn_enhance, self.btn_generate], spacing=8),
             self.cost_box,
@@ -986,6 +994,50 @@ class DirectorView:
         # Grok Imagine Director cost scales with ref count
         try:
             self.cost_text.value = self._cost_label()
+        except Exception:
+            pass
+
+    async def _save_as_character(self, e: ft.ControlEvent) -> None:
+        """Shortcut: open Characters with active shot ref still prefilled."""
+        path: str | None = None
+        idx = int(getattr(self, "_ref_target_index", 0) or 0)
+        if 0 <= idx < len(self._shots):
+            path = self._shots[idx].get("ref_path")
+        if not path or not Path(path).is_file():
+            # Fall back to any shot with a ref
+            for row in self._shots:
+                rp = row.get("ref_path")
+                if rp and Path(rp).is_file():
+                    path = rp
+                    break
+        if not path or not Path(path).is_file():
+            self.status.value = (
+                "Set a ref still on a shot first, then Save as character."
+            )
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+        cv = getattr(self.state, "characters_view", None)
+        ok = False
+        if cv is not None and hasattr(cv, "open_with_still"):
+            ok = bool(
+                cv.open_with_still(
+                    path,
+                    suggested_name=Path(path).stem.replace("_", " "),
+                )
+            )
+        switch = getattr(self.state, "switch_to_characters", None)
+        if switch:
+            switch()
+        self.status.value = (
+            f"Characters ← {Path(path).name} — add a name and Save."
+            if ok
+            else "Could not open Characters with this still."
+        )
+        try:
+            self.page.update()
         except Exception:
             pass
 
