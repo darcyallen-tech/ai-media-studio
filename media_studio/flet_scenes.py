@@ -22,6 +22,7 @@ from media_studio.flet_theme import (
     ACCENT,
     ACCENT_BRIGHT,
     BORDER,
+    FONT_MD,
     FONT_SM,
     PANEL,
     PANEL_ELEVATED,
@@ -34,17 +35,23 @@ from media_studio.flet_theme import (
 )
 from media_studio.scene_store import (
     SavedScene,
+    SceneHasChildrenError,
     add_scene,
     default_scene_quality,
     delete_scene,
     detect_still_aspect,
     estimate_scene_t2i_cost,
+    list_base_scenes,
+    list_scene_variations,
     load_scenes,
     normalize_scene_aspect,
+    preferred_scene_edit_model,
     resolve_scene_t2i_args,
     scene_aspect_ui_options,
+    scene_edit_model_labels,
     scene_quality_options,
     scene_t2i_prompt,
+    scene_variation_prompt,
     set_scene_locked,
     t2i_scene_model_labels,
     update_scene,
@@ -67,6 +74,17 @@ class ScenesView:
         self._edit_id: str | None = None
         self._t2i_pending_path: str | None = None
         self._pending_aspect: str = "16:9"  # last generate / detected still aspect
+        self._variations_expanded: set[str] = set()
+        # Variation transform state
+        self._var_parent_id: str | None = None
+        self._var_parent_name: str = ""
+        self._var_parent_path: str | None = None
+        self._var_pending_path: str | None = None
+
+        # Lightbox (Characters-style enlarge)
+        self._lightbox_dialog: ft.AlertDialog | None = None
+        self._lightbox_img: ft.Image | None = None
+        self._lightbox_title: ft.Text | None = None
 
         self.preview = ft.Image(
             src="",
@@ -170,8 +188,8 @@ class ScenesView:
             color=TEXT,
             text_size=FONT_SM,
             multiline=True,
-            min_lines=2,
-            max_lines=4,
+            min_lines=5,
+            max_lines=12,
         )
         self.t2i_model_dd = styled_dropdown(
             label_text="T2I model",
@@ -230,6 +248,14 @@ class ScenesView:
             style=ft.ButtonStyle(color=ACCENT, side=ft.BorderSide(1, ACCENT)),
             visible=False,
         )
+        self.t2i_preview_tap = ft.GestureDetector(
+            content=ft.Stack(
+                [self.t2i_preview, self.t2i_aspect_badge],
+                width=120,
+                height=90,
+            ),
+            on_tap=self._on_tap_t2i_preview,
+        )
         self.t2i_box = ft.Container(
             content=ft.Column(
                 [
@@ -241,7 +267,8 @@ class ScenesView:
                     ),
                     ft.Text(
                         "Establishing bias — empty or lightly populated; no hero talent "
-                        "unless you ask for people. Aspect and quality are separate.",
+                        "unless you ask for people. Aspect and quality are separate. "
+                        "Click the result thumb to enlarge.",
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
@@ -257,14 +284,7 @@ class ScenesView:
                     ),
                     self.t2i_cost_box,
                     ft.Row(
-                        [
-                            ft.Stack(
-                                [self.t2i_preview, self.t2i_aspect_badge],
-                                width=120,
-                                height=90,
-                            ),
-                            self.btn_t2i_use,
-                        ],
+                        [self.t2i_preview_tap, self.btn_t2i_use],
                         spacing=8,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
@@ -276,6 +296,122 @@ class ScenesView:
             border=ft.Border.all(1, BORDER),
             border_radius=8,
             padding=10,
+        )
+
+        # --- Variation transform (I2I) ---
+        edit_labs = scene_edit_model_labels()
+        pref_edit = preferred_scene_edit_model()
+        # Prefer label match if available
+        edit_default = edit_labs[0] if edit_labs else pref_edit
+        for lab in edit_labs:
+            if pref_edit.lower() in lab.lower() or lab.lower() in pref_edit.lower():
+                edit_default = lab
+                break
+        self.var_parent_label = ft.Text("", size=FONT_SM, color=TEXT_MUTED)
+        self.var_prompt = ft.TextField(
+            label="Transform (season, time of day, weather, era…)",
+            hint_text='e.g. "winter snow, overcast afternoon" or "post-apocalyptic ruin"',
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            multiline=True,
+            min_lines=3,
+            max_lines=8,
+        )
+        self.var_name = ft.TextField(
+            label="Variation name (required to save)",
+            hint_text='e.g. "Neighborhood Park – Winter"',
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+        )
+        self.var_model_dd = styled_dropdown(
+            label_text="Edit model",
+            options=edit_labs or [pref_edit],
+            value=edit_default,
+            on_select=self._refresh_var_cost,
+            expand=True,
+        )
+        self.var_cost_text, self.var_cost_box = make_estimated_cost_box(
+            initial="Est. cost: —"
+        )
+        self.btn_var_enhance = make_enhance_button(on_click=self._on_var_enhance)
+        self.btn_var_gen = ft.FilledButton(
+            content="Generate variation",
+            icon=ft.Icons.AUTO_FIX_HIGH,
+            on_click=self._run_variation,
+            style=ft.ButtonStyle(bgcolor=ACCENT, color=TEXT),
+            height=40,
+        )
+        self.btn_var_save = ft.FilledButton(
+            content="Confirm & save variation",
+            on_click=self._save_variation,
+            style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+            height=40,
+            visible=False,
+        )
+        self.btn_var_close = ft.TextButton(
+            content="Close",
+            on_click=self._close_variation_panel,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+        )
+        self.var_preview = ft.Image(
+            src="",
+            width=140,
+            height=100,
+            fit=ft.BoxFit.COVER,
+            border_radius=6,
+            visible=False,
+        )
+        self.var_preview_tap = ft.GestureDetector(
+            content=self.var_preview,
+            on_tap=self._on_tap_var_preview,
+        )
+        self.var_box = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(
+                        "Create variation (I2I)",
+                        size=FONT_SM,
+                        color=TEXT,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    self.var_parent_label,
+                    ft.Text(
+                        "Keeps the same place; changes season, weather, time, era, etc. "
+                        "Click preview to enlarge.",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                    ),
+                    self.var_prompt,
+                    self.var_name,
+                    ft.Row([self.var_model_dd], spacing=0),
+                    ft.Row(
+                        [self.btn_var_enhance, self.btn_var_gen],
+                        spacing=8,
+                    ),
+                    self.var_cost_box,
+                    ft.Row(
+                        [self.var_preview_tap, self.btn_var_save, self.btn_var_close],
+                        spacing=8,
+                        wrap=True,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                ],
+                spacing=6,
+                tight=True,
+            ),
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, ACCENT),
+            border_radius=8,
+            padding=10,
+            visible=False,
         )
 
         self.status = ft.Text("", size=FONT_SM, color=TEXT_MUTED, max_lines=4)
@@ -321,11 +457,15 @@ class ScenesView:
             ),
             ft.Divider(height=1, color=BORDER),
             label("Add / edit scene", muted=True),
-            ft.Stack(
-                [self.preview_empty, self.preview],
-                width=_PREVIEW,
-                height=_PREVIEW,
+            ft.GestureDetector(
+                content=ft.Stack(
+                    [self.preview_empty, self.preview],
+                    width=_PREVIEW,
+                    height=_PREVIEW,
+                ),
+                on_tap=self._on_tap_form_preview,
             ),
+            ft.Text("Click still to enlarge", size=11, color=TEXT_MUTED),
             self.still_label,
             ft.Row(
                 [self.btn_upload, self.btn_clear_still],
@@ -339,6 +479,7 @@ class ScenesView:
             ft.Row([self.btn_save, self.btn_cancel_edit], spacing=8),
             ft.Divider(height=1, color=BORDER),
             self.t2i_box,
+            self.var_box,
             self.job_progress.control,
             self.status,
         ]
@@ -359,13 +500,21 @@ class ScenesView:
     # ----- public -----
 
     def refresh(self) -> None:
-        scenes = load_scenes()
+        bases = list_base_scenes()
         self.list_host.controls.clear()
-        n = len(scenes)
-        self.list_count.value = f"{n} scene(s)" if n else ""
-        self.empty_state.visible = n == 0
-        for s in scenes:
-            self.list_host.controls.append(self._card(s))
+        n_base = len(bases)
+        n_all = len(load_scenes())
+        n_var = max(0, n_all - n_base)
+        self.list_count.value = (
+            f"{n_base} scene(s)"
+            + (f" · {n_var} variation(s)" if n_var else "")
+            if n_base
+            else ""
+        )
+        self.empty_state.visible = n_base == 0
+        for s in bases:
+            kids = list_scene_variations(s.id)
+            self.list_host.controls.append(self._card(s, children=kids))
         try:
             self.page.update()
         except Exception:
@@ -714,23 +863,126 @@ class ScenesView:
             self._set_status("No generated plate to use.", error=True)
             return
         self._set_still(self._t2i_pending_path, aspect=self._pending_aspect)
-        # Soft-fill name from description if empty
-        if not (self.name_field.value or "").strip():
-            desc = (self.t2i_desc.value or "").strip()
-            if desc:
-                self.name_field.value = desc[:48].rstrip(" .,;")
+        # Do NOT dump the full T2I/Enhance prompt into Name — user names the plate
         ar = self._pending_aspect or detect_still_aspect(self._t2i_pending_path)
         self._set_status(
-            f"Still set from generate ({ar or '?'}) — confirm name and Save."
+            f"Still set from generate ({ar or '?'}) — enter a short Name and Save."
         )
         try:
             self.page.update()
         except Exception:
             pass
 
+    # ----- lightbox -----
+
+    def _open_preview(self, path: str, *, title: str = "Scene preview") -> None:
+        p = Path(path)
+        if not p.is_file():
+            self._set_status(f"Missing still: {path}", error=True)
+            return
+        win_w = float(getattr(self.page.window, "width", None) or 1400)
+        win_h = float(getattr(self.page.window, "height", None) or 900)
+        body_w = int(min(max(win_w - 80, 640), win_w * 0.9))
+        body_h = int(min(max(win_h - 100, 480), win_h * 0.88))
+
+        if self._lightbox_img is None:
+            self._lightbox_img = ft.Image(
+                src="",
+                fit=ft.BoxFit.CONTAIN,
+                expand=True,
+                gapless_playback=True,
+            )
+        if self._lightbox_title is None:
+            self._lightbox_title = ft.Text(
+                title,
+                size=FONT_MD,
+                color=TEXT,
+                weight=ft.FontWeight.W_700,
+                expand=True,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+            )
+        self._lightbox_img.src = str(p.resolve())
+        self._lightbox_title.value = title
+
+        async def _close(_e: ft.ControlEvent) -> None:
+            close_dialog(self.page, self._lightbox_dialog)
+
+        body = ft.Container(
+            width=body_w,
+            height=body_h,
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            self._lightbox_title,
+                            ft.IconButton(
+                                icon=ft.Icons.CLOSE,
+                                icon_color=TEXT,
+                                on_click=_close,
+                                tooltip="Close",
+                            ),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Container(
+                        content=self._lightbox_img,
+                        expand=True,
+                        bgcolor="#0a0c10",
+                        border_radius=8,
+                        border=ft.Border.all(1, BORDER),
+                        alignment=ft.Alignment.CENTER,
+                        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                    ),
+                ],
+                spacing=8,
+                expand=True,
+            ),
+        )
+        self._lightbox_dialog = ft.AlertDialog(
+            modal=True,
+            content=body,
+            actions=[],
+        )
+        show_dialog(self.page, self._lightbox_dialog)
+
+    async def _on_tap_form_preview(self, e: ft.ControlEvent) -> None:
+        if self._still_path and Path(self._still_path).is_file():
+            ar = self._pending_aspect or detect_still_aspect(self._still_path)
+            name = (self.name_field.value or "").strip() or "Scene still"
+            self._open_preview(
+                self._still_path,
+                title=f"{name}" + (f" · {ar}" if ar else ""),
+            )
+
+    async def _on_tap_t2i_preview(self, e: ft.ControlEvent) -> None:
+        if self._t2i_pending_path and Path(self._t2i_pending_path).is_file():
+            ar = self._pending_aspect or detect_still_aspect(self._t2i_pending_path)
+            self._open_preview(
+                self._t2i_pending_path,
+                title="Generated plate" + (f" · {ar}" if ar else ""),
+            )
+
+    async def _on_tap_var_preview(self, e: ft.ControlEvent) -> None:
+        if self._var_pending_path and Path(self._var_pending_path).is_file():
+            self._open_preview(self._var_pending_path, title="Variation preview")
+
+    def _make_preview_path(self, path: str, title: str):
+        async def _tap(_e: ft.ControlEvent) -> None:
+            if path and Path(path).is_file():
+                self._open_preview(path, title=title)
+
+        return _tap
+
     # ----- list cards -----
 
-    def _card(self, s: SavedScene) -> ft.Control:
+    def _card(
+        self,
+        s: SavedScene,
+        *,
+        children: list[SavedScene] | None = None,
+        nested: bool = False,
+    ) -> ft.Control:
         still_ok = s.has_still()
         badge_txt = s.aspect_badge()
         if still_ok:
@@ -779,125 +1031,151 @@ class ScenesView:
                 ),
             )
         lock_icon = " 🔒" if s.locked else ""
-        notes = s.display_notes() or "—"
-        aspect_line = badge_txt or "aspect unknown"
-        return ft.Container(
-            content=ft.Column(
-                [
-                    ft.Row(
-                        [
-                            thumb,
-                            ft.Column(
-                                [
-                                    ft.Text(
-                                        f"{s.name}{lock_icon}",
-                                        size=FONT_SM,
-                                        color=TEXT,
-                                        weight=ft.FontWeight.W_600,
-                                        max_lines=1,
-                                    ),
-                                    ft.Text(
-                                        aspect_line,
-                                        size=FONT_SM,
-                                        color=ACCENT,
-                                        weight=ft.FontWeight.W_600,
-                                        max_lines=1,
-                                    ),
-                                    ft.Text(
-                                        notes,
-                                        size=FONT_SM,
-                                        color=TEXT_MUTED,
-                                        max_lines=2,
-                                    ),
-                                    ft.Text(
-                                        "Still file missing",
-                                        size=FONT_SM,
-                                        color="#e57373",
-                                        visible=not still_ok,
-                                    ),
-                                ],
-                                spacing=2,
-                                tight=True,
-                                expand=True,
-                            ),
-                        ],
-                        spacing=10,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
-                    ),
-                    ft.Row(
-                        [
-                            ft.OutlinedButton(
-                                content="Edit",
-                                on_click=self._make_edit(s),
-                                style=ft.ButtonStyle(
-                                    color=TEXT, side=ft.BorderSide(1, BORDER)
-                                ),
-                                height=36,
-                            ),
-                            ft.TextButton(
-                                content="Unlock" if s.locked else "Lock",
-                                icon=(
-                                    ft.Icons.LOCK_OPEN
-                                    if s.locked
-                                    else ft.Icons.LOCK_OUTLINE
-                                ),
-                                on_click=self._make_toggle_lock(s),
-                                style=ft.ButtonStyle(
-                                    color=ACCENT if s.locked else TEXT_MUTED
-                                ),
-                                height=36,
-                            ),
-                            ft.TextButton(
-                                content="Show in folder",
-                                icon=ft.Icons.FOLDER_OPEN,
-                                on_click=self._make_show_folder(s),
-                                style=ft.ButtonStyle(color=TEXT_MUTED),
-                                height=36,
-                                disabled=not still_ok,
-                            ),
-                            ft.TextButton(
-                                content="Delete",
-                                icon=ft.Icons.DELETE_OUTLINE,
-                                on_click=self._make_delete(s),
-                                style=ft.ButtonStyle(color="#ef9a9a"),
-                                height=36,
-                            ),
-                        ],
-                        spacing=4,
-                        wrap=True,
-                    ),
-                ],
-                spacing=8,
-                tight=True,
-            ),
-            bgcolor=PANEL_ELEVATED,
-            border=ft.Border.all(1, ACCENT if s.locked else BORDER),
-            border_radius=8,
-            padding=10,
+        notes = s.display_notes()
+        # Primary = user Name; secondary = short notes only (never bury name under prompt)
+        name_txt = ft.Text(
+            f"{s.name}{lock_icon}",
+            size=FONT_SM,
+            color=TEXT,
+            weight=ft.FontWeight.W_700,
+            max_lines=1,
+            overflow=ft.TextOverflow.ELLIPSIS,
+        )
+        notes_txt = ft.Text(
+            notes if notes else ("—" if nested else "No notes"),
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=2,
+            overflow=ft.TextOverflow.ELLIPSIS,
+        )
+        missing = ft.Text(
+            "Still file missing",
+            size=FONT_SM,
+            color="#e57373",
+            visible=not still_ok,
         )
 
-    def _make_preview_path(self, path: str, title: str):
-        async def _tap(_e: ft.ControlEvent) -> None:
-            if not path or not Path(path).is_file():
-                return
-            dlg = ft.AlertDialog(
-                title=ft.Text(title or "Scene"),
-                content=ft.Image(
-                    src=path,
-                    fit=ft.BoxFit.CONTAIN,
-                    width=480,
-                    height=360,
-                ),
-                actions=[
-                    ft.TextButton(
-                        content="Close",
-                        on_click=lambda _e: close_dialog(self.page, dlg),
-                    )
-                ],
-            )
-            show_dialog(self.page, dlg)
+        btn_edit = ft.OutlinedButton(
+            content="Edit",
+            on_click=self._make_edit(s),
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=36,
+        )
+        btn_lock = ft.TextButton(
+            content="Unlock" if s.locked else "Lock",
+            icon=ft.Icons.LOCK_OPEN if s.locked else ft.Icons.LOCK_OUTLINE,
+            on_click=self._make_toggle_lock(s),
+            style=ft.ButtonStyle(color=ACCENT if s.locked else TEXT_MUTED),
+            height=36,
+        )
+        btn_folder = ft.TextButton(
+            content="Show in folder",
+            icon=ft.Icons.FOLDER_OPEN,
+            on_click=self._make_show_folder(s),
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+            height=36,
+            disabled=not still_ok,
+        )
+        btn_delete = ft.TextButton(
+            content="Delete",
+            icon=ft.Icons.DELETE_OUTLINE,
+            on_click=self._make_delete(s),
+            style=ft.ButtonStyle(color="#ef9a9a"),
+            height=36,
+        )
+        btn_var = ft.OutlinedButton(
+            content="Create variation",
+            icon=ft.Icons.AUTO_FIX_HIGH,
+            on_click=self._make_open_variation(s),
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=36,
+            disabled=not still_ok or nested,
+            visible=not nested,
+            tooltip="Season / weather / era transform from this plate (I2I)",
+        )
 
-        return _tap
+        actions = [btn_var, btn_edit, btn_lock, btn_folder, btn_delete]
+        if nested:
+            actions = [btn_edit, btn_lock, btn_folder, btn_delete]
+
+        kids = list(children) if children is not None else []
+        variations_col: ft.Control | None = None
+        if not nested:
+            expanded = s.id in self._variations_expanded
+            n_kids = len(kids)
+            count_label = f"{n_kids}" if n_kids else "none"
+            toggle = ft.TextButton(
+                content=(
+                    f"▾ Variations ({count_label})"
+                    if expanded
+                    else f"▸ Variations ({count_label})"
+                ),
+                on_click=self._make_toggle_variations(s.id),
+                style=ft.ButtonStyle(color=ACCENT),
+                tooltip="Season / weather / style variants under this scene",
+            )
+            if n_kids:
+                expanded_body: ft.Control = ft.Column(
+                    [self._card(k, nested=True) for k in kids],
+                    spacing=6,
+                    tight=True,
+                    visible=expanded,
+                )
+            else:
+                expanded_body = ft.Text(
+                    "No variations yet — use Create variation",
+                    size=FONT_SM,
+                    color=TEXT_MUTED,
+                    visible=expanded,
+                )
+            variations_col = ft.Column(
+                [toggle, expanded_body],
+                spacing=4,
+                tight=True,
+            )
+
+        body = ft.Column(
+            [
+                name_txt,
+                notes_txt,
+                missing,
+                ft.Row(actions, spacing=4, wrap=True),
+            ],
+            spacing=4,
+            expand=True,
+            tight=True,
+        )
+        if variations_col is not None:
+            body.controls.append(variations_col)
+
+        return ft.Container(
+            content=ft.Row(
+                [thumb, body],
+                spacing=12,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
+            bgcolor=PANEL if nested else PANEL_ELEVATED,
+            border=ft.Border.all(1, ACCENT if s.locked else BORDER),
+            border_radius=8,
+            padding=10 if not nested else 8,
+            margin=ft.Margin.only(left=16) if nested else None,
+        )
+
+    def _make_toggle_variations(self, parent_id: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            if parent_id in self._variations_expanded:
+                self._variations_expanded.discard(parent_id)
+            else:
+                self._variations_expanded.add(parent_id)
+            self.refresh()
+
+        return _click
+
+    def _make_open_variation(self, s: SavedScene):
+        async def _click(_e: ft.ControlEvent) -> None:
+            self._open_variation_panel(s)
+
+        return _click
 
     def _make_edit(self, s: SavedScene):
         async def _click(_e: ft.ControlEvent) -> None:
@@ -952,34 +1230,311 @@ class ScenesView:
                 )
                 return
 
-            async def _confirm(_e: ft.ControlEvent) -> None:
+            kids = list_scene_variations(s.id) if s.is_base() else []
+            n_kids = len(kids)
+
+            async def _do_delete(
+                _e: ft.ControlEvent,
+                *,
+                delete_children: bool = False,
+            ) -> None:
                 close_dialog(self.page, dlg)
                 try:
-                    delete_scene(s.id)
-                    if self._edit_id == s.id:
+                    delete_scene(
+                        s.id,
+                        delete_children=delete_children,
+                        force_children_check=not delete_children,
+                    )
+                    kid_ids = {k.id for k in kids}
+                    if self._edit_id == s.id or (
+                        delete_children and self._edit_id in kid_ids
+                    ):
                         self._reset_form()
-                    self._set_status(f"Deleted: {s.name}")
+                    msg = f"Deleted: {s.name}"
+                    if delete_children and n_kids:
+                        msg += f" (+ {n_kids} variation(s))"
+                    self._set_status(msg)
                     self.refresh()
+                except SceneHasChildrenError as exc:
+                    self._set_status(str(exc), error=True)
                 except Exception as exc:
                     self._set_status(str(exc), error=True)
 
-            dlg = ft.AlertDialog(
-                title=ft.Text("Delete scene?"),
-                content=ft.Text(
-                    f"Delete “{s.name}” and its local still? This cannot be undone."
-                ),
-                actions=[
+            async def _delete_all(_e: ft.ControlEvent) -> None:
+                await _do_delete(_e, delete_children=True)
+
+            async def _delete_one(_e: ft.ControlEvent) -> None:
+                await _do_delete(_e, delete_children=False)
+
+            if n_kids:
+                body = (
+                    f"“{s.name}” has {n_kids} variation(s). "
+                    "Delete all (parent + variations), or cancel and remove "
+                    "variations individually first."
+                )
+                actions = [
+                    ft.TextButton(
+                        content="Cancel",
+                        on_click=lambda _e: close_dialog(self.page, dlg),
+                    ),
+                    ft.TextButton(
+                        content="Delete all (parent + variations)",
+                        on_click=_delete_all,
+                        style=ft.ButtonStyle(color="#ef9a9a"),
+                    ),
+                ]
+            else:
+                body = f"Delete “{s.name}” and its local still? This cannot be undone."
+                actions = [
                     ft.TextButton(
                         content="Cancel",
                         on_click=lambda _e: close_dialog(self.page, dlg),
                     ),
                     ft.FilledButton(
                         content="Delete",
-                        on_click=_confirm,
+                        on_click=_delete_one,
                         style=ft.ButtonStyle(bgcolor="#c62828", color=TEXT),
                     ),
-                ],
+                ]
+
+            dlg = ft.AlertDialog(
+                title=ft.Text("Delete scene?"),
+                content=ft.Text(body),
+                actions=actions,
             )
             show_dialog(self.page, dlg)
 
         return _click
+
+    # ----- variations (I2I) -----
+
+    def _open_variation_panel(self, s: SavedScene) -> None:
+        if not s.has_still():
+            self._set_status("Base scene still missing.", error=True)
+            return
+        self._var_parent_id = s.id
+        self._var_parent_name = s.name
+        self._var_parent_path = s.still_path
+        self._var_pending_path = None
+        self.var_parent_label.value = f"Base: {s.name}" + (
+            f" · {s.aspect_badge()}" if s.aspect_badge() else ""
+        )
+        self.var_prompt.value = ""
+        self.var_name.value = f"{s.name} – "
+        self.var_preview.src = ""
+        self.var_preview.visible = False
+        self.btn_var_save.visible = False
+        self.var_box.visible = True
+        self._variations_expanded.add(s.id)
+        self._refresh_var_cost_sync()
+        self._set_status(f"Create variation under “{s.name}”.")
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _close_variation_panel(self, e: ft.ControlEvent | None = None) -> None:
+        self.var_box.visible = False
+        self._var_parent_id = None
+        self._var_parent_path = None
+        self._var_pending_path = None
+        self.var_preview.visible = False
+        self.btn_var_save.visible = False
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _refresh_var_cost_sync(self) -> None:
+        try:
+            from media_studio.pricing import format_job_cost
+            from media_studio.fal.models import resolve_image_edit_model
+
+            lab = self.var_model_dd.value
+            es = resolve_image_edit_model(lab)
+            per = float(getattr(es, "cost_estimate_usd", 0) or 0.04) if es else 0.04
+            model = es.label if es else (lab or "I2I")
+            self.var_cost_text.value = format_job_cost(per, unit="1 edit", model=model)
+        except Exception:
+            try:
+                self.var_cost_text.value = estimate_scene_t2i_cost(
+                    t2i_label=None, quality="Standard"
+                )
+            except Exception:
+                self.var_cost_text.value = "Est. cost: —"
+
+    async def _refresh_var_cost(self, e: ft.ControlEvent | None = None) -> None:
+        self._refresh_var_cost_sync()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _on_var_enhance(self, e: ft.ControlEvent) -> None:
+        parent = self._var_parent_name or "location plate"
+
+        def _extra() -> dict[str, Any]:
+            return {
+                "workspace": "scenes",
+                "mode": "image_to_image",
+                "guidance": (
+                    f"Rewrite as an image-edit prompt for transforming the location "
+                    f"“{parent}”. Keep the same place, camera, and layout; change only "
+                    "season / weather / time of day / era as requested. No new hero talent. "
+                    "Photoreal, no text/logo."
+                ),
+            }
+
+        await run_prompt_enhance(
+            page=self.page,
+            state=self.state,
+            prompt_field=self.var_prompt,
+            get_model=lambda: self.var_model_dd.value,
+            get_extra_context=_extra,
+            status_ctrl=self.status,
+            job_progress=self.job_progress,
+            enhance_btn=self.btn_var_enhance,
+            busy_controls=[self.btn_var_gen, self.btn_var_save],
+            context_label="scene variation",
+            allow_empty_with_context=True,
+            busy_scope="scenes",
+        )
+
+    async def _run_variation(self, e: ft.ControlEvent) -> None:
+        from media_studio.secrets_store import has_fal_key
+
+        if not has_fal_key():
+            self._set_status("FAL API key required — open Settings.", error=True)
+            return
+        if not self._var_parent_path or not Path(self._var_parent_path).is_file():
+            self._set_status("Base scene still missing.", error=True)
+            return
+        transform = (self.var_prompt.value or "").strip()
+        if not transform:
+            self._set_status("Describe the transform (e.g. winter snow).", error=True)
+            return
+        if not self.state.try_busy("scenes"):
+            return
+        self.btn_var_gen.disabled = True
+        self.job_progress.start("Generating scene variation…", self.page)
+        self._set_status("Running variation (I2I)…")
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+        def on_progress(msg: str) -> None:
+            self.job_progress.set_message(classify_progress(msg), self.page)
+
+        try:
+            from media_studio.character_store import (
+                default_practical_resolution,
+                edit_params_json_for_resolution,
+                edit_resolution_options,
+            )
+            from media_studio.job_context import to_thread_with_job
+            from media_studio.services import generate
+
+            prompt = scene_variation_prompt(
+                transform,
+                base_name=self._var_parent_name,
+            )
+            model_choice = self.var_model_dd.value or preferred_scene_edit_model()
+            res_opts = edit_resolution_options(model_choice)
+            edit_res = default_practical_resolution(res_opts) if res_opts else None
+            params_json = edit_params_json_for_resolution(edit_res)
+            result = await to_thread_with_job(
+                self.state,
+                generate,
+                prompt,
+                model_choice=model_choice,
+                image_file=self._var_parent_path,
+                extra_image_files=None,
+                output_dir=self.state.output_dir,
+                on_progress=on_progress,
+                scenario="scene-variation",
+                parameters_json=params_json,
+            )
+            path = None
+            err = None
+            if result.ok:
+                path = result.primary_image or (
+                    result.image_paths[0] if result.image_paths else None
+                )
+            else:
+                err = result.status or "Variation failed"
+
+            if path and Path(path).is_file():
+                self._var_pending_path = str(Path(path).resolve())
+                self.var_preview.src = self._var_pending_path
+                self.var_preview.visible = True
+                self.btn_var_save.visible = True
+                # Soft name if empty suffix only
+                if not (self.var_name.value or "").strip() or (
+                    self.var_name.value or ""
+                ).strip().endswith("–"):
+                    short = transform[:32].rstrip(" .,;")
+                    self.var_name.value = f"{self._var_parent_name} – {short}"
+                self.job_progress.finish_ok(
+                    "Variation ready — Confirm & save", self.page
+                )
+                self._set_status(
+                    "Variation ready — click preview to enlarge, then Confirm & save."
+                )
+            else:
+                msg = err or "Variation generate failed"
+                self.job_progress.finish_error(msg, self.page)
+                self._set_status(msg, error=True)
+        except Exception as exc:
+            msg = f"Variation error: {exc}"
+            self.job_progress.finish_error(msg, self.page)
+            self._set_status(msg, error=True)
+            try:
+                print(traceback.format_exc())
+            except Exception:
+                pass
+        finally:
+            self.btn_var_gen.disabled = False
+            try:
+                self.state.clear_busy("scenes")
+            except Exception:
+                pass
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+    async def _save_variation(self, e: ft.ControlEvent) -> None:
+        if not self._var_parent_id:
+            self._set_status("No base scene selected.", error=True)
+            return
+        if not self._var_pending_path or not Path(self._var_pending_path).is_file():
+            self._set_status("Generate a variation first.", error=True)
+            return
+        name = (self.var_name.value or "").strip()
+        if not name:
+            self._set_status("Variation name is required.", error=True)
+            return
+        try:
+            from media_studio.scene_store import find_scene as _find
+
+            base = _find(self._var_parent_id)
+            ar = (base.aspect if base else "") or detect_still_aspect(
+                self._var_pending_path
+            )
+            notes = (self.var_prompt.value or "").strip()
+            if len(notes) > 200:
+                notes = notes[:197].rstrip() + "…"
+            entry = add_scene(
+                name=name,
+                still_path=self._var_pending_path,
+                notes=notes,
+                aspect=ar,
+                parent_id=self._var_parent_id,
+            )
+            self._variations_expanded.add(self._var_parent_id)
+            self._set_status(f"Saved variation: {entry.name}")
+            await self._close_variation_panel()
+            self.refresh()
+        except Exception as exc:
+            self._set_status(str(exc), error=True)

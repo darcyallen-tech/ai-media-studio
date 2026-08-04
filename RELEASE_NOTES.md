@@ -39,6 +39,7 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - Upload or **Generate** (T2I) with establishing bias; name + notes; list thumb; Edit / Delete / Lock / Show in folder
 - Character = who · Scene = where (Director multi-ref scene plates; later Motion Sync / Vision)
 - **Aspect + Quality**: separate Aspect (16:9 Horizontal / 9:16 Vertical / 1:1 / 4:3 / 3:4) and Quality (1K·2K or Standard·HD); framing language in prompt; list **aspect badge** on thumbs
+- **Scenes polish**: enlarge still from generate/form/list; Name primary in list (not long prompt); taller description field; **Variations** nested under base (I2I season/weather/era transform)
 
 ### Characters tab
 - New main tab **Characters** — save reusable character stills (local store only)

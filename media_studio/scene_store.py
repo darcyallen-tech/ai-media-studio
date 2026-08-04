@@ -63,6 +63,8 @@ class SavedScene:
     locked: bool = False
     # Canonical aspect e.g. "16:9" (from generate or detected from still)
     aspect: str = ""
+    # Variation child: points at base scene id (None = top-level base)
+    parent_id: str | None = None
 
     def display_notes(self) -> str:
         return (self.notes or "").strip()
@@ -72,6 +74,12 @@ class SavedScene:
             return bool(self.still_path) and Path(self.still_path).is_file()
         except OSError:
             return False
+
+    def is_variation(self) -> bool:
+        return bool((self.parent_id or "").strip())
+
+    def is_base(self) -> bool:
+        return not self.is_variation()
 
     def aspect_badge(self) -> str:
         """Short badge for list thumbs (e.g. 16:9)."""
@@ -166,6 +174,10 @@ def _from_dict(item: dict[str, Any]) -> SavedScene | None:
     aspect = normalize_scene_aspect(str(item.get("aspect") or ""))
     if not aspect and still:
         aspect = detect_still_aspect(still)
+    parent_raw = item.get("parent_id")
+    parent_id = str(parent_raw).strip() if parent_raw else None
+    if parent_id == "":
+        parent_id = None
     return SavedScene(
         id=str(item.get("id") or uuid.uuid4().hex[:12]),
         name=name,
@@ -175,6 +187,7 @@ def _from_dict(item: dict[str, Any]) -> SavedScene | None:
         updated_at=str(item.get("updated_at") or item.get("created_at") or ""),
         locked=bool(item.get("locked") or False),
         aspect=aspect,
+        parent_id=parent_id,
     )
 
 
@@ -188,6 +201,7 @@ def _to_dict(s: SavedScene) -> dict[str, Any]:
         "updated_at": s.updated_at,
         "locked": bool(s.locked),
         "aspect": normalize_scene_aspect(s.aspect) or s.aspect or "",
+        "parent_id": s.parent_id or None,
     }
 
 
@@ -282,6 +296,7 @@ def add_scene(
     notes: str = "",
     locked: bool = False,
     aspect: str | None = None,
+    parent_id: str | None = None,
 ) -> SavedScene:
     name = (name or "").strip()
     if not name:
@@ -293,6 +308,16 @@ def add_scene(
     stored = _store_path(src, scene_id=scene_id, name=name)
     now = _now_iso()
     ar = normalize_scene_aspect(aspect) or detect_still_aspect(stored)
+    pid = (parent_id or "").strip() or None
+    if pid:
+        parent = find_scene(pid)
+        if parent is None:
+            raise ValueError("Parent scene not found.")
+        if parent.is_variation():
+            raise ValueError("Cannot nest a variation under another variation.")
+        # Inherit aspect from parent when not set
+        if not ar:
+            ar = parent.aspect or detect_still_aspect(parent.still_path)
     entry = SavedScene(
         id=scene_id,
         name=name,
@@ -302,11 +327,23 @@ def add_scene(
         updated_at=now,
         locked=bool(locked),
         aspect=ar,
+        parent_id=pid,
     )
     scenes = load_scenes()
     scenes.append(entry)
     save_scenes(scenes)
     return entry
+
+
+def list_base_scenes() -> list[SavedScene]:
+    return [s for s in load_scenes() if s.is_base()]
+
+
+def list_scene_variations(parent_id: str | None) -> list[SavedScene]:
+    if not parent_id:
+        return []
+    pid = parent_id.strip()
+    return [s for s in load_scenes() if (s.parent_id or "") == pid]
 
 
 def update_scene(
@@ -358,6 +395,7 @@ def update_scene(
         updated_at=_now_iso(),
         locked=bool(new_locked),
         aspect=new_aspect or "",
+        parent_id=found.parent_id,
     )
     scenes[idx] = updated
     save_scenes(scenes)
@@ -380,24 +418,125 @@ def set_scene_locked(scene_id: str, locked: bool) -> SavedScene | None:
     return None
 
 
-def delete_scene(scene_id: str, *, force: bool = False) -> bool:
+class SceneHasChildrenError(ValueError):
+    """Raised when deleting a base scene that still has variations."""
+
+    def __init__(self, scene_id: str, children: list[SavedScene]) -> None:
+        self.scene_id = scene_id
+        self.children = children
+        super().__init__(
+            f"Scene has {len(children)} variation(s). "
+            "Delete variations first, or confirm delete with children."
+        )
+
+
+def delete_scene(
+    scene_id: str,
+    *,
+    force: bool = False,
+    delete_children: bool = False,
+    force_children_check: bool = True,
+) -> bool:
+    """
+    Delete a scene. Base scenes with variations raise ``SceneHasChildrenError``
+    unless ``delete_children=True``. Locked scenes require ``force=True``.
+    """
+    if not scene_id:
+        return False
     scenes = load_scenes()
-    keep: list[SavedScene] = []
     removed: SavedScene | None = None
     for s in scenes:
         if s.id == scene_id:
-            if s.locked and not force:
-                raise ValueError(
-                    f"“{s.name}” is locked — unlock before delete, or force."
-                )
             removed = s
-        else:
-            keep.append(s)
+            break
     if removed is None:
         return False
+    if removed.locked and not force:
+        raise ValueError(
+            f"“{removed.name}” is locked — unlock before delete, or force."
+        )
+
+    kids = [s for s in scenes if (s.parent_id or "") == scene_id]
+    if kids and force_children_check and not delete_children:
+        raise SceneHasChildrenError(scene_id, kids)
+
+    remove_ids = {scene_id}
+    if delete_children:
+        remove_ids |= {k.id for k in kids}
+
+    keep: list[SavedScene] = []
+    to_wipe: list[SavedScene] = []
+    for s in scenes:
+        if s.id in remove_ids:
+            if s.locked and not force and s.id != scene_id:
+                # Skip locked children unless force
+                keep.append(s)
+                continue
+            to_wipe.append(s)
+        else:
+            keep.append(s)
     save_scenes(keep)
-    _delete_owned(removed.still_path)
+    keep_paths: set[str] = set()
+    for s in keep:
+        try:
+            if s.still_path:
+                keep_paths.add(str(Path(s.still_path).resolve()))
+        except OSError:
+            pass
+    for s in to_wipe:
+        try:
+            p = str(Path(s.still_path).resolve()) if s.still_path else ""
+            if p and p not in keep_paths:
+                _delete_owned(s.still_path)
+        except OSError:
+            _delete_owned(s.still_path)
     return True
+
+
+def scene_variation_prompt(
+    transform: str,
+    *,
+    base_name: str = "",
+    insights: str = "",
+) -> str:
+    """I2I prompt for transforming a base location plate into a variation."""
+    t = (transform or "").strip() or "subtle seasonal or time-of-day change"
+    ins = (insights or "").strip()
+    bits = [
+        "Edit this establishing / location plate only.",
+        "Keep the same place, camera angle, layout, and architecture identity.",
+        f"Transform: {t}.",
+        "Empty or lightly populated — no new hero talent unless the transform asks for people.",
+        "Photoreal, natural light consistent with the new condition, no text, no logo.",
+    ]
+    if base_name:
+        bits.append(f"Base location: {base_name}.")
+    if ins:
+        bits.append(f"Creative intent (soft): {ins}")
+    return " ".join(bits)
+
+
+def preferred_scene_edit_model() -> str:
+    try:
+        from media_studio.character_store import preferred_costume_model
+
+        return preferred_costume_model()
+    except Exception:
+        return "flux 2 pro"
+
+
+def scene_edit_model_labels() -> list[str]:
+    try:
+        from media_studio.character_store import multi_ref_image_edit_labels
+
+        labs = multi_ref_image_edit_labels()
+        if labs:
+            return labs
+    except Exception:
+        pass
+    from media_studio.studio_modality import models_for_image_modality
+
+    return models_for_image_modality("i2i") or ["Flux 2 Pro"]
 
 
 def scene_t2i_prompt(
