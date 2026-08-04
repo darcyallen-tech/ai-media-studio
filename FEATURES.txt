@@ -67,6 +67,24 @@ Voice Clone stays under Audio.
 - Survives app restart (local store); Voice Clone stays under Audio
 
 ==============================================================================
+SCENES (reusable location stills)
+==============================================================================
+Peer tab for location / establishing plates — Character = who; Scene = where.
+Local only (data/scenes.json + data/scene_stills/). Not a Library replacement.
+
+- New scene: upload still, or Generate (T2I) from a location description
+  (optional Enhance + model); separate Aspect (16:9 Horizontal · 9:16 Vertical ·
+  1:1 · 4:3 / 3:4) and Quality (1K/2K or Standard/HD — not mixed into one blob);
+  establishing bias + framing language; cost tracks model + quality
+- Name (required) + optional notes → Save; aspect stored and shown as badge
+- List: thumbnail + aspect badge (16:9 / 9:16 …) + name + notes; Edit · Delete ·
+  Lock · Show in folder
+- Lock protects from retention auto-delete (same idea as Characters)
+- Empty state: “Save gym, street, living room plates here for Director scene refs.”
+- Survives app restart; ready for Director multi-ref scene slots (and later
+  Motion Sync / Creative Vision)
+
+==============================================================================
 MOTION SYNC (character + driving video)
 ==============================================================================
 Peer tab for motion transfer: a character still performs actions from a driving

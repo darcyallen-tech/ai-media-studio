@@ -34,6 +34,12 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - Pricing: $0.08/s @480p · $0.14/s @720p · $0.25/s @1080p (I2V/T2V) + $0.01 per ref image
 - fal: `xai/grok-imagine-video/v1.5/{image,text,reference}-to-video`
 
+### Scenes tab
+- New main tab **Scenes** — reusable location / establishing stills (local `data/scenes.json` + `scene_stills/`)
+- Upload or **Generate** (T2I) with establishing bias; name + notes; list thumb; Edit / Delete / Lock / Show in folder
+- Character = who · Scene = where (Director multi-ref scene plates; later Motion Sync / Vision)
+- **Aspect + Quality**: separate Aspect (16:9 Horizontal / 9:16 Vertical / 1:1 / 4:3 / 3:4) and Quality (1K·2K or Standard·HD); framing language in prompt; list **aspect badge** on thumbs
+
 ### Characters tab
 - New main tab **Characters** — save reusable character stills (local store only)
 - **Identity pack** Front / Side / Close-up; large preview on thumb click

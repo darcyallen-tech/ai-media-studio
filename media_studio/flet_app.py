@@ -71,6 +71,7 @@ from media_studio.scene_builder import (
 from media_studio.flet_aleph import FrameEditorView
 from media_studio.flet_audio import AudioView
 from media_studio.flet_characters import CharactersView
+from media_studio.flet_scenes import ScenesView
 from media_studio.flet_dialogs import close_dialog, show_dialog, show_snack
 from media_studio.flet_director import DirectorView
 from media_studio.flet_library import LibraryView
@@ -3580,6 +3581,7 @@ def main(page: ft.Page) -> None:
     frame_editor_view = FrameEditorView(page, state)
     audio_view = AudioView(page, state)
     characters_view = CharactersView(page, state)
+    scenes_view = ScenesView(page, state)
     library_view = LibraryView(page, state)
     state.video_view = studio_video
     state.image_view = studio_image
@@ -3591,6 +3593,7 @@ def main(page: ft.Page) -> None:
     state.motion_sync_view = motion_sync_view  # type: ignore[attr-defined]
     state.frame_editor_view = frame_editor_view  # type: ignore[attr-defined]
     state.characters_view = characters_view  # type: ignore[attr-defined]
+    state.scenes_view = scenes_view  # type: ignore[attr-defined]
     # Soft tool defaults for the restored app scenario (no tool auto-switch)
     try:
         tools_view.apply_app_scenario(state.scenario_key)
@@ -4380,7 +4383,7 @@ def main(page: ft.Page) -> None:
     )
 
     # Tab order: Studio · Tools · Creative Vision · Director · VFX · Motion Sync ·
-    # Frame Editor · Audio · Characters · Library
+    # Frame Editor · Audio · Characters · Scenes · Library
     main_tabs = build_tabs(
         [
             ("Studio", ft.Icons.DASHBOARD, studio_shell),
@@ -4415,6 +4418,11 @@ def main(page: ft.Page) -> None:
                 "Characters",
                 ft.Icons.PERSON,
                 _tab_body(characters_view.build()),
+            ),
+            (
+                "Scenes",
+                ft.Icons.LANDSCAPE,
+                _tab_body(scenes_view.build()),
             ),
             ("Library", ft.Icons.PHOTO_LIBRARY, _tab_body(library_view.build())),
         ]
@@ -4471,9 +4479,9 @@ def main(page: ft.Page) -> None:
     def switch_to_library() -> None:
         """Select Library tab and refresh list."""
         try:
-            main_tabs.selected_index = 9
+            main_tabs.selected_index = 10
             try:
-                main_tabs.move_to(9)
+                main_tabs.move_to(10)
             except Exception:
                 pass
             library_view.refresh()
@@ -4491,6 +4499,22 @@ def main(page: ft.Page) -> None:
                 pass
             try:
                 characters_view.refresh()
+            except Exception:
+                pass
+            page.update()
+        except Exception:
+            pass
+
+    def switch_to_scenes() -> None:
+        """Select Scenes tab and refresh the saved list."""
+        try:
+            main_tabs.selected_index = 9
+            try:
+                main_tabs.move_to(9)
+            except Exception:
+                pass
+            try:
+                scenes_view.refresh()
             except Exception:
                 pass
             page.update()
@@ -4679,9 +4703,15 @@ def main(page: ft.Page) -> None:
     def _on_main_tab_change(e: ft.ControlEvent) -> None:
         try:
             idx = getattr(main_tabs, "selected_index", None)
-            if idx == 9:  # Library
+            if idx == 10:  # Library
                 library_view.refresh()
                 page.update()
+            elif idx == 9:  # Scenes
+                try:
+                    scenes_view.refresh()
+                    page.update()
+                except Exception:
+                    pass
             elif idx == 8:  # Characters
                 try:
                     characters_view.refresh()
@@ -4744,6 +4774,7 @@ def main(page: ft.Page) -> None:
     state.switch_to_image = switch_to_image
     state.switch_to_library = switch_to_library  # type: ignore[attr-defined]
     state.switch_to_characters = switch_to_characters  # type: ignore[attr-defined]
+    state.switch_to_scenes = switch_to_scenes  # type: ignore[attr-defined]
     state.switch_to_tools = switch_to_tools
     state.switch_to_vision = switch_to_vision  # type: ignore[attr-defined]
     state.switch_to_director = switch_to_director  # type: ignore[attr-defined]

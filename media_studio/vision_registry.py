@@ -134,10 +134,42 @@ _T2I_ASPECT_TO_IMAGE_SIZE: dict[str, str] = {
 
 
 def map_t2i_image_size(aspect_label: str | None) -> str:
+    """Map UI aspect label → fal image_size enum (Flux / Seedream)."""
     raw = (aspect_label or "").strip().lower()
     if not raw:
         return "landscape_16_9"
-    return _T2I_ASPECT_TO_IMAGE_SIZE.get(raw, "landscape_16_9")
+    if raw in _T2I_ASPECT_TO_IMAGE_SIZE:
+        return _T2I_ASPECT_TO_IMAGE_SIZE[raw]
+    # Bare ratios (Scenes / simple pickers) + HD square
+    bare = raw.replace(" ", "")
+    if "hd" in raw and ("1:1" in bare or "square" in raw):
+        return "square_hd"
+    bare_map = {
+        "16:9": "landscape_16_9",
+        "9:16": "portrait_16_9",
+        "4:3": "landscape_4_3",
+        "3:4": "portrait_4_3",
+        "1:1": "square",
+        "3:2": "landscape_16_9",
+        "2:3": "portrait_16_9",
+        "21:9": "landscape_16_9",
+        "9:21": "portrait_16_9",
+    }
+    if bare in bare_map:
+        return bare_map[bare]
+    # Substring fallback (e.g. "Horizontal · 16:9")
+    for tok, size in (
+        ("9:16", "portrait_16_9"),
+        ("16:9", "landscape_16_9"),
+        ("3:4", "portrait_4_3"),
+        ("4:3", "landscape_4_3"),
+        ("1:1", "square"),
+    ):
+        if tok in bare:
+            if tok == "1:1" and "hd" in raw:
+                return "square_hd"
+            return size
+    return "landscape_16_9"
 
 
 def map_t2i_aspect_colon(aspect_label: str | None) -> str:
@@ -145,9 +177,11 @@ def map_t2i_aspect_colon(aspect_label: str | None) -> str:
     raw = (aspect_label or "").strip().lower()
     if not raw:
         return "16:9"
-    # Already colon form
+    bare = raw.replace(" ", "")
+    # Prefer longer tokens first so 9:16 wins over 16:9 substring false positives
     for tok in (
         "21:9",
+        "9:21",
         "16:9",
         "9:16",
         "4:3",
@@ -158,7 +192,7 @@ def map_t2i_aspect_colon(aspect_label: str | None) -> str:
         "4:5",
         "1:1",
     ):
-        if tok in raw.replace(" ", ""):
+        if tok in bare:
             return tok
     size = map_t2i_image_size(aspect_label)
     return {

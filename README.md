@@ -125,6 +125,7 @@ Dashboards:
 | **Frame Editor** | Aleph 2.0 keyframe edit via **Runware** + optional fal 1080p proxy |
 | **Audio** | Music, SFX, Ambience, VO, Voice clone, **Video → SFX** |
 | **Characters** | Identity pack, costume children, bg-remove, lock; app-wide **Character picker** (Motion Sync / Director / Vision / Studio Image) |
+| **Scenes** | Reusable location / establishing stills (upload or T2I) for Director scene refs |
 | **Library** | History; filters including **From Resolve**; Send to Studio / Tools / Frame Editor / Resolve |
 
 ### Creative Vision highlights
@@ -230,7 +231,7 @@ Long jobs use **per-tab busy** scopes so one generate does not lock the whole ap
 
 - Top: Settings, **Help (?)**, fal / Runware / xAI chips, Import from Resolve, output folder  
 - App-level **scenario** bar + optional **Job / Listing** field  
-- Main tabs: Studio · Tools · Creative Vision · Director · VFX · Motion Sync · Frame Editor · Audio · Characters · Library  
+- Main tabs: Studio · Tools · Creative Vision · Director · VFX · Motion Sync · Frame Editor · Audio · Characters · Scenes · Library  
 
 ### Job / Listing folders
 

@@ -334,7 +334,21 @@ def apply_retention(
         except Exception as exc:
             stats.errors += 1
             stats.details.append(f"characters: {exc}")
-        stats.details.append(f"handoff: {exc}")
+        # Scenes store: same unlock/age rules as characters
+        try:
+            from media_studio.scene_store import prune_unlocked_scenes
+
+            ss = prune_unlocked_scenes(retention_days=int(retention_days))
+            stats.deleted += int(ss.get("deleted_scenes") or 0)
+            if ss.get("deleted_scenes") or ss.get("skipped_locked"):
+                stats.details.append(
+                    "scenes: removed "
+                    f"{ss.get('deleted_scenes', 0)} unlocked · "
+                    f"skipped locked {ss.get('skipped_locked', 0)}"
+                )
+        except Exception as exc:
+            stats.errors += 1
+            stats.details.append(f"scenes: {exc}")
 
     return stats
 

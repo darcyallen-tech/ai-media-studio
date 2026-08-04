@@ -74,3 +74,9 @@ data/characters.json
 data/characters/
 **/character_stills/
 characters.json
+
+# Local scene / location plates (do not ship)
+data/scene_stills/
+data/scenes.json
+**/scene_stills/
+scenes.json
