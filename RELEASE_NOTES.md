@@ -12,6 +12,12 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### Model Guide (in-app)
+- Book icon next to Settings gear → modal catalog of registered models
+- Cards: name, modality tags, Best for, strengths, limits; filters (Image / Video / Audio / Tools / Director) + search + multi-char / native audio / draft chips
+- Data from same registries + Best For map as pickers; Open in Studio / Vision / Director when practical
+- FLUX 3 aspect-follows-still, H3 multi-identity, Kling multi-shot called out in limits
+
 ### Creative Vision — Character-first multi-ref (H3 Omni + multi I2V)
 - **Default**: Character 1 dropdown → identity (Image 1); **Add character** → Character 2… with **Characters n / max**
 - Optional **Start / source frame** (layout lock) separate; optional **Add prop / object**

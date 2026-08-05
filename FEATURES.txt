@@ -342,6 +342,9 @@ Secondary workspaces: Received, Blank Canvas, Camera Lock (map → I2V / V2V)
   library → Image 1 identity; **Add character** → 2…n; counter Characters n/max;
   optional Start frame + props; Advanced Omni (video/audio/style) collapsed by
   default; Character never silent Start; FLUX 3 single identity only
+- **Model Guide** (book icon next to Settings): in-app catalog of registered models
+  with modalities, Best for, strengths, limits; filter Image/Video/Audio/Tools/
+  Director; search; optional Open in workspace; same registries as pickers
 - FLUX 3 **Draft first** → cheaper `/draft` preview + **Enhance to full** via
   `draft-enhance` (draft_cache); cost labels show draft vs full; est. draft ~$0.06/s
 - Video results (Studio / Vision / Director): **Send to ▾ → Video Upscale** (plus

@@ -3984,6 +3984,113 @@ def main(page: ft.Page) -> None:
         on_click=lambda e: _open_settings(e),
     )
 
+    def _open_model_guide(_e: ft.ControlEvent | None = None) -> None:
+        from media_studio.flet_model_guide import open_model_guide_dialog
+
+        def _go(target: str, model_choice: str) -> None:
+            """Deep-link into the right workspace when practical."""
+            t = (target or "").strip().lower()
+            try:
+                if t == "studio_image":
+                    sw = getattr(state, "switch_to_image", None)
+                    if sw:
+                        sw()
+                    iv = getattr(state, "image_view", None)
+                    if iv is not None and hasattr(iv, "model_dd") and model_choice:
+                        try:
+                            # Prefer exact label match in dropdown options
+                            opts = [
+                                getattr(o, "key", None) or getattr(o, "text", None) or str(o)
+                                for o in (iv.model_dd.options or [])
+                            ]
+                            if model_choice in opts:
+                                iv.model_dd.value = model_choice
+                            page.update()
+                        except Exception:
+                            pass
+                elif t == "studio_video":
+                    sw = getattr(state, "switch_to_video", None)
+                    if sw:
+                        sw()
+                    vv = getattr(state, "video_view", None)
+                    if vv is not None and hasattr(vv, "model_dd") and model_choice:
+                        try:
+                            opts = [
+                                getattr(o, "key", None) or getattr(o, "text", None) or str(o)
+                                for o in (vv.model_dd.options or [])
+                            ]
+                            if model_choice in opts:
+                                vv.model_dd.value = model_choice
+                                if hasattr(vv, "_apply_model_params_sync"):
+                                    vv._apply_model_params_sync()
+                            page.update()
+                        except Exception:
+                            pass
+                elif t == "vision":
+                    sw = getattr(state, "switch_to_vision", None)
+                    if sw:
+                        sw()
+                    vis = getattr(state, "vision_view", None)
+                    if vis is not None and hasattr(vis, "model_dd") and model_choice:
+                        try:
+                            labels = [
+                                getattr(o, "key", None) or getattr(o, "text", None) or str(o)
+                                for o in (vis.model_dd.options or [])
+                            ]
+                            if model_choice in labels:
+                                vis.model_dd.value = model_choice
+                                if hasattr(vis, "_sync_model_ui"):
+                                    vis._sync_model_ui()
+                            page.update()
+                        except Exception:
+                            pass
+                elif t == "director":
+                    sw = getattr(state, "switch_to_director", None)
+                    if sw:
+                        sw()
+                    dv = getattr(state, "director_view", None)
+                    if dv is not None and model_choice:
+                        try:
+                            if model_choice == "keyframe_take" and hasattr(
+                                dv, "_on_director_mode"
+                            ):
+                                dv._on_director_mode("keyframe_take")
+                            elif hasattr(dv, "model_dd"):
+                                opts = [
+                                    getattr(o, "key", None)
+                                    or getattr(o, "text", None)
+                                    or str(o)
+                                    for o in (dv.model_dd.options or [])
+                                ]
+                                if model_choice in opts:
+                                    dv.model_dd.value = model_choice
+                            page.update()
+                        except Exception:
+                            pass
+                elif t == "tools":
+                    sw = getattr(state, "switch_to_tools", None)
+                    if sw:
+                        sw(model_choice if model_choice else None)
+                elif t == "audio":
+                    sw = getattr(state, "switch_to_audio", None)
+                    if sw:
+                        sw()
+                elif t == "motion_sync":
+                    sw = getattr(state, "switch_to_motion_sync", None)
+                    if sw:
+                        sw()
+            except Exception:
+                pass
+
+        open_model_guide_dialog(page, state=state, on_open_target=_go)
+
+    btn_model_guide = ft.IconButton(
+        icon=ft.Icons.MENU_BOOK_OUTLINED,
+        icon_color=TEXT,
+        tooltip="Model Guide — Best for, strengths, limits for every model",
+        on_click=_open_model_guide,
+    )
+
     from media_studio.flet_onboarding import make_help_button, maybe_show_first_run
     from media_studio.flet_dialogs import open_url_in_browser
 
@@ -4113,6 +4220,7 @@ def main(page: ft.Page) -> None:
     header = ft.Row(
         [
             btn_settings,
+            btn_model_guide,
             btn_help,
             ft.Text(APP_TITLE, size=FONT_XL, weight=ft.FontWeight.W_700, color=TEXT),
             ft.Container(expand=True),
