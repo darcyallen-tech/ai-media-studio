@@ -56,6 +56,17 @@ Voice Clone stays under Audio.
   preview Confirm/Dismiss (no auto-overwrite on upload)
 - Costume swap: multi-ref model + resolution picker; cost × slots × resolution;
   per-slot errors/retry; black clean plate; named costume child under parent
+- **Scene Placer** (focused panel under Characters — not a new top-level tab):
+  composite Character into Scene with pose control. Open via **Scene Placer**
+  button, card **Place in scene**, or Scenes → **Scene Placer** / **Place character**.
+  Inputs: Character picker (Front/hero default; costumes ok) · Scene library or
+  upload still · Pose / body language · optional What’s happening? (action/
+  moment) · optional Placement hint · multi-ref model (default Flux 2 Pro /
+  Max edit) + resolution + cost · Enhance (pose+action rewrite; scene +
+  identity locked). Prompt contract: lock character likeness + scene
+  architecture/lighting; only insert character + pose + action.
+  Output still → outputs + Library; Expand lightbox; Show in folder; Send to
+  Resolve; Send to ▾ (Director Multi-shot / Keyframe Take pin, Motion Sync, …).
 - Lock / protect: skips retention auto-delete; lock icon on list; unlock anytime
 - Generate variation (optional); Use in Motion Sync on base + costumes
 - Shortcuts: Save as character from Motion Sync, Director, Studio Image
@@ -97,6 +108,8 @@ Local only (data/scenes.json + data/scene_stills/). Not a Library replacement.
   character also bound); single-ref always Hero; ref budget unique-asset based
 - Lock protects from retention auto-delete (same idea as Characters)
 - Empty state points to **New scene**
+- **Scene Placer** entry: top **Scene Placer** button + per-card **Place character**
+  → opens Characters · Scene Placer with this plate prefilled
 - Local only: data/scenes.json + scene_stills/ (gitignored like Characters)
 - Survives app restart; Director multi-ref scene slots
 

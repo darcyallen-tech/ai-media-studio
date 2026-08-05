@@ -63,10 +63,16 @@ from media_studio.character_store import (
     update_character,
 )
 from media_studio.folder_util import show_in_folder
+from media_studio.flet_character_picker import CharacterPicker
 from media_studio.flet_dialogs import close_dialog, show_dialog
 from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_image
 from media_studio.flet_progress import JobProgress, classify_progress
+from media_studio.flet_result_actions import (
+    make_result_action_row,
+    show_result_actions,
+)
+from media_studio.flet_scene_picker import ScenePicker
 from media_studio.flet_source_strip import PreviousSourcesStrip, ResolveSourcesStrip
 from media_studio.flet_theme import (
     ACCENT,
@@ -81,6 +87,15 @@ from media_studio.flet_theme import (
     label,
     section_title,
     styled_dropdown,
+)
+from media_studio.scene_placer import (
+    SCENARIO_KEY as PLACER_SCENARIO,
+    build_scene_placer_prompt,
+    character_ref_paths,
+    enhance_context as placer_enhance_context,
+    estimate_scene_placer_cost,
+    preferred_scene_placer_model,
+    resolve_scene_path,
 )
 
 if TYPE_CHECKING:
@@ -116,6 +131,16 @@ class CharactersView:
         self._costume_busy = False
         self._costumes_expanded: set[str] = set()  # parent ids with Costumes open
         self._create_mode = False  # New character (upload) vs edit existing
+
+        # Scene Placer session (character into scene + pose)
+        self._placer_char_id: str | None = None
+        self._placer_char_name: str = ""
+        self._placer_char_path: str | None = None
+        self._placer_scene_path: str | None = None
+        self._placer_scene_label: str = ""
+        self._placer_result_path: str | None = None
+        self._placer_model: str = preferred_scene_placer_model()
+        self._placer_busy = False
 
         # Background remove preview (confirm before overwrite)
         self._bg_pending_path: str | None = None
@@ -472,6 +497,251 @@ class CharactersView:
             visible=False,
         )
 
+        # ----- Scene Placer panel -----
+        self.placer_title = ft.Text(
+            "Scene Placer",
+            size=FONT_SM,
+            color=TEXT,
+            weight=ft.FontWeight.W_700,
+        )
+        self.placer_char_picker = CharacterPicker(
+            page,
+            on_select=self._on_placer_char_select,
+            on_clear=self._on_placer_char_clear,
+            label_text="Character",
+            compact=False,
+        )
+        self.placer_scene_picker = ScenePicker(
+            page,
+            on_select=self._on_placer_scene_select,
+            on_clear=self._on_placer_scene_clear,
+            label_text="Scene",
+            compact=False,
+        )
+        self.btn_placer_upload_scene = ft.OutlinedButton(
+            content="Upload scene still",
+            icon=ft.Icons.UPLOAD_FILE,
+            on_click=self._placer_upload_scene,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=36,
+            tooltip="Use a still from disk instead of the Scene library",
+        )
+        self.placer_scene_upload_label = ft.Text(
+            "",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=1,
+            visible=False,
+        )
+        _pl_models = multi_ref_image_edit_labels()
+        from media_studio.fal.models import resolve_image_edit_model as _resolve_ie_pl
+
+        _pl_spec = _resolve_ie_pl(preferred_scene_placer_model())
+        _pl_default = (
+            _pl_spec.label
+            if _pl_spec and _pl_spec.label in _pl_models
+            else (_pl_models[0] if _pl_models else "Image · Flux 2 Pro (edit)")
+        )
+        self.placer_model_dd = styled_dropdown(
+            label_text="Model (multi-ref)",
+            options=_pl_models,
+            value=_pl_default,
+            on_select=self._on_placer_model_change,
+            expand=True,
+        )
+        _pl_res = edit_resolution_options(_pl_default)
+        self.placer_res_dd = styled_dropdown(
+            label_text="Resolution",
+            options=_pl_res or ["auto"],
+            value=default_practical_resolution(_pl_res) if _pl_res else "auto",
+            on_select=self._on_placer_model_change,
+            expand=True,
+        )
+        self.placer_res_dd.visible = bool(_pl_res)
+        self.placer_pose = ft.TextField(
+            label="Pose / body language",
+            hint_text=(
+                'e.g. standing interview stance, weight on one leg · '
+                "crouched ready to launch · flying horizontal left to right, cape trailing"
+            ),
+            value="",
+            dense=True,
+            filled=True,
+            fill_color=PANEL,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            multiline=True,
+            min_lines=2,
+            max_lines=3,
+            on_change=self._on_placer_prompt_change,
+        )
+        self.placer_happening = ft.TextField(
+            label="What's happening? (optional)",
+            hint_text=(
+                "e.g. mid-fight block · just hit by a blast, stumbling · "
+                "interview with reporter · landing after flight"
+            ),
+            value="",
+            dense=True,
+            filled=True,
+            fill_color=PANEL,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            multiline=True,
+            min_lines=1,
+            max_lines=2,
+            on_change=self._on_placer_prompt_change,
+        )
+        self.placer_placement = ft.TextField(
+            label="Placement hint (optional)",
+            hint_text="e.g. midground left · on sidewalk near curb · upper sky small in frame",
+            value="",
+            dense=True,
+            filled=True,
+            fill_color=PANEL,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            multiline=True,
+            min_lines=1,
+            max_lines=2,
+            on_change=self._on_placer_prompt_change,
+        )
+        self.btn_placer_enhance = make_enhance_button(on_click=self._on_placer_enhance)
+        self.placer_cost = ft.Text("Est. cost: —", size=FONT_SM, color=TEXT_MUTED)
+        self.placer_progress_ring = ft.ProgressRing(
+            width=28, height=28, stroke_width=3, color=ACCENT, visible=False
+        )
+        self.placer_busy_row = ft.Row(
+            [
+                self.placer_progress_ring,
+                ft.Text(
+                    "Placing character…",
+                    size=FONT_SM,
+                    color=ACCENT,
+                    weight=ft.FontWeight.W_600,
+                ),
+            ],
+            spacing=10,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            visible=False,
+        )
+        self.btn_placer_generate = ft.FilledButton(
+            content="Place in scene",
+            on_click=self._placer_generate,
+            style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+            height=40,
+        )
+        self.btn_placer_cancel = ft.TextButton(
+            content="Close",
+            on_click=self._placer_close,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+        )
+        self.placer_result_img = ft.Image(
+            src="",
+            width=200,
+            height=140,
+            fit=ft.BoxFit.CONTAIN,
+            border_radius=6,
+            visible=False,
+            gapless_playback=True,
+        )
+        self.placer_result_empty = ft.Container(
+            width=200,
+            height=140,
+            bgcolor=PANEL,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+            alignment=ft.Alignment.CENTER,
+            content=ft.Text("Result still", size=FONT_SM, color=TEXT_MUTED),
+            visible=True,
+        )
+        self.placer_result_tap = ft.GestureDetector(
+            content=ft.Stack(
+                [self.placer_result_empty, self.placer_result_img],
+                width=200,
+                height=140,
+            ),
+            on_tap=self._placer_expand,
+        )
+        self.btn_placer_expand = ft.OutlinedButton(
+            content="Expand",
+            icon=ft.Icons.OPEN_IN_FULL,
+            on_click=self._placer_expand,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=36,
+            visible=False,
+            tooltip="Open large preview",
+        )
+        (
+            self.placer_result_actions,
+            self.btn_placer_folder,
+            self.btn_placer_resolve,
+        ) = make_result_action_row(
+            page,
+            get_path=lambda: self._placer_result_path,
+            on_status=lambda msg, err: self._set_status(msg, error=err),
+        )
+        self.placer_send_host = ft.Row(spacing=0, tight=True)
+        self.placer_result_actions.controls.insert(0, self.placer_send_host)
+        self.placer_box = ft.Container(
+            content=ft.Column(
+                [
+                    self.placer_title,
+                    ft.Text(
+                        "Composite character into a scene with pose control. "
+                        "Scene plate stays locked; only insert character + pose. "
+                        "Default: Flux 2 Pro multi-ref edit.",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                    ),
+                    self.placer_char_picker.root,
+                    self.placer_scene_picker.root,
+                    ft.Row(
+                        [self.btn_placer_upload_scene, self.placer_scene_upload_label],
+                        spacing=8,
+                        wrap=True,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    ft.Row([self.placer_model_dd], spacing=0),
+                    ft.Row([self.placer_res_dd], spacing=0),
+                    self.placer_pose,
+                    self.placer_happening,
+                    self.placer_placement,
+                    ft.Row(
+                        [
+                            self.btn_placer_enhance,
+                            self.btn_placer_generate,
+                            self.btn_placer_cancel,
+                        ],
+                        spacing=8,
+                        wrap=True,
+                    ),
+                    self.placer_cost,
+                    self.placer_busy_row,
+                    ft.Text("Result", size=FONT_SM, color=TEXT, weight=ft.FontWeight.W_600),
+                    ft.Row(
+                        [
+                            self.placer_result_tap,
+                            self.btn_placer_expand,
+                        ],
+                        spacing=10,
+                        vertical_alignment=ft.CrossAxisAlignment.START,
+                    ),
+                    self.placer_result_actions,
+                ],
+                spacing=8,
+                tight=True,
+            ),
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, ACCENT),
+            border_radius=8,
+            padding=12,
+            visible=False,
+        )
+
         # ----- New character entry -----
         self.btn_new_character = ft.FilledButton(
             content="New character",
@@ -479,6 +749,14 @@ class CharactersView:
             on_click=self._open_new_character,
             style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
             height=42,
+        )
+        self.btn_open_placer = ft.OutlinedButton(
+            content="Scene Placer",
+            icon=ft.Icons.PERSON_PIN_CIRCLE_OUTLINED,
+            on_click=self._open_placer_blank,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=42,
+            tooltip="Place a character into a scene with pose control",
         )
         self.btn_new_upload = ft.OutlinedButton(
             content="1 · Upload photos (1–3 stills)",
@@ -1167,11 +1445,16 @@ class CharactersView:
             section_title("Characters"),
             ft.Text(
                 "Identity pack: Front / Side / Close-up. Costume swap changes wardrobe "
-                "across filled angles (multi-ref I2I). Local store only.",
+                "across filled angles (multi-ref I2I). Scene Placer composites a "
+                "character into a scene with pose control. Local store only.",
                 size=FONT_SM,
                 color=TEXT_MUTED,
             ),
-            self.btn_new_character,
+            ft.Row(
+                [self.btn_new_character, self.btn_open_placer],
+                spacing=8,
+                wrap=True,
+            ),
             self.new_char_choice,
             self.t2i_box,
             ft.Divider(height=1, color=BORDER),
@@ -1196,6 +1479,7 @@ class CharactersView:
             self.profile_box,
             ft.Row([self.btn_save, self.btn_cancel_edit], spacing=8),
             self.costume_box,
+            self.placer_box,
             self.variation_box,
             self.job_progress.control,
             self.status,
@@ -2889,6 +3173,7 @@ class CharactersView:
         self.costume_errors_text.visible = True
 
     def _open_costume(self, c: SavedCharacter) -> None:
+        self.placer_box.visible = False
         self._costume_char_id = c.id
         self._costume_char_name = c.name
         self._costume_outfit = ""
@@ -3487,6 +3772,466 @@ class CharactersView:
         except Exception:
             pass
 
+    # ----- Scene Placer -----
+
+    def open_scene_placer(
+        self,
+        *,
+        character_id: str | None = None,
+        scene_id: str | None = None,
+        scene_path: str | None = None,
+    ) -> None:
+        """
+        Open Scene Placer panel (from card, top button, or Scenes handoff).
+
+        Prefills character and/or scene when provided.
+        """
+        if self._placer_busy:
+            return
+        # Close competing panels
+        self.costume_box.visible = False
+        self.profile_box.visible = False
+        self.t2i_box.visible = False
+        self.new_char_choice.visible = False
+
+        self._placer_result_path = None
+        self._clear_placer_result_ui()
+        self.placer_pose.value = self.placer_pose.value or ""
+        self.placer_happening.value = self.placer_happening.value or ""
+        self.placer_placement.value = self.placer_placement.value or ""
+
+        self.placer_char_picker.refresh()
+        self.placer_scene_picker.refresh()
+
+        # Model default
+        from media_studio.fal.models import resolve_image_edit_model
+
+        self._placer_model = preferred_scene_placer_model()
+        spec = resolve_image_edit_model(self._placer_model)
+        labs = multi_ref_image_edit_labels()
+        if spec and spec.label in labs:
+            self.placer_model_dd.value = spec.label
+        elif labs:
+            self.placer_model_dd.value = labs[0]
+        self._placer_sync_res_options()
+
+        # Character prefill
+        if character_id:
+            ch = next(
+                (c for c in load_characters() if c.id == character_id),
+                None,
+            )
+            if ch:
+                self._placer_char_id = ch.id
+                self._placer_char_name = ch.name
+                primary = ch.primary_still()
+                self._placer_char_path = primary if primary and Path(primary).is_file() else None
+                self.placer_char_picker.select_by_id(ch.id, notify=False)
+            else:
+                self._placer_char_id = None
+                self._placer_char_name = ""
+                self._placer_char_path = None
+                self.placer_char_picker.clear(notify=False)
+        else:
+            # Keep prior selection if any
+            if self._placer_char_id:
+                self.placer_char_picker.select_by_id(
+                    self._placer_char_id, notify=False
+                )
+
+        # Scene prefill (library id or raw path)
+        if scene_path and Path(scene_path).is_file():
+            self._set_placer_scene_upload(str(Path(scene_path).resolve()), label="Uploaded still")
+            self.placer_scene_picker.clear(notify=False)
+        elif scene_id:
+            self.placer_scene_picker.set_selection_silent(scene_id)
+            sp = self.placer_scene_picker.selected_path
+            if sp:
+                self._placer_scene_path = sp
+                self._placer_scene_label = (
+                    getattr(self.placer_scene_picker, "hint", None)
+                    and getattr(self.placer_scene_picker.hint, "value", "")
+                ) or "Scene"
+                self.placer_scene_upload_label.visible = False
+                self.placer_scene_upload_label.value = ""
+        elif self._placer_scene_path and Path(self._placer_scene_path).is_file():
+            pass  # keep prior
+        else:
+            self._placer_scene_path = None
+            self._placer_scene_label = ""
+
+        self._refresh_placer_cost()
+        self.placer_box.visible = True
+        char_bit = self._placer_char_name or "pick character"
+        scene_bit = self._placer_scene_label or "pick scene"
+        self._set_status(
+            f"Scene Placer ready — {char_bit} · {scene_bit}. "
+            "Describe pose, then Place in scene."
+        )
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _open_placer_blank(self, e: ft.ControlEvent | None = None) -> None:
+        self.open_scene_placer()
+
+    def _on_placer_char_select(self, path: str, choice: Any) -> None:
+        self._placer_char_id = getattr(choice, "id", None)
+        self._placer_char_name = getattr(choice, "label", None) or getattr(
+            choice, "name", ""
+        ) or ""
+        self._placer_char_path = path if path and Path(path).is_file() else None
+        self._refresh_placer_cost()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _on_placer_char_clear(self) -> None:
+        self._placer_char_id = None
+        self._placer_char_name = ""
+        self._placer_char_path = None
+        self._refresh_placer_cost()
+
+    def _on_placer_scene_select(self, path: str, choice: Any) -> None:
+        self._placer_scene_path = path if path and Path(path).is_file() else None
+        self._placer_scene_label = getattr(choice, "label", None) or "Scene"
+        self.placer_scene_upload_label.value = ""
+        self.placer_scene_upload_label.visible = False
+        self._refresh_placer_cost()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _on_placer_scene_clear(self) -> None:
+        # Don't wipe upload-based scene unless picker was the source
+        if self.placer_scene_upload_label.visible and self._placer_scene_path:
+            return
+        self._placer_scene_path = None
+        self._placer_scene_label = ""
+        self._refresh_placer_cost()
+
+    def _set_placer_scene_upload(self, path: str, *, label: str = "") -> None:
+        self._placer_scene_path = path
+        name = label or Path(path).name
+        self._placer_scene_label = name
+        self.placer_scene_upload_label.value = f"Uploaded: {Path(path).name}"
+        self.placer_scene_upload_label.visible = True
+
+    async def _placer_upload_scene(self, e: ft.ControlEvent) -> None:
+        try:
+            files = await pick_image(self.page, dialog_title="Scene still for placer")
+        except Exception as exc:
+            self._set_status(f"Picker error: {exc}", error=True)
+            return
+        if not files or not files[0].path:
+            return
+        p = Path(files[0].path)
+        if not p.is_file():
+            self._set_status(f"Missing still: {p}", error=True)
+            return
+        self.placer_scene_picker.clear(notify=False)
+        self._set_placer_scene_upload(str(p.resolve()))
+        self._refresh_placer_cost()
+        self._set_status(f"Scene plate: {p.name}")
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _placer_model_choice(self) -> str:
+        return (self.placer_model_dd.value or preferred_scene_placer_model()).strip()
+
+    def _placer_resolution(self) -> str | None:
+        if not getattr(self.placer_res_dd, "visible", True):
+            return None
+        return (self.placer_res_dd.value or "").strip() or None
+
+    def _placer_sync_res_options(self) -> None:
+        opts = edit_resolution_options(self._placer_model_choice())
+        from media_studio.flet_theme import dropdown_options
+        from media_studio.character_store import resolution_display_label
+
+        if not opts:
+            self.placer_res_dd.visible = False
+            return
+        self.placer_res_dd.visible = True
+        self.placer_res_dd.options = dropdown_options(opts)
+        if self.placer_res_dd.value not in opts:
+            self.placer_res_dd.value = default_practical_resolution(opts)
+        if len(opts) == 1:
+            self.placer_res_dd.label = (
+                f"Resolution · {resolution_display_label(opts[0])}"
+            )
+        else:
+            self.placer_res_dd.label = "Resolution"
+
+    def _refresh_placer_cost(self) -> None:
+        model = self._placer_model_choice()
+        self._placer_model = model
+        self.placer_cost.value = estimate_scene_placer_cost(
+            model_key=model,
+            resolution=self._placer_resolution(),
+        )
+
+    async def _on_placer_prompt_change(self, e: ft.ControlEvent) -> None:
+        self._refresh_placer_cost()
+
+    async def _on_placer_model_change(self, e: ft.ControlEvent | None = None) -> None:
+        self._placer_model = self._placer_model_choice()
+        self._placer_sync_res_options()
+        self._refresh_placer_cost()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _set_placer_busy(self, busy: bool, *, message: str = "") -> None:
+        self._placer_busy = busy
+        self.placer_busy_row.visible = busy
+        self.placer_progress_ring.visible = busy
+        try:
+            busy_txt = self.placer_busy_row.controls[1]
+            if isinstance(busy_txt, ft.Text):
+                busy_txt.value = message or "Placing character…"
+        except Exception:
+            pass
+        self.btn_placer_generate.disabled = busy
+        self.btn_placer_enhance.disabled = busy
+        self.btn_placer_cancel.disabled = busy
+        try:
+            self.placer_model_dd.disabled = busy
+            self.placer_res_dd.disabled = busy
+        except Exception:
+            pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _clear_placer_result_ui(self) -> None:
+        self.placer_result_img.src = ""
+        self.placer_result_img.visible = False
+        self.placer_result_empty.visible = True
+        self.btn_placer_expand.visible = False
+        show_result_actions(
+            self.btn_placer_folder, self.btn_placer_resolve, visible=False
+        )
+        self.placer_send_host.controls.clear()
+
+    def _show_placer_result(self, path: str) -> None:
+        self._placer_result_path = path
+        self.placer_result_img.src = path
+        self.placer_result_img.visible = True
+        self.placer_result_empty.visible = False
+        self.btn_placer_expand.visible = True
+        show_result_actions(
+            self.btn_placer_folder, self.btn_placer_resolve, visible=True
+        )
+        self._rebuild_placer_send_menu(path)
+
+    def _rebuild_placer_send_menu(self, path: str | None) -> None:
+        from media_studio.flet_send_to import (
+            build_send_menu_items,
+            make_send_menu_button,
+        )
+
+        self.placer_send_host.controls.clear()
+        if not path or not Path(path).is_file():
+            return
+
+        def _ok(msg: str) -> None:
+            self._set_status(msg)
+
+        def _err(msg: str, is_err: bool = True) -> None:
+            self._set_status(msg, error=is_err)
+
+        items = build_send_menu_items(
+            self.state,
+            image_path=path,
+            status_cb=_ok,
+            status_cb_err=_err,
+        )
+        btn = make_send_menu_button(items)
+        if btn is not None:
+            self.placer_send_host.controls.append(btn)
+
+    async def _placer_expand(self, e: ft.ControlEvent | None = None) -> None:
+        path = self._placer_result_path
+        if path and Path(path).is_file():
+            self._open_preview(path, title="Scene Placer result")
+        else:
+            self._set_status("No result still to expand.", error=True)
+
+    async def _placer_close(self, e: ft.ControlEvent | None = None) -> None:
+        if self._placer_busy:
+            return
+        self.placer_box.visible = False
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _on_placer_enhance(self, e: ft.ControlEvent) -> None:
+        pose = (self.placer_pose.value or "").strip()
+        happen = (self.placer_happening.value or "").strip()
+        place = (self.placer_placement.value or "").strip()
+
+        def _extra() -> dict[str, Any]:
+            return placer_enhance_context(
+                character_name=self._placer_char_name,
+                scene_label=self._placer_scene_label,
+                pose=pose,
+                happening=happen,
+                placement=place,
+            )
+
+        # Enhance rewrites pose field, weaving in What's happening (action);
+        # placement stays as a separate hint; scene + identity locked via guidance.
+        await run_prompt_enhance(
+            page=self.page,
+            state=self.state,
+            prompt_field=self.placer_pose,
+            get_model=self._placer_model_choice,
+            get_image=lambda: self._placer_char_path or self._placer_scene_path,
+            get_extra_context=_extra,
+            status_ctrl=self.status,
+            job_progress=self.job_progress,
+            enhance_btn=self.btn_placer_enhance,
+            busy_controls=[self.btn_placer_generate],
+            context_label="pose / action for Scene Placer",
+            allow_empty_with_context=False,
+            busy_scope="characters",
+        )
+
+    async def _placer_generate(self, e: ft.ControlEvent) -> None:
+        if self._placer_busy:
+            return
+        pose = (self.placer_pose.value or "").strip()
+        if not pose:
+            self._set_status("Describe pose / body language first.", error=True)
+            return
+
+        # Resolve character
+        char_id = self._placer_char_id or self.placer_char_picker.selected_id
+        ch = None
+        if char_id:
+            ch = next((c for c in load_characters() if c.id == char_id), None)
+        char_refs = character_ref_paths(ch)
+        if not char_refs:
+            # Fallback to picker path only
+            p = self._placer_char_path or self.placer_char_picker.selected_path
+            if p and Path(p).is_file():
+                char_refs = [str(Path(p).resolve())]
+        if not char_refs:
+            self._set_status("Pick a character with a still first.", error=True)
+            return
+
+        scene = resolve_scene_path(
+            self._placer_scene_path or self.placer_scene_picker.selected_path
+        )
+        if not scene:
+            self._set_status(
+                "Pick a scene from the library or upload a scene still.",
+                error=True,
+            )
+            return
+
+        from media_studio.secrets_store import has_fal_key
+
+        if not has_fal_key():
+            self._set_status("FAL API key required — open Settings.", error=True)
+            return
+        if self.state.is_busy("characters"):
+            return
+        if not self.state.try_busy("characters"):
+            return
+
+        happening = (self.placer_happening.value or "").strip()
+        placement = (self.placer_placement.value or "").strip()
+        prompt = build_scene_placer_prompt(
+            pose=pose,
+            placement=placement,
+            happening=happening,
+        )
+        model = self._placer_model_choice()
+        self._placer_model = model
+        params_json = edit_params_json_for_resolution(self._placer_resolution())
+        self._refresh_placer_cost()
+        self._set_placer_busy(True, message="Placing character into scene…")
+        self.job_progress.start("Scene Placer…", self.page)
+        who = self._placer_char_name or (ch.name if ch else "character")
+        where = self._placer_scene_label or Path(scene).name
+        self._set_status(f"Scene Placer · {who} → {where}…")
+
+        def on_progress(msg: str) -> None:
+            self.job_progress.set_message(classify_progress(msg), self.page)
+            try:
+                busy_txt = self.placer_busy_row.controls[1]
+                if isinstance(busy_txt, ft.Text):
+                    busy_txt.value = msg or "Placing character…"
+                self.page.update()
+            except Exception:
+                pass
+
+        try:
+            from media_studio.job_context import to_thread_with_job
+            from media_studio.services import generate
+
+            # Scene = primary plate; character stills = identity refs
+            result = await to_thread_with_job(
+                self.state,
+                generate,
+                prompt,
+                model_choice=model,
+                image_file=scene,
+                extra_image_files=char_refs,
+                output_dir=self.state.output_dir,
+                on_progress=on_progress,
+                scenario=PLACER_SCENARIO,
+                parameters_json=params_json,
+            )
+            if not result.ok:
+                err = (result.status or "Scene Placer failed.").strip()
+                self.job_progress.finish_error(err, self.page)
+                self._set_status(err, error=True)
+                return
+            path = result.primary_image
+            if not path:
+                imgs = result.image_paths or []
+                path = imgs[0] if imgs else None
+            if not path or not Path(path).is_file():
+                err = "Scene Placer: no image file in response."
+                self.job_progress.finish_error(err, self.page)
+                self._set_status(err, error=True)
+                return
+            self._show_placer_result(str(path))
+            metrics = getattr(result, "metrics_line", "") or getattr(
+                result, "cost_estimate", ""
+            )
+            self.job_progress.finish_ok(
+                f"Placed · {Path(path).name}"
+                + (f" · {metrics}" if metrics else ""),
+                self.page,
+            )
+            self._set_status(
+                f"Scene Placer ready: {Path(path).name}. "
+                "Expand · Send to Director Keyframe Take / Motion Sync / Resolve."
+            )
+        except Exception as exc:
+            self.job_progress.finish_error(str(exc), self.page)
+            self._set_status(f"Scene Placer error: {exc}", error=True)
+            traceback.print_exc()
+        finally:
+            self._set_placer_busy(False)
+            self.state.clear_busy("characters")
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
     # ----- variation (kept) -----
 
     def _show_variation(self, path: str, *, source_id: str | None) -> None:
@@ -3737,6 +4482,14 @@ class CharactersView:
             visible=not nested,
             tooltip="Change outfit — saves under this character as a costume",
         )
+        btn_placer = ft.OutlinedButton(
+            content="Place in scene",
+            on_click=self._make_open_placer(c),
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=36,
+            disabled=not still_ok,
+            tooltip="Composite this character into a scene with pose control",
+        )
         btn_var = ft.OutlinedButton(
             content="Generate variation",
             on_click=self._make_generate_variation(c),
@@ -3776,6 +4529,7 @@ class CharactersView:
         actions = [
             btn_use,
             btn_costume,
+            btn_placer,
             btn_var,
             btn_edit,
             btn_lock,
@@ -3873,6 +4627,12 @@ class CharactersView:
     def _make_open_costume(self, c: SavedCharacter):
         async def _click(_e: ft.ControlEvent) -> None:
             self._open_costume(c)
+
+        return _click
+
+    def _make_open_placer(self, c: SavedCharacter):
+        async def _click(_e: ft.ControlEvent) -> None:
+            self.open_scene_placer(character_id=c.id)
 
         return _click
 

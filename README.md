@@ -124,8 +124,8 @@ Dashboards:
 | **Motion Sync** | Character still + driving video → motion transfer (Kling Motion Control, Wan Motion) |
 | **Frame Editor** | Aleph 2.0 keyframe edit via **Runware** + optional fal 1080p proxy |
 | **Audio** | Music, SFX, Ambience, VO, Voice clone, **Video → SFX** |
-| **Characters** | Identity pack, costume children, bg-remove, lock; app-wide **Character picker** (Motion Sync / Director / Vision / Studio Image) |
-| **Scenes** | Location plates (T2I/upload), variations, multi-angle packs for Director scene refs |
+| **Characters** | Identity pack, costume children, bg-remove, lock; **Scene Placer** (character into scene + pose); app-wide **Character picker** |
+| **Scenes** | Location plates (T2I/upload), variations, multi-angle packs; handoff to **Scene Placer** |
 | **Library** | History; filters including **From Resolve**; Send to Studio / Tools / Frame Editor / Resolve |
 
 ### Creative Vision highlights

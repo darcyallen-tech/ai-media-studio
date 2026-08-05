@@ -12,6 +12,13 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### Scene Placer (Character into Scene + pose)
+- Focused workspace under **Characters** (not a new top-level tab): **Scene Placer** button + card **Place in scene**
+- **Scenes** handoff: top **Scene Placer** + card **Place character** (prefill plate)
+- Inputs: Character library (Front/hero; costumes ok) · Scene library or upload still · Pose / body language · optional **What’s happening?** (action/moment) · optional Placement hint · multi-ref Flux 2 Pro/Max (cost shown) · Enhance with identity lock (pose + action)
+- Prompt contract: lock character likeness + scene architecture/lighting; only insert character + pose + action
+- Result still → outputs + Library; Expand; Show in folder; Send to Resolve / Director Keyframe Take pin / Motion Sync
+
 ### Director · Keyframe Take (FLUX 3 continuous)
 - New Director mode pill: **Multi-shot** | **Keyframe Take**
 - Keyframe Take: ordered pins (still + time, max 10) → `blackforestlabs/flux-3/keyframes-to-video`

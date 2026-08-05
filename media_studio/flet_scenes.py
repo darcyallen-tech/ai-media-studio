@@ -179,6 +179,14 @@ class ScenesView:
             min_lines=1,
             max_lines=3,
         )
+        self.btn_scene_placer = ft.OutlinedButton(
+            content="Scene Placer",
+            icon=ft.Icons.PERSON_PIN_CIRCLE_OUTLINED,
+            on_click=self._open_scene_placer_blank,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=42,
+            tooltip="Place a character into a scene (opens Characters · Scene Placer)",
+        )
         self.btn_new_scene = ft.FilledButton(
             content="New scene",
             icon=ft.Icons.ADD,
@@ -1037,11 +1045,16 @@ class ScenesView:
             section_title("Scenes"),
             ft.Text(
                 "Location / establishing stills — where the action happens. "
-                "Local store only (like Characters). Use in Director as scene refs.",
+                "Local store only (like Characters). Use in Director as scene refs. "
+                "Scene Placer composites a character into a plate with pose control.",
                 size=FONT_SM,
                 color=TEXT_MUTED,
             ),
-            self.btn_new_scene,
+            ft.Row(
+                [self.btn_new_scene, self.btn_scene_placer],
+                spacing=8,
+                wrap=True,
+            ),
             ft.Divider(height=1, color=BORDER),
             self.work_host,
             self.job_progress.control,
@@ -1799,10 +1812,19 @@ class ScenesView:
             visible=not nested,
             tooltip="Season / weather / era transform from this plate (I2I)",
         )
+        btn_placer = ft.OutlinedButton(
+            content="Place character",
+            icon=ft.Icons.PERSON_PIN_CIRCLE_OUTLINED,
+            on_click=self._make_open_scene_placer(s),
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=36,
+            disabled=not still_ok,
+            tooltip="Open Scene Placer with this plate (Characters tab)",
+        )
 
-        actions = [btn_var, btn_edit, btn_lock, btn_folder, btn_delete]
+        actions = [btn_var, btn_placer, btn_edit, btn_lock, btn_folder, btn_delete]
         if nested:
-            actions = [btn_edit, btn_lock, btn_folder, btn_delete]
+            actions = [btn_placer, btn_edit, btn_lock, btn_folder, btn_delete]
 
         kids = list(children) if children is not None else []
         variations_col: ft.Control | None = None
@@ -2298,6 +2320,37 @@ class ScenesView:
                 self._set_status(f"Chip failed: {exc}", error=True)
 
         return _click
+
+    async def _open_scene_placer_blank(self, e: ft.ControlEvent | None = None) -> None:
+        """Handoff to Characters · Scene Placer (no scene prefill)."""
+        self._handoff_scene_placer()
+
+    def _make_open_scene_placer(self, s: SavedScene):
+        async def _click(_e: ft.ControlEvent) -> None:
+            self._handoff_scene_placer(scene_id=s.id)
+
+        return _click
+
+    def _handoff_scene_placer(self, *, scene_id: str | None = None) -> None:
+        """Switch to Characters tab and open Scene Placer with optional scene."""
+        cv = getattr(self.state, "characters_view", None)
+        if cv is None or not hasattr(cv, "open_scene_placer"):
+            self._set_status("Characters · Scene Placer not available.", error=True)
+            return
+        try:
+            cv.open_scene_placer(scene_id=scene_id)
+        except Exception as exc:
+            self._set_status(f"Scene Placer open failed: {exc}", error=True)
+            traceback.print_exc()
+            return
+        switch = getattr(self.state, "switch_to_characters", None)
+        if switch:
+            try:
+                switch()
+            except Exception:
+                pass
+        label = "scene prefilled" if scene_id else "pick character + scene"
+        self._set_status(f"Opened Scene Placer ({label}).")
 
     def _make_open_variation(self, scene_id: str):
         """Open I2I variation panel for scene id — must never call New Scene / _reset_form."""
