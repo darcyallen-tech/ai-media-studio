@@ -11,6 +11,7 @@ from media_studio.errors import friendly_error
 from media_studio.fal.client import (
     FalClientError,
     download_url,
+    extract_draft_cache_url,
     extract_image_urls,
     extract_video_url,
     subscribe,
@@ -50,6 +51,8 @@ class VisionResult:
     cost_label: str = ""
     metrics_line: str = ""
     timestamp: str = ""
+    is_draft: bool = False
+    draft_cache_url: str | None = None
 
 
 def run_vision(
@@ -71,6 +74,7 @@ def run_vision(
     generate_audio: bool | None = None,
     strength: float | None = None,
     num_images: int | None = None,
+    draft: bool = False,
     output_dir: str | Path,
     on_progress: ProgressCallback | None = None,
 ) -> VisionResult:
@@ -345,6 +349,24 @@ def run_vision(
             )
             endpoint_for_run = spec.endpoint
             model_key_for_result = spec.key
+            # FLUX 3 draft: switch endpoint + drop resolution
+            if draft and getattr(spec, "draft_endpoint", None):
+                from media_studio.flux3_draft import (
+                    estimate_draft_cost_usd,
+                    strip_resolution_for_draft,
+                )
+                from media_studio.vision_registry import duration_seconds
+
+                endpoint_for_run = str(spec.draft_endpoint)
+                arguments = strip_resolution_for_draft(arguments)
+                dur_s = duration_seconds(duration or spec.default_duration)
+                draft_est = estimate_draft_cost_usd(spec, duration_s=dur_s)
+                if draft_est is not None:
+                    est_lbl = format_cost_label(draft_est, estimate=True) + " (draft)"
+                progress(f"Draft mode · {endpoint_for_run}")
+                progress(f"Draft cost · {est_lbl}")
+            elif draft:
+                progress("Draft not available for this model — full quality.")
     except ValueError as exc:
         return VisionResult(
             ok=False,
@@ -477,10 +499,29 @@ def run_vision(
         )
     render_s = time.perf_counter() - t0
 
-    cost_usd = cost_sum if cost_any_exact else est
-    is_est = not cost_any_exact
+    used_draft = bool(
+        draft
+        and getattr(spec, "draft_endpoint", None)
+        and endpoint_for_run == str(getattr(spec, "draft_endpoint", "") or "")
+    )
+    draft_cache_url: str | None = None
+    if used_draft and isinstance(last_result, dict):
+        draft_cache_url = extract_draft_cache_url(last_result)
+
+    if used_draft:
+        from media_studio.flux3_draft import estimate_draft_cost_usd
+        from media_studio.vision_registry import duration_seconds
+
+        dur_s = duration_seconds(duration or spec.default_duration)
+        draft_est = estimate_draft_cost_usd(spec, duration_s=dur_s)
+        cost_usd = cost_sum if cost_any_exact else (draft_est if draft_est is not None else est)
+        is_est = not cost_any_exact
+        cost_lbl = format_cost_label(cost_usd, estimate=is_est) + " (draft)"
+    else:
+        cost_usd = cost_sum if cost_any_exact else est
+        is_est = not cost_any_exact
+        cost_lbl = format_cost_label(cost_usd, estimate=is_est)
     metrics = format_render_metrics(render_s, cost_usd, cost_is_estimate=is_est)
-    cost_lbl = format_cost_label(cost_usd, estimate=is_est)
 
     still_job = is_still_mode(mode) or is_still_mode(spec.mode)
     if still_job:
@@ -589,6 +630,11 @@ def run_vision(
         note_bits.extend(build_notes[:3])
     if n > 1:
         note_bits.append(f"batch={n}")
+    if used_draft:
+        note_bits.append("draft preview")
+        if draft_cache_url:
+            note_bits.append("draft_cache ready for Enhance to full")
+        send_hint = "Draft ready — use Enhance to full for quality render."
     status = (
         f"{spec.label} OK. Saved {n} file(s) → {media_dir.name}/. "
         f"{metrics}. {send_hint}"
@@ -634,4 +680,6 @@ def run_vision(
         cost_label=cost_lbl,
         metrics_line=metrics,
         timestamp=stamp,
+        is_draft=used_draft,
+        draft_cache_url=draft_cache_url,
     )

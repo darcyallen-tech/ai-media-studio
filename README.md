@@ -140,7 +140,7 @@ Dashboards:
 - Cost labels are **job totals** (e.g. Veo standard ~$0.40/s × duration, Fast ~$0.15/s × duration on fal).
 - **MiniMax H3 (Hailuo-03)** — T2V · I2V first/last frame · **Omni reference** (up to 9 stills + 3 clips + 3 audio; cite Image 1 / Video 1 / Audio 1). Native stereo · 2K · ~$0.26/s. Also in Studio Video model list.
 - **Grok Imagine Video 1.5** (fal) — T2V · I2V · R2V (up to 7 stills, `<IMAGE_n>` tags); native audio; also Director reference storyboard. Est. ~$0.08–0.25/s by resolution + $0.01/ref.
-- **FLUX 3 Video** (BFL on fal) — T2V · I2V · first→last · **extend**. 5–20s (or auto) · 720p/1080p · optional native audio. Est. ~$0.17/s @720p · ~$0.29/s @1080p. Studio Video: I2V / First→Last / Extend (V2V). **Director**: Continuous I2V + First→Last (not multi_prompt cuts; Kling stays multi-shot).
+- **FLUX 3 Video** (BFL on fal) — T2V · I2V · first→last · **extend**. 5–20s (or auto) · 720p/1080p · optional native audio. Est. ~$0.17/s @720p · ~$0.29/s @1080p. **Draft first** → Enhance to full. Studio Video: I2V / First→Last / Extend (V2V). **Director**: Continuous I2V + First→Last. Video results: **Send to → Video Upscale**.
 
 ### Frame Editor highlights
 

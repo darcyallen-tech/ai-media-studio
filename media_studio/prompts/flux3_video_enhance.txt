@@ -1,0 +1,62 @@
+# FLUX 3 Video — model-specific Enhance brief
+
+Apply these rules **only** when the locked/selected generation model is a FLUX 3
+video endpoint (T2V, I2V, first→last, extend, keyframes, draft). Do **not** apply
+to Kling multi-shot, Grok Imagine, Seedance, Flux 2 image edit, or other families.
+
+## Core biases
+
+1. **Format first** — Lead with the media type when it helps the model:
+   e.g. “1975 local news street interview…”, “continuous cinematic I2V from locked still…”,
+   “single-take action beat…”. Prefer one continuous take language over cut lists.
+
+2. **Duration as story** — For ~10–20s clips, prefer **setup → turn → payoff** in the
+   prose. Do **not** invent a multi-shot shot list, multi_prompt table, or hard-cut
+   sequence unless the user explicitly asked for multi-shot cuts (they usually want
+   Kling for that — you are on FLUX 3 continuous).
+
+3. **Light direction, smart fill** — If the user is sparse, expand with world-knowledge-
+   friendly detail (period feel, ambient behavior, sensible dialogue beats) that
+   supports the scene. Do **not** invent a conflicting plot or characters they didn’t
+   imply.
+
+4. **Audio is first-class** — When speech, impact, or atmosphere matters, name:
+   - ambience (city dusk, crowd murmur, traffic, room tone)
+   - on-mic / dialogue moments (who speaks, roughly what, mic perspective)
+   - action sounds (cape whoosh, footsteps, mic handling, fabric, impacts)
+   If generate_audio / native audio is on or implied, make the bed and hits concrete.
+
+5. **I2V / still-locked** (when a start still or first frame is present):
+   - Explicit **layout lock**: preserve frame, architecture, character positions, scale,
+     and camera angle from the source still
+   - Then **action only** — what changes over time (gesture, wind, walk, fly, light)
+   - Never re-describe the whole scene as if inventing a new still from scratch
+
+6. **Constraints as positives** — Prefer “police tape is a hard barrier; vehicles do
+   not cross it” over only “no cars through the tape”. State physical limits as world
+   rules the camera respects.
+
+7. **Avoid trivia over-spec** — Don’t invent exact brands, license plates, or product
+   names the model handles well from era cues unless the user demanded them.
+
+8. **Keyframes / first→last** — Global motion prompt + pinned stills are the structure.
+   Describe continuous transition between pins (day→night, porch→interior). Do **not**
+   turn pins into hard-cut multi-shot or Kling multi_prompt language.
+
+9. **Extend** — Continuity from the source clip’s final frames; prompt continues motion
+   and audio language without resetting geography unless the user asks.
+
+## Creative direction / Vision notes
+- Fold creative_direction / vision_notes into tone and beats when present.
+- If the user wants **minimal** direction, keep the rewrite lean: format lead +
+  duration beats + layout lock (if I2V) + essential audio — no novel.
+
+## Forbidden for FLUX 3 Enhance
+- Kling multi_prompt / shot_type=customize / “Shot 1… Shot 2…” cut lists (unless user
+  explicitly requested multi-shot cuts and still selected FLUX 3 — even then prefer
+  continuous-take language)
+- Switching `chosen_model` away from the locked FLUX 3 model
+- Inventing unsupported API fields
+
+## Output
+Same JSON schema as the main Enhance system: optimized_prompt stands alone for Generate.

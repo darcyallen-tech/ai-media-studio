@@ -445,6 +445,7 @@ class DirectorView:
                 self.status, "value", msg
             ),
         )
+        self.send_host = ft.Container(visible=False)
 
         self.state.on_keys_changed(self.apply_key_gates)
         # Seed 2 default shots for 10s total
@@ -580,6 +581,7 @@ class DirectorView:
                     color=TEXT_MUTED,
                 ),
                 self.player.control,
+                self.send_host,
                 self.result_actions_row,
             ],
             spacing=8,
@@ -589,6 +591,43 @@ class DirectorView:
         return make_split_workspace(left, right, left_width=max(RAIL_WIDTH, 500))
 
     # ----- helpers -----
+
+    def _refresh_send_menu(self, path: str | None) -> None:
+        """Send to ▾ with Video Upscale for the Director result clip."""
+        from media_studio.flet_send_to import (
+            build_send_menu_items,
+            make_send_menu_button,
+        )
+
+        if not path or not Path(path).is_file():
+            try:
+                self.send_host.visible = False
+            except Exception:
+                pass
+            return
+
+        def _st(msg: str) -> None:
+            try:
+                self.status.value = msg
+                self.page.update()
+            except Exception:
+                pass
+
+        items = build_send_menu_items(
+            self.state, video_path=path, status_cb=_st
+        )
+        btn = make_send_menu_button(
+            items,
+            tooltip="Send to Studio, Video Upscale, Tools, Resolve…",
+        )
+        try:
+            if btn is None:
+                self.send_host.visible = False
+            else:
+                self.send_host.content = btn
+                self.send_host.visible = True
+        except Exception:
+            pass
 
     def apply_key_gates(self) -> None:
         from media_studio.secrets_store import has_fal_key, has_xai_key
@@ -2360,10 +2399,11 @@ class DirectorView:
             vision = (polish.vision_notes or "").strip()
             gap_plan = polish.gap_lines()
             gap_text = " ".join(gap_plan) if gap_plan else polish.transition_line()
-            return {
+            model = _dd(self.model_dd) or ""
+            snap: dict[str, Any] = {
                 "workspace": "director",
                 "mode": "multi_shot",
-                "model": _dd(self.model_dd),
+                "model": model,
                 "total_duration_s": self._total_duration(),
                 "style_pack": style,
                 "master_brief": (self.master.value or "").strip(),
@@ -2393,7 +2433,43 @@ class DirectorView:
                     }
                     for i, s in enumerate(shots)
                 ],
-                "guidance": (
+            }
+            # FLUX 3 continuous/first→last vs Kling multi-shot
+            flux3 = False
+            try:
+                from media_studio.flux3_draft import is_flux3_video_model_choice
+
+                flux3 = is_flux3_video_model_choice(model)
+            except Exception:
+                flux3 = False
+            if flux3:
+                has_end = len(shots) >= 2 and any(
+                    (s.character_path or s.scene_path or s.ref_path) for s in shots[1:]
+                )
+                snap["model_prompt_brief"] = "flux3_video"
+                snap["modality"] = (
+                    "first_last"
+                    if "first" in model.lower() and "last" in model.lower()
+                    else "i2v"
+                )
+                snap["has_start_still"] = any(
+                    bool(s.character_path or s.ref_path or s.scene_path) for s in shots
+                )
+                snap["has_end_still"] = bool(has_end)
+                snap["creative_direction"] = vision or None
+                snap["guidance"] = (
+                    "FLUX 3 Director: continuous take or first→last — NOT Kling multi_prompt. "
+                    "Tighten master + action into one continuous motion prompt with format lead, "
+                    "audio bed when relevant, layout lock if character/start still is bound. "
+                    f"Continuity: {cont}. "
+                    + (
+                        f"Vision notes (Enhance only): {vision}. "
+                        if vision
+                        else ""
+                    )
+                )
+            else:
+                snap["guidance"] = (
                     "Rewrite for Kling multi-shot / director video generation. "
                     "Output should remain useful as: (1) a tightened master brief and "
                     "(2) clear per-shot action language with camera moves. "
@@ -2423,8 +2499,8 @@ class DirectorView:
                     )
                     + "Do not invent API fields. Prefer cinematic, concrete camera "
                     "language matching the presets."
-                ),
-            }
+                )
+            return snap
 
         await run_prompt_enhance(
             page=self.page,
@@ -2699,6 +2775,10 @@ class DirectorView:
                         self.result_actions_row.visible = True
                     except Exception:
                         pass
+                try:
+                    self._refresh_send_menu(result.path)
+                except Exception:
+                    pass
             else:
                 err = result.status or "Failed."
                 self.job_progress.finish_error(err, self.page)

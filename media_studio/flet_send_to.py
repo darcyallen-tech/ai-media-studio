@@ -667,6 +667,16 @@ def build_send_menu_items(
                 send_to_video_source(state, vid, status_cb=_ok),
             )
         )
+        # Primary video polish path — same friction as image "Send to Upscale"
+        if include_tools:
+            items.append(
+                _item(
+                    "Video Upscale",
+                    send_to_tool(
+                        state, "upscale", vid, as_video=True, status_cb=_ok
+                    ),
+                )
+            )
         if include_vision:
             items.append(
                 _item(

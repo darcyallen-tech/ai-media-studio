@@ -144,6 +144,69 @@ def _build_enhance_user_message(
             " REGION EDIT mode: produce a color-keyed optimized_prompt from the boxes; "
             "append remove-markings / outside-locked language."
         )
+
+    # FLUX 3 Video crash course — only when this model family is selected
+    flux3_video = False
+    try:
+        from media_studio.flux3_draft import (
+            is_flux3_video_model_choice,
+            flux3_video_enhance_guidance,
+        )
+
+        pref_for_flux = (
+            resolved_model_id
+            if model_locked and resolved_model_id
+            else (model_preference or "")
+        )
+        flux3_video = is_flux3_video_model_choice(pref_for_flux) or is_flux3_video_model_choice(
+            model_preference
+        )
+        if flux3_video:
+            # Prefer caller guidance only for mode hints; inject full brief here
+            modality = str(
+                extra.get("modality")
+                or extra.get("mode")
+                or extra.get("vision_mode")
+                or ""
+            )
+            has_start = bool(
+                has_vision
+                or extra.get("has_start_still")
+                or extra.get("has_source_still")
+            )
+            has_end = bool(extra.get("has_end_still") or extra.get("has_end_frame"))
+            has_vid = bool(
+                (video_file and Path(str(video_file)).is_file())
+                or extra.get("has_source_video")
+            )
+            draft_mode = bool(extra.get("draft") or extra.get("draft_first"))
+            lean = bool(extra.get("lean") or extra.get("minimal_direction"))
+            creative = (
+                extra.get("creative_direction")
+                or extra.get("vision_notes")
+                or extra.get("creative_direction_for_enhance")
+            )
+            # Replace generic guidance with FLUX 3 brief (keep other extra keys)
+            extra["guidance"] = flux3_video_enhance_guidance(
+                modality=modality,
+                has_start_still=has_start,
+                has_end_still=has_end,
+                has_source_video=has_vid,
+                draft_mode=draft_mode,
+                creative_direction=str(creative) if creative else None,
+                lean=lean,
+            )
+            extra["model_prompt_brief"] = "flux3_video"
+            instructions += (
+                " CRITICAL: Target is FLUX 3 Video. Apply the FLUX 3 Video crash course "
+                "in guidance fully. Format first; continuous take; layout lock for I2V; "
+                "audio first-class; setup→turn→payoff for longer clips. "
+                "Do NOT use Kling multi_prompt / multi-shot cut syntax. "
+                "Do NOT switch away from the locked FLUX 3 model."
+            )
+    except Exception:
+        flux3_video = False
+
     payload = {
         "raw_prompt": prompt,
         "model_preference": preference_label(model_preference),
@@ -155,6 +218,7 @@ def _build_enhance_user_message(
         "media": media,
         "has_vision_image": has_vision,
         "instructions": instructions,
+        "flux3_video": flux3_video,
         **extra,
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
@@ -423,6 +487,8 @@ class GenerateResult:
     notes: list[str] = field(default_factory=list)
     render_seconds: float | None = None
     metrics_line: str = ""  # e.g. "Rendered in 7.3s · Cost: $0.041"
+    is_draft: bool = False
+    draft_cache_url: str | None = None
 
     @property
     def primary_image(self) -> str | None:
@@ -677,6 +743,8 @@ def generate(
             notes=list(result.notes),
             render_seconds=result.render_seconds,
             metrics_line=result.metrics_line,
+            is_draft=bool(getattr(result, "is_draft", False)),
+            draft_cache_url=getattr(result, "draft_cache_url", None),
         )
 
     # ---- VIDEO-TO-VIDEO EDIT ----
@@ -756,6 +824,8 @@ def generate(
             notes=list(result.notes),
             render_seconds=result.render_seconds,
             metrics_line=result.metrics_line,
+            is_draft=bool(getattr(result, "is_draft", False)),
+            draft_cache_url=getattr(result, "draft_cache_url", None),
         )
 
     # ---- IMAGE EDIT ----

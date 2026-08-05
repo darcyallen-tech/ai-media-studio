@@ -315,6 +315,23 @@ class StudioVideoView:
             expand=True,
         )
         self.btn_enhance = make_enhance_button(on_click=self._on_enhance)
+        # FLUX 3 draft workflow
+        self.draft_first = ft.Checkbox(
+            label="Draft first (cheaper preview)",
+            value=False,
+            visible=False,
+            on_change=lambda _e: self._refresh_cost_job(),
+        )
+        self.btn_enhance_full = ft.OutlinedButton(
+            content="Enhance to full",
+            icon=ft.Icons.AUTO_FIX_HIGH,
+            on_click=self._on_enhance_to_full,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            visible=False,
+            disabled=True,
+            tooltip="Promote FLUX 3 draft cache to full quality (uses draft_cache)",
+        )
+        self._draft_cache_url: str | None = None
         self._last_qc_fix: str = ""
         self.state.on_keys_changed(self.apply_key_gates)
         self.apply_key_gates()
@@ -549,6 +566,28 @@ class StudioVideoView:
             except Exception:
                 self.native_stereo_note.visible = False
         self.start_time.visible = bool(opts.get("start_time_visible", False))
+        # FLUX 3 draft toggle (Studio VIDEO_MODELS or Vision T2V labels)
+        try:
+            from media_studio.flux3_draft import model_supports_draft
+            from media_studio.vision_registry import find_vision_model
+
+            vspec = resolve_video_model(model)
+            if vspec is None:
+                vspec = find_vision_model(model, "text_to_video") or find_vision_model(
+                    model
+                )
+            show_draft = bool(vspec and model_supports_draft(vspec))
+            self.draft_first.visible = show_draft
+            if not show_draft:
+                self.draft_first.value = False
+                self.btn_enhance_full.visible = False
+                self.btn_enhance_full.disabled = True
+                self._draft_cache_url = None
+            else:
+                self.btn_enhance_full.visible = True
+                self.btn_enhance_full.disabled = not bool(self._draft_cache_url)
+        except Exception:
+            self.draft_first.visible = False
 
     async def _pick_end_frame(self, e: ft.ControlEvent) -> None:
         req = False
@@ -602,8 +641,12 @@ class StudioVideoView:
             ),
             self.keep_audio,
             self.gen_audio,
+            self.draft_first,
             self.job_text,
-            ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
+            ft.Row(
+                [self.btn_enhance, self.btn_generate, self.btn_enhance_full],
+                spacing=8,
+            ),
             self.cost_box,
             self.job_progress.control,
             self.status_text,
@@ -614,10 +657,12 @@ class StudioVideoView:
             self.video_player.control.expand = False
         except Exception:
             pass
+        self.send_host = ft.Container(visible=False)
         right = ft.Column(
             [
                 section_title("Result preview"),
                 self.video_player.control,
+                self.send_host,
                 self.btn_send_vsfx,
             ],
             spacing=8,
@@ -1131,8 +1176,41 @@ class StudioVideoView:
         )
 
     def _estimate(self) -> str:
+        model = _dd_value(self.model_dd) or DEFAULT_VIDEO_EDIT_MODEL
+        try:
+            from media_studio.flux3_draft import (
+                format_draft_vs_full_cost,
+                model_supports_draft,
+            )
+            from media_studio.vision_registry import find_vision_model
+
+            spec = resolve_video_model(model)
+            if spec is None:
+                spec = find_vision_model(model, "text_to_video") or find_vision_model(
+                    model
+                )
+            if spec and model_supports_draft(spec):
+                try:
+                    dur = float(str(_dd_value(self.dur_dd) or "8").replace("s", "") or 8)
+                except (TypeError, ValueError):
+                    dur = 8.0
+                if str(_dd_value(self.dur_dd) or "").lower() == "auto":
+                    dur = 8.0
+                return format_draft_vs_full_cost(
+                    spec,
+                    duration_s=dur,
+                    resolution=_dd_value(self.res_dd),
+                    generate_audio=bool(self.gen_audio.value)
+                    if getattr(self.gen_audio, "visible", False)
+                    else False,
+                    draft_mode=bool(self.draft_first.value)
+                    if getattr(self.draft_first, "visible", False)
+                    else False,
+                )
+        except Exception:
+            pass
         return live_estimate_cost(
-            model_choice=_dd_value(self.model_dd) or DEFAULT_VIDEO_EDIT_MODEL,
+            model_choice=model,
             image_file=self.state.video_ref_path,
             video_file=self.state.video_source_path,
             parameters_json=self._params_json(),
@@ -1269,20 +1347,56 @@ class StudioVideoView:
         modality = normalize_video_modality(getattr(self, "_modality", "i2v"))
 
         def _extra() -> dict[str, Any]:
+            model = _dd_value(self.model_dd) or ""
+            has_end = bool(
+                getattr(self, "end_path", None)
+                and Path(self.end_path).is_file()  # type: ignore[arg-type]
+            )
+            has_still = bool(
+                self.state.video_ref_path
+                and Path(self.state.video_ref_path).is_file()
+            )
+            has_clip = bool(
+                self.state.video_source_path
+                and Path(self.state.video_source_path).is_file()
+            )
+            draft_on = bool(
+                getattr(self, "draft_first", None)
+                and self.draft_first.visible
+                and self.draft_first.value
+            )
             snap: dict[str, Any] = {
                 "workspace": "studio_video",
                 "modality": modality,
+                "has_start_still": has_still,
+                "has_end_still": has_end,
+                "has_source_video": has_clip and modality in ("v2v", "r2v"),
+                "draft_first": draft_on,
             }
+            # FLUX 3 Video — full crash course injected in enhance_prompt; set flags here
+            try:
+                from media_studio.flux3_draft import is_flux3_video_model_choice
+
+                if is_flux3_video_model_choice(model):
+                    snap["model_prompt_brief"] = "flux3_video"
+                    # Modality mapping for flux3_enhance_mode_hint
+                    if modality == "t2v":
+                        snap["modality"] = "t2v"
+                    elif modality == "i2v":
+                        snap["modality"] = (
+                            "first_last" if has_end else "i2v"
+                        )
+                    elif modality == "v2v":
+                        snap["modality"] = "extend"
+                    return snap
+            except Exception:
+                pass
             if modality == "t2v":
                 snap["guidance"] = (
                     "Rewrite for text-to-video. Cinematic motion language. "
                     "No invented API params."
                 )
             elif modality == "i2v":
-                has_end = bool(
-                    getattr(self, "end_path", None)
-                    and Path(self.end_path).is_file()  # type: ignore[arg-type]
-                )
                 snap["guidance"] = (
                     "Rewrite for image-to-video. Start still is the first frame."
                     + (
@@ -1373,6 +1487,136 @@ class StudioVideoView:
             self.page.update()
         except Exception:
             pass
+
+    def _refresh_send_menu(self, path: str | None) -> None:
+        """Send to ▾ including Video Upscale for the result clip."""
+        from media_studio.flet_send_to import (
+            build_send_menu_items,
+            make_send_menu_button,
+        )
+
+        if not path or not Path(path).is_file():
+            try:
+                self.send_host.visible = False
+            except Exception:
+                pass
+            return
+
+        def _st(msg: str) -> None:
+            try:
+                self.status_text.value = msg
+                self.page.update()
+            except Exception:
+                pass
+
+        items = build_send_menu_items(
+            self.state, video_path=path, status_cb=_st
+        )
+        btn = make_send_menu_button(
+            items,
+            tooltip="Send to Studio, Video Upscale, Tools, Resolve…",
+        )
+        try:
+            if btn is None:
+                self.send_host.visible = False
+            else:
+                self.send_host.content = btn
+                self.send_host.visible = True
+        except Exception:
+            pass
+
+    async def _on_enhance_to_full(self, e: ft.ControlEvent) -> None:
+        """FLUX 3 draft-enhance: promote draft_cache to full quality."""
+        if self.state.is_busy("video"):
+            return
+        cache = (self._draft_cache_url or "").strip()
+        if not cache:
+            self.status_text.value = (
+                "Enhance to full needs a draft first (enable Draft first + Generate)."
+            )
+            self.page.update()
+            return
+        from media_studio.secrets_store import has_fal_key
+
+        if not has_fal_key():
+            self.status_text.value = "FAL API key required — open Settings."
+            self.page.update()
+            return
+        if not self.state.try_busy("video"):
+            return
+        self.btn_enhance_full.disabled = True
+        self.btn_generate.disabled = True
+        self.job_progress.start("Enhancing draft to full…", self.page)
+        self.status_text.value = "FLUX 3 draft-enhance…"
+        self.page.update()
+
+        def on_progress(msg: str) -> None:
+            self.job_log.append(msg, self.page)
+            self.job_progress.set_message(classify_progress(msg), self.page)
+
+        try:
+            from media_studio.flux3_draft import (
+                estimate_full_cost_usd,
+                run_draft_enhance,
+            )
+            from media_studio.job_context import to_thread_with_job
+
+            model = _dd_value(self.model_dd) or ""
+            spec = resolve_video_model(model)
+            try:
+                dur = float(str(_dd_value(self.dur_dd) or "8").replace("s", "") or 8)
+            except (TypeError, ValueError):
+                dur = 8.0
+            full_est = (
+                estimate_full_cost_usd(
+                    spec,
+                    duration_s=dur,
+                    resolution=_dd_value(self.res_dd),
+                    generate_audio=bool(self.gen_audio.value),
+                )
+                if spec
+                else None
+            )
+            result = await to_thread_with_job(
+                self.state,
+                run_draft_enhance,
+                draft_cache_url=cache,
+                output_dir=self.state.output_dir,
+                prompt_hint=(self.prompt_field.value or "flux3")[:40],
+                model_key=getattr(spec, "key", None) or "flux 3 enhance",
+                on_progress=on_progress,
+                duration_s=dur,
+                full_cost_usd=full_est,
+            )
+            if result.ok and result.path:
+                self._last_result_path = result.path
+                self.video_player.set_result(result.path)
+                self._draft_cache_url = None
+                self.btn_enhance_full.disabled = True
+                self._refresh_send_menu(result.path)
+                self.cost_text.value = result.cost_estimate or self._estimate()
+                done = result.status or "Enhance to full OK"
+                self.job_progress.finish_ok(done, self.page)
+                self.job_log.finish_ok(self.page)
+                self.status_text.value = done
+            else:
+                err = result.status or "Enhance to full failed."
+                self.job_progress.finish_error(err, self.page)
+                self.job_log.finish_error(err, self.page)
+                self.status_text.value = err
+                self.btn_enhance_full.disabled = False
+        except Exception as exc:
+            from media_studio.errors import friendly_error
+
+            err = friendly_error(exc, context="Enhance to full")
+            self.job_progress.finish_error(err, self.page)
+            self.status_text.value = err
+            self.btn_enhance_full.disabled = False
+        finally:
+            self.state.clear_busy("video")
+            self.apply_key_gates()
+            self._refresh_cost_job()
+            self.page.update()
 
     async def _on_generate(self, e: ft.ControlEvent) -> None:
         if self.state.is_busy("video"):
@@ -1494,14 +1738,25 @@ class StudioVideoView:
             and Path(self.end_path).is_file()  # type: ignore[arg-type]
         ):
             params["end_image_path"] = self.end_path
+        # FLUX 3 draft first
+        if (
+            getattr(self, "draft_first", None) is not None
+            and self.draft_first.visible
+            and self.draft_first.value
+        ):
+            params["draft"] = True
+            params["draft_first"] = True
         params_json = self._params_json()
         try:
             import json as _json
 
+            base = _json.loads(params_json or "{}")
             if params.get("end_image_path"):
-                base = _json.loads(params_json or "{}")
                 base["end_image_path"] = params["end_image_path"]
-                params_json = _json.dumps(base)
+            if params.get("draft"):
+                base["draft"] = True
+                base["draft_first"] = True
+            params_json = _json.dumps(base)
         except Exception:
             pass
 
@@ -1538,6 +1793,9 @@ class StudioVideoView:
                     generate_audio=bool(self.gen_audio.value)
                     if self.gen_audio.visible
                     else None,
+                    draft=bool(
+                        self.draft_first.visible and self.draft_first.value
+                    ),
                     output_dir=self.state.output_dir,
                     on_progress=on_progress,
                 )
@@ -1550,6 +1808,8 @@ class StudioVideoView:
                     cost_estimate=vres.cost_label or "",
                     notes=list(getattr(vres, "notes", None) or []),
                     metrics_line=vres.metrics_line or vres.cost_label or "",
+                    is_draft=bool(getattr(vres, "is_draft", False)),
+                    draft_cache_url=getattr(vres, "draft_cache_url", None),
                 )
             else:
                 # I2V: still only (optional clip ignored unless R2V)
@@ -1581,8 +1841,24 @@ class StudioVideoView:
                     self.btn_send_vsfx.visible = True
                 except Exception:
                     pass
+                # Draft cache for Enhance to full
+                cache = getattr(result, "draft_cache_url", None)
+                is_draft = bool(getattr(result, "is_draft", False))
+                if is_draft and cache:
+                    self._draft_cache_url = cache
+                    self.btn_enhance_full.visible = True
+                    self.btn_enhance_full.disabled = False
+                elif not is_draft:
+                    # Full quality run clears draft gate
+                    self._draft_cache_url = None
+                    if getattr(self, "draft_first", None) and self.draft_first.visible:
+                        self.btn_enhance_full.visible = True
+                        self.btn_enhance_full.disabled = True
+                self._refresh_send_menu(vp)
                 self.cost_text.value = result.cost_estimate or self._estimate()
                 done = f"OK · {result.metrics_line or result.cost_estimate or 'done'}"
+                if is_draft:
+                    done = f"Draft OK · {result.cost_estimate or 'preview ready'}"
                 self.job_progress.finish_ok(done, self.page)
                 self.job_log.finish_ok(self.page)
                 self.status_text.value = done

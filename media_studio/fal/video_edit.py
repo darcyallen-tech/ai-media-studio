@@ -18,6 +18,7 @@ from media_studio.fal.client import (
     format_bytes,
     is_remote_url,
     require_local_file,
+    extract_draft_cache_url,
     extract_video_url,
     subscribe,
     upload_error_detail,
@@ -28,8 +29,13 @@ from media_studio.fal.models import (
     default_video_edit_model,
     resolve_video_model,
 )
+from media_studio.flux3_draft import (
+    draft_endpoint_for,
+    estimate_draft_cost_usd,
+    strip_resolution_for_draft,
+)
 from media_studio.naming import job_media_dir, make_output_stem, timestamp_now, unique_path
-from media_studio.pricing import format_render_metrics, resolve_generation_cost
+from media_studio.pricing import format_job_cost, format_render_metrics, resolve_generation_cost
 
 ProgressCallback = Callable[[str], None]
 
@@ -46,6 +52,8 @@ class VideoEditResult:
     timestamp: str = ""
     render_seconds: float | None = None
     metrics_line: str = ""
+    is_draft: bool = False
+    draft_cache_url: str | None = None
 
 
 def _file_download_hint(local: Path, size: int) -> str:
@@ -163,11 +171,22 @@ def run_video_edit(
         )
 
     notes.extend(build_notes)
-    progress("Running video edit on fal (can take several minutes)…")
+    params = dict(parameters or {})
+    use_draft = bool(params.get("draft") or params.get("draft_first"))
+    draft_ep = draft_endpoint_for(spec) if use_draft else None
+    if use_draft and not draft_ep:
+        notes.append("Draft not available for this model — running full quality.")
+        use_draft = False
+    endpoint = draft_ep if (use_draft and draft_ep) else spec.endpoint
+    if use_draft:
+        arguments = strip_resolution_for_draft(arguments)
+        progress(f"Running DRAFT video edit on fal… ({endpoint})")
+    else:
+        progress("Running video edit on fal (can take several minutes)…")
 
     t0 = time.perf_counter()
     try:
-        result = subscribe(spec.endpoint, arguments, on_progress=progress)
+        result = subscribe(endpoint, arguments, on_progress=progress)
     except FalClientError as exc:
         render_s = time.perf_counter() - t0
         err = str(exc)
@@ -185,9 +204,11 @@ def run_video_edit(
                     image_urls=image_urls,
                     parameters=parameters,
                 )
+                if use_draft:
+                    arguments = strip_resolution_for_draft(arguments)
                 notes.extend(more_notes)
                 t0 = time.perf_counter()
-                result = subscribe(spec.endpoint, arguments, on_progress=progress)
+                result = subscribe(endpoint, arguments, on_progress=progress)
             except FalClientError as exc2:
                 render_s = time.perf_counter() - t0
                 return VideoEditResult(
@@ -224,15 +245,39 @@ def run_video_edit(
             )
     render_s = time.perf_counter() - t0
 
-    cost_usd, is_est = resolve_generation_cost(
-        result,
-        model_key=spec.key,
-        job_kind="video",
-        video_path=vpath,
-        parameters=parameters,
-    )
+    draft_cache = extract_draft_cache_url(result) if use_draft else None
+    if use_draft:
+        dur_raw = arguments.get("duration") or params.get("duration") or 8
+        try:
+            dur_s = (
+                8.0
+                if str(dur_raw).lower() == "auto"
+                else float(str(dur_raw).replace("s", ""))
+            )
+        except (TypeError, ValueError):
+            dur_s = 8.0
+        cost_usd = estimate_draft_cost_usd(spec, duration_s=dur_s)
+        is_est = True
+        cost_str = (
+            format_job_cost(
+                cost_usd, unit=f"{int(round(dur_s))}s draft", model=spec.label
+            )
+            if cost_usd is not None
+            else ""
+        )
+        notes.append("Draft preview — use Enhance to full when ready.")
+    else:
+        cost_usd, is_est = resolve_generation_cost(
+            result,
+            model_key=spec.key,
+            job_kind="video",
+            video_path=vpath,
+            parameters=parameters,
+        )
+        cost_str = ""
     metrics = format_render_metrics(render_s, cost_usd, cost_is_estimate=is_est)
-    cost_str = metrics.split(" · ")[-1] if " · " in metrics else metrics
+    if not cost_str:
+        cost_str = metrics.split(" · ")[-1] if " · " in metrics else metrics
     if cost_usd is not None:
         notes.append(cost_str)
 
@@ -241,18 +286,21 @@ def run_video_edit(
         return VideoEditResult(
             ok=False,
             model_key=spec.key,
-            endpoint=spec.endpoint,
+            endpoint=endpoint,
             status="Generate: fal returned no video. Check clip length (3–10s) and format (mp4/mov).",
             notes=notes,
             cost_estimate=cost_str if cost_usd is not None else "",
             render_seconds=render_s,
             metrics_line=metrics,
+            is_draft=use_draft,
+            draft_cache_url=draft_cache,
         )
 
     stamp = timestamp_now()
     media_dir = job_media_dir(output_dir, stamp=stamp)
+    kind_tag = "v2v-draft" if use_draft else "v2v"
     stem = make_output_stem(
-        prompt, spec.key, stamp=stamp, kind="v2v", scenario=scenario
+        prompt, spec.key, stamp=stamp, kind=kind_tag, scenario=scenario
     )
     dest = unique_path(media_dir, stem, ".mp4")
 
@@ -262,21 +310,26 @@ def run_video_edit(
         return VideoEditResult(
             ok=False,
             model_key=spec.key,
-            endpoint=spec.endpoint,
+            endpoint=endpoint,
             status=str(exc),
             notes=notes,
             cost_estimate=cost_str if cost_usd is not None else "",
             timestamp=stamp,
             render_seconds=render_s,
             metrics_line=metrics,
+            is_draft=use_draft,
+            draft_cache_url=draft_cache,
         )
 
     resolved = str(dest.resolve())
+    mode_lbl = "draft" if use_draft else "video"
     status_parts = [
-        f"Generate OK — {spec.label} (video).",
+        f"Generate OK — {spec.label} ({mode_lbl}).",
         f"Saved {Path(resolved).name} → {media_dir.name}/.",
         metrics + ".",
     ]
+    if use_draft and draft_cache:
+        status_parts.append("Draft cache ready for Enhance to full.")
     other = [n for n in notes if n != cost_str]
     if other:
         status_parts.append("Notes: " + "; ".join(other))
@@ -285,11 +338,13 @@ def run_video_edit(
         ok=True,
         path=resolved,
         model_key=spec.key,
-        endpoint=spec.endpoint,
+        endpoint=endpoint,
         status=" ".join(status_parts),
         notes=notes,
         cost_estimate=cost_str if cost_usd is not None else "",
         timestamp=stamp,
         render_seconds=render_s,
         metrics_line=metrics,
+        is_draft=use_draft,
+        draft_cache_url=draft_cache,
     )

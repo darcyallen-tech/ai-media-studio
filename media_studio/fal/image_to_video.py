@@ -11,6 +11,7 @@ from media_studio.errors import friendly_error
 from media_studio.fal.client import (
     FalClientError,
     download_url,
+    extract_draft_cache_url,
     extract_video_url,
     subscribe,
     upload_file,
@@ -20,8 +21,14 @@ from media_studio.fal.models import (
     default_i2v_model,
     resolve_video_model,
 )
+from media_studio.flux3_draft import (
+    draft_endpoint_for,
+    estimate_draft_cost_usd,
+    model_supports_draft,
+    strip_resolution_for_draft,
+)
 from media_studio.naming import job_media_dir, make_output_stem, timestamp_now, unique_path
-from media_studio.pricing import format_render_metrics, resolve_generation_cost
+from media_studio.pricing import format_job_cost, format_render_metrics, resolve_generation_cost
 
 ProgressCallback = Callable[[str], None]
 
@@ -38,6 +45,8 @@ class ImageToVideoResult:
     timestamp: str = ""
     render_seconds: float | None = None
     metrics_line: str = ""
+    is_draft: bool = False
+    draft_cache_url: str | None = None
 
 
 def run_image_to_video(
@@ -204,17 +213,29 @@ def run_image_to_video(
         )
 
     notes.extend(build_notes)
-    progress("Running image-to-video on fal…")
+
+    # FLUX 3 draft: cheaper /draft endpoint (no resolution); keep draft_cache for enhance
+    use_draft = bool(params.get("draft") or params.get("draft_first"))
+    draft_ep = draft_endpoint_for(spec) if use_draft else None
+    if use_draft and not draft_ep:
+        notes.append("Draft not available for this model — running full quality.")
+        use_draft = False
+    endpoint = draft_ep if (use_draft and draft_ep) else spec.endpoint
+    if use_draft:
+        arguments = strip_resolution_for_draft(arguments)
+        progress(f"Running DRAFT image-to-video on fal… ({endpoint})")
+    else:
+        progress("Running image-to-video on fal…")
 
     t0 = time.perf_counter()
     try:
-        result = subscribe(spec.endpoint, arguments, on_progress=progress)
+        result = subscribe(endpoint, arguments, on_progress=progress)
     except FalClientError as exc:
         render_s = time.perf_counter() - t0
         return ImageToVideoResult(
             ok=False,
             model_key=spec.key,
-            endpoint=spec.endpoint,
+            endpoint=endpoint,
             status=str(exc),
             notes=notes,
             render_seconds=render_s,
@@ -222,14 +243,37 @@ def run_image_to_video(
         )
     render_s = time.perf_counter() - t0
 
-    cost_usd, is_est = resolve_generation_cost(
-        result,
-        model_key=spec.key,
-        job_kind="image_to_video",
-        parameters=parameters,
-    )
+    draft_cache = extract_draft_cache_url(result) if use_draft else None
+    if use_draft:
+        # Duration for draft cost estimate
+        dur_raw = arguments.get("duration") or params.get("duration") or 8
+        try:
+            if str(dur_raw).lower() == "auto":
+                dur_s = 8.0
+            else:
+                dur_s = float(str(dur_raw).replace("s", ""))
+        except (TypeError, ValueError):
+            dur_s = 8.0
+        cost_usd = estimate_draft_cost_usd(spec, duration_s=dur_s)
+        is_est = True
+        if cost_usd is not None:
+            cost_str = format_job_cost(
+                cost_usd, unit=f"{int(round(dur_s))}s draft", model=spec.label
+            )
+        else:
+            cost_str = ""
+        notes.append("Draft preview — use Enhance to full when ready.")
+    else:
+        cost_usd, is_est = resolve_generation_cost(
+            result,
+            model_key=spec.key,
+            job_kind="image_to_video",
+            parameters=parameters,
+        )
+        cost_str = ""
     metrics = format_render_metrics(render_s, cost_usd, cost_is_estimate=is_est)
-    cost_str = metrics.split(" · ")[-1] if " · " in metrics else metrics
+    if not cost_str:
+        cost_str = metrics.split(" · ")[-1] if " · " in metrics else metrics
     if cost_usd is not None:
         notes.append(cost_str)
 
@@ -238,18 +282,21 @@ def run_image_to_video(
         return ImageToVideoResult(
             ok=False,
             model_key=spec.key,
-            endpoint=spec.endpoint,
+            endpoint=endpoint,
             status="Generate: fal returned no video.",
             notes=notes,
             cost_estimate=cost_str if cost_usd is not None else "",
             render_seconds=render_s,
             metrics_line=metrics,
+            is_draft=use_draft,
+            draft_cache_url=draft_cache,
         )
 
     stamp = timestamp_now()
     media_dir = job_media_dir(output_dir, stamp=stamp)
+    kind_tag = "i2v-draft" if use_draft else "i2v"
     stem = make_output_stem(
-        prompt or "i2v", spec.key, stamp=stamp, kind="i2v", scenario=scenario
+        prompt or "i2v", spec.key, stamp=stamp, kind=kind_tag, scenario=scenario
     )
     dest = unique_path(media_dir, stem, ".mp4")
 
@@ -259,21 +306,26 @@ def run_image_to_video(
         return ImageToVideoResult(
             ok=False,
             model_key=spec.key,
-            endpoint=spec.endpoint,
+            endpoint=endpoint,
             status=str(exc),
             notes=notes,
             cost_estimate=cost_str if cost_usd is not None else "",
             timestamp=stamp,
             render_seconds=render_s,
             metrics_line=metrics,
+            is_draft=use_draft,
+            draft_cache_url=draft_cache,
         )
 
     resolved = str(dest.resolve())
+    mode_lbl = "draft" if use_draft else "image-to-video"
     status_parts = [
-        f"Generate OK — {spec.label} (image-to-video).",
+        f"Generate OK — {spec.label} ({mode_lbl}).",
         f"Saved {Path(resolved).name} → {media_dir.name}/.",
         metrics + ".",
     ]
+    if use_draft and draft_cache:
+        status_parts.append("Draft cache ready for Enhance to full.")
     other = [n for n in notes if n != cost_str]
     if other:
         status_parts.append("Notes: " + "; ".join(other))
@@ -282,11 +334,13 @@ def run_image_to_video(
         ok=True,
         path=resolved,
         model_key=spec.key,
-        endpoint=spec.endpoint,
+        endpoint=endpoint,
         status=" ".join(status_parts),
         notes=notes,
         cost_estimate=cost_str if cost_usd is not None else "",
         timestamp=stamp,
         render_seconds=render_s,
         metrics_line=metrics,
+        is_draft=use_draft,
+        draft_cache_url=draft_cache,
     )

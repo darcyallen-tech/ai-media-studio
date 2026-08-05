@@ -12,6 +12,12 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### FLUX 3 Draft + Send to Video Upscale
+- **Draft first** on FLUX 3 T2V/I2V/First→Last/Extend (Studio + Creative Vision): cheaper draft preview, then **Enhance to full** via `draft-enhance` + draft_cache
+- Cost labels distinguish draft vs full (~$0.06/s draft ballpark · full by resolution)
+- Video results: **Send to ▾ → Video Upscale** (Director, Studio Video, Creative Vision)
+- **Enhance** for FLUX 3 Video: format-first continuous-take crash course (layout lock, audio, setup→turn→payoff) — not Kling multi-shot syntax; model stays locked
+
 ### Director — identity pack ref counting
 - Front only / Full pack respected: Full pack only on multi-image / element models (Grok, Kling V3)
 - Single-ref (FLUX 3 I2V, First→Last, O3): force Front only; hide Full pack; never count/send Side/Close-up

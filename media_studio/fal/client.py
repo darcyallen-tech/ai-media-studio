@@ -509,6 +509,24 @@ def extract_video_url(result: dict[str, Any]) -> str | None:
     return None
 
 
+def extract_draft_cache_url(result: dict[str, Any]) -> str | None:
+    """
+    FLUX 3 draft output: durable encrypted cache for draft-enhance.
+
+    OpenAPI: ``draft_cache`` File with ``url``.
+    """
+    if not isinstance(result, dict):
+        return None
+    cache = result.get("draft_cache") or result.get("draft_cache_url")
+    if isinstance(cache, str) and cache.strip():
+        return cache.strip()
+    if isinstance(cache, dict):
+        url = cache.get("url") or cache.get("file_url")
+        if url:
+            return str(url)
+    return None
+
+
 def _extension_from_url_or_type(url: str, content_type: str | None = None) -> str:
     if content_type:
         ext = mimetypes.guess_extension(content_type.split(";")[0].strip())

@@ -170,6 +170,22 @@ class CreativeVisionView:
             expand=True,
         )
         self.num_dd.visible = False
+        self.draft_first = ft.Checkbox(
+            label="Draft first (cheaper preview)",
+            value=False,
+            visible=False,
+            on_change=lambda _e: self._refresh_cost_only(),
+        )
+        self.btn_enhance_full = ft.OutlinedButton(
+            content="Enhance to full",
+            icon=ft.Icons.AUTO_FIX_HIGH,
+            on_click=self._on_enhance_to_full,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            visible=False,
+            disabled=True,
+            tooltip="Promote FLUX 3 draft cache to full quality",
+        )
+        self._draft_cache_url: str | None = None
         self.gen_audio = ft.Checkbox(
             label="Generate audio (when supported)",
             value=True,
@@ -701,6 +717,7 @@ class CreativeVisionView:
             self.strength_label,
             self.strength,
             self.gen_audio,
+            self.draft_first,
             self.native_stereo_note,
             ft.Divider(height=1, color=BORDER),
             self.helpers_title,
@@ -713,7 +730,10 @@ class CreativeVisionView:
             self.creative_direction_hint,
             self.negative,
             # Generate then Est. cost chrome (Studio pattern)
-            ft.Row([self.btn_enhance, self.btn_generate], spacing=8),
+            ft.Row(
+                [self.btn_enhance, self.btn_generate, self.btn_enhance_full],
+                spacing=8,
+            ),
             self.cost_box,
             self.job_progress.control,
             self.status,
@@ -898,12 +918,42 @@ class CreativeVisionView:
         except (TypeError, ValueError):
             return 1
 
+    def _refresh_cost_only(self) -> None:
+        try:
+            self.cost_text.value = self._cost_label()
+            self.page.update()
+        except Exception:
+            pass
+
     def _cost_label(self) -> str:
         try:
             spec = self._current_spec()
             audio = None
             if spec.supports_audio and not is_still_mode(self._mode):
                 audio = bool(self.gen_audio.value)
+            # FLUX 3 draft cost when toggle on
+            from media_studio.flux3_draft import (
+                format_draft_vs_full_cost,
+                model_supports_draft,
+            )
+            from media_studio.vision_registry import duration_seconds
+
+            if (
+                not is_still_mode(self._mode)
+                and model_supports_draft(spec)
+                and getattr(self, "draft_first", None) is not None
+            ):
+                draft_on = bool(self.draft_first.value and self.draft_first.visible)
+                dur = duration_seconds(self._duration_token_for_cost(spec))
+                return format_draft_vs_full_cost(
+                    spec,
+                    duration_s=dur,
+                    resolution=_dd(self.res_dd) if self.res_dd.visible else (
+                        spec.default_resolution or None
+                    ),
+                    generate_audio=bool(audio) if audio is not None else False,
+                    draft_mode=draft_on,
+                )
             return format_vision_cost(
                 spec,
                 duration_token=self._duration_token_for_cost(spec),
@@ -1233,6 +1283,22 @@ class CreativeVisionView:
             self.native_stereo_note.visible = native and not still
         except Exception:
             pass
+        # FLUX 3 draft
+        try:
+            from media_studio.flux3_draft import model_supports_draft
+
+            show_draft = (not still) and model_supports_draft(spec)
+            self.draft_first.visible = show_draft
+            if not show_draft:
+                self.draft_first.value = False
+                self.btn_enhance_full.visible = False
+                self.btn_enhance_full.disabled = True
+                self._draft_cache_url = None
+            else:
+                self.btn_enhance_full.visible = True
+                self.btn_enhance_full.disabled = not bool(self._draft_cache_url)
+        except Exception:
+            self.draft_first.visible = False
         self.negative.visible = bool(spec.supports_negative) or still
         # Strength (I2I when model supports)
         show_str = is_i2i and bool(getattr(spec, "supports_strength", False))
@@ -1811,6 +1877,7 @@ class CreativeVisionView:
             "workspace": "creative_vision",
             "mode": self._mode,
         }
+        direction = (self.creative_direction.value or "").strip()
         if is_still_mode(self._mode):
             for key, val in (
                 ("framing", _dd(self.shot_dd)),
@@ -1878,6 +1945,43 @@ class CreativeVisionView:
                 spec = self._current_spec()
             except Exception:
                 spec = None
+            # FLUX 3 Video — crash course (central enhance_prompt also injects full brief)
+            try:
+                from media_studio.flux3_draft import is_flux3_video_model_choice
+
+                model_lab = _dd(self.model_dd) or (
+                    getattr(spec, "label", None) or getattr(spec, "key", "") or ""
+                )
+                if is_flux3_video_model_choice(model_lab) or (
+                    spec and "flux-3" in (getattr(spec, "endpoint", "") or "")
+                ):
+                    snap["model_prompt_brief"] = "flux3_video"
+                    snap["modality"] = self._mode
+                    snap["vision_mode"] = self._mode
+                    snap["has_start_still"] = bool(
+                        self.start_path and Path(self.start_path).is_file()
+                    )
+                    snap["has_end_still"] = bool(
+                        self.end_path and Path(self.end_path).is_file()
+                    )
+                    snap["has_source_video"] = bool(
+                        getattr(self, "extend_path", None)
+                        and Path(self.extend_path).is_file()  # type: ignore[arg-type]
+                    )
+                    snap["draft_first"] = bool(
+                        getattr(self, "draft_first", None)
+                        and self.draft_first.visible
+                        and self.draft_first.value
+                    )
+                    # Skip H3/Veo generic guidance — services inject FLUX 3 brief
+                    if direction:
+                        snap["creative_direction"] = direction
+                    sub = self._active_subject_notes()
+                    if sub:
+                        snap["subject_notes"] = sub
+                    return snap
+            except Exception:
+                pass
             is_omni = bool(spec and getattr(spec, "omni_reference", False))
             n_img = len([p for p in self.ref_paths if p and Path(p).is_file()])
             n_vid = len(
@@ -1925,7 +2029,6 @@ class CreativeVisionView:
                 )
             if spec and getattr(spec, "native_stereo_audio", False):
                 snap["native_stereo_audio"] = True
-        direction = (self.creative_direction.value or "").strip()
         if direction:
             snap["creative_direction"] = direction
             snap["creative_direction_note"] = (
@@ -2941,6 +3044,11 @@ class CreativeVisionView:
                 ),
                 strength=strength_val,
                 num_images=self._num_images_for_cost(),
+                draft=bool(
+                    (not still_job)
+                    and self.draft_first.visible
+                    and self.draft_first.value
+                ),
                 output_dir=self.state.output_dir,
                 on_progress=on_progress,
             )
@@ -2952,6 +3060,17 @@ class CreativeVisionView:
                 self._result_path = paths[-1]
                 self._result_paths = paths
                 done = result.status or "OK"
+                if getattr(result, "is_draft", False):
+                    done = f"Draft · {result.cost_label or done}"
+                    cache = getattr(result, "draft_cache_url", None)
+                    if cache:
+                        self._draft_cache_url = cache
+                        self.btn_enhance_full.visible = True
+                        self.btn_enhance_full.disabled = False
+                elif not getattr(result, "is_draft", False):
+                    self._draft_cache_url = None
+                    if self.draft_first.visible:
+                        self.btn_enhance_full.disabled = True
                 self.job_progress.finish_ok(done, self.page)
                 self.status.value = done
                 self._show_result(paths[-1])
@@ -3071,6 +3190,91 @@ class CreativeVisionView:
             )
         self.variant_row.controls = cells
         self.variant_host.visible = bool(cells)
+
+    async def _on_enhance_to_full(self, e: ft.ControlEvent) -> None:
+        """FLUX 3 draft-enhance from stored draft_cache_url."""
+        if self.state.is_busy("vision"):
+            return
+        cache = (self._draft_cache_url or "").strip()
+        if not cache:
+            self.status.value = "Enhance to full needs a draft first."
+            self.page.update()
+            return
+        from media_studio.secrets_store import has_fal_key
+
+        if not has_fal_key():
+            self.status.value = "FAL API key required — open Settings."
+            self.page.update()
+            return
+        if not self.state.try_busy("vision"):
+            return
+        self.btn_enhance_full.disabled = True
+        self.btn_generate.disabled = True
+        self.job_progress.start("Enhancing draft to full…", self.page)
+        self.status.value = "FLUX 3 draft-enhance…"
+        self.page.update()
+
+        def on_progress(msg: str) -> None:
+            self.job_progress.set_message(classify_progress(msg), self.page)
+
+        try:
+            from media_studio.flux3_draft import (
+                estimate_full_cost_usd,
+                run_draft_enhance,
+            )
+            from media_studio.job_context import to_thread_with_job
+            from media_studio.vision_registry import duration_seconds
+
+            spec = self._current_spec()
+            dur = duration_seconds(self._duration_token_for_cost(spec))
+            full_est = estimate_full_cost_usd(
+                spec,
+                duration_s=dur,
+                resolution=_dd(self.res_dd) if self.res_dd.visible else None,
+                generate_audio=bool(self.gen_audio.value)
+                if self.gen_audio.visible
+                else False,
+            )
+            result = await to_thread_with_job(
+                self.state,
+                run_draft_enhance,
+                draft_cache_url=cache,
+                output_dir=self.state.output_dir,
+                prompt_hint=(self.prompt.value or "flux3")[:40],
+                model_key=spec.key,
+                on_progress=on_progress,
+                duration_s=dur,
+                full_cost_usd=full_est,
+            )
+            if result.ok and result.path:
+                self._result_path = result.path
+                self._draft_cache_url = None
+                self.btn_enhance_full.disabled = True
+                self.cost_text.value = result.cost_estimate or self._cost_label()
+                done = result.status or "Enhance to full OK"
+                self.job_progress.finish_ok(done, self.page)
+                self.status.value = done
+                self._show_result(result.path)
+                self._refresh_send_menu(result.path)
+            else:
+                err = result.status or "Enhance failed."
+                self.job_progress.finish_error(err, self.page)
+                self.status.value = err
+                self.btn_enhance_full.disabled = False
+        except Exception as exc:
+            from media_studio.errors import friendly_error
+
+            err = friendly_error(exc, context="Enhance to full")
+            self.job_progress.finish_error(err, self.page)
+            self.status.value = err
+            self.btn_enhance_full.disabled = False
+        finally:
+            self.state.clear_busy("vision")
+            self.apply_key_gates()
+            try:
+                self.page.update()
+            except Exception:
+                pass
 
     def _refresh_send_menu(self, path: str) -> None:
         """Send-to matrix: stills get FE keyframe + Start/End/I2V + shared matrix."""

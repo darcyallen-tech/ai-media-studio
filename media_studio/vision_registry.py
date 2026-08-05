@@ -32,6 +32,10 @@ class VisionModelSpec:
     cost_per_second: float | None = None
     # e.g. {"720p": 0.17, "1080p": 0.29} — overrides flat cost_per_second by res
     cost_per_second_by_resolution: dict[str, float] = field(default_factory=dict)
+    # FLUX 3 draft workflow
+    draft_endpoint: str | None = None
+    enhance_endpoint: str | None = None
+    cost_per_second_draft: float | None = None
     # Duration API shape
     duration_param: str = "duration"
     duration_choices: tuple[str, ...] = ("4s", "6s", "8s")
@@ -819,9 +823,13 @@ T2V_MODELS: dict[str, VisionModelSpec] = {
         cost_estimate_usd=1.36,  # 8s × $0.17 @720p
         cost_per_second=0.17,
         cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        draft_endpoint="blackforestlabs/flux-3/text-to-video/draft",
+        enhance_endpoint="blackforestlabs/flux-3/draft-enhance",
+        cost_per_second_draft=0.06,
         notes=(
             "FLUX 3 (BFL on fal) T2V — full quality with optional native audio. "
-            "5–20s or auto · 720p/1080p. Est. ~$0.17/s @720p · ~$0.29/s @1080p."
+            "5–20s or auto · 720p/1080p. Draft first → Enhance to full. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p · draft ~$0.06/s."
         ),
         duration_choices=("auto",) + tuple(str(i) for i in range(5, 21)),
         default_duration="8",
@@ -972,9 +980,13 @@ I2V_MODELS: dict[str, VisionModelSpec] = {
         cost_estimate_usd=1.36,  # 8s × $0.17
         cost_per_second=0.17,
         cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        draft_endpoint="blackforestlabs/flux-3/image-to-video/draft",
+        enhance_endpoint="blackforestlabs/flux-3/draft-enhance",
+        cost_per_second_draft=0.06,
         notes=(
             "FLUX 3 I2V (BFL on fal) — animate a still with optional native audio. "
-            "5–20s or auto · 720p/1080p. Est. ~$0.17/s @720p · ~$0.29/s @1080p."
+            "5–20s or auto · 720p/1080p. Draft first → Enhance to full. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p · draft ~$0.06/s."
         ),
         duration_choices=("auto",) + tuple(str(i) for i in range(5, 21)),
         default_duration="8",
@@ -1054,10 +1066,14 @@ BRIDGE_MODELS: dict[str, VisionModelSpec] = {
         cost_estimate_usd=1.36,  # 8s × $0.17
         cost_per_second=0.17,
         cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        draft_endpoint="blackforestlabs/flux-3/first-last-frame-to-video/draft",
+        enhance_endpoint="blackforestlabs/flux-3/draft-enhance",
+        cost_per_second_draft=0.06,
         notes=(
             "FLUX 3 first→last (BFL on fal) — bridge two stills (day→night, porch→interior). "
             "Requires start + end. 5–20s · 720p/1080p · optional native audio. "
-            "Est. ~$0.17/s @720p · ~$0.29/s @1080p."
+            "Draft first → Enhance to full. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p · draft ~$0.06/s."
         ),
         duration_choices=tuple(str(i) for i in range(5, 21)),
         default_duration="8",
@@ -1090,10 +1106,14 @@ EXTEND_MODELS: dict[str, VisionModelSpec] = {
         cost_estimate_usd=1.36,  # 8s × $0.17
         cost_per_second=0.17,
         cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        draft_endpoint="blackforestlabs/flux-3/extend-video/draft",
+        enhance_endpoint="blackforestlabs/flux-3/draft-enhance",
+        cost_per_second_draft=0.06,
         notes=(
             "FLUX 3 extend (BFL on fal) — continue an existing clip with a prompt. "
             "Source video under 50 MB / 15s. 5–20s or auto · 720p/1080p · optional audio. "
-            "Est. ~$0.17/s @720p · ~$0.29/s @1080p. Also Studio Video → V2V."
+            "Draft first → Enhance to full. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p · draft ~$0.06/s. Also Studio V2V."
         ),
         duration_choices=("auto",) + tuple(str(i) for i in range(5, 21)),
         default_duration="8",

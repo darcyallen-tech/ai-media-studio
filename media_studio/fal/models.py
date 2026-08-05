@@ -407,6 +407,11 @@ class VideoModelSpec:
     auto_image_refs_in_prompt: bool = True
     extra_defaults: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
+    # FLUX 3 draft workflow: cheaper /draft endpoint + draft-enhance with cache
+    draft_endpoint: str | None = None
+    enhance_endpoint: str | None = None  # e.g. blackforestlabs/flux-3/draft-enhance
+    # Ballpark $/s for draft (no resolution param on draft endpoints)
+    cost_per_second_draft: float | None = None
 
     def nearest_duration(self, value: Any) -> str:
         """
@@ -1255,10 +1260,14 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
         cost_per_second=0.17,
         cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
         extra_defaults={"safety_tolerance": 2},
+        draft_endpoint="blackforestlabs/flux-3/image-to-video/draft",
+        enhance_endpoint="blackforestlabs/flux-3/draft-enhance",
+        cost_per_second_draft=0.06,
         notes=(
             "FLUX 3 I2V (BFL on fal) — animate a still with native audio. "
             "5–20s or auto · 720p/1080p · generate_audio default on. "
-            "Est. ~$0.17/s @720p · ~$0.29/s @1080p (ballpark)."
+            "Optional Draft first → Enhance to full. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p · draft ~$0.06/s (ballpark)."
         ),
     ),
     "flux 3 first last": VideoModelSpec(
@@ -1292,10 +1301,14 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
         cost_per_second=0.17,
         cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
         extra_defaults={"safety_tolerance": 2},
+        draft_endpoint="blackforestlabs/flux-3/first-last-frame-to-video/draft",
+        enhance_endpoint="blackforestlabs/flux-3/draft-enhance",
+        cost_per_second_draft=0.06,
         notes=(
             "FLUX 3 first→last (BFL on fal) — bridge two stills with native audio. "
             "Requires start + end stills. 5–20s · 720p/1080p. "
-            "Est. ~$0.17/s @720p · ~$0.29/s @1080p (ballpark)."
+            "Optional Draft first → Enhance to full. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p · draft ~$0.06/s (ballpark)."
         ),
     ),
     "flux 3 extend": VideoModelSpec(
@@ -1328,10 +1341,14 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
         cost_per_second=0.17,
         cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
         extra_defaults={"safety_tolerance": 2},
+        draft_endpoint="blackforestlabs/flux-3/extend-video/draft",
+        enhance_endpoint="blackforestlabs/flux-3/draft-enhance",
+        cost_per_second_draft=0.06,
         notes=(
             "FLUX 3 extend (BFL on fal) — continue an existing clip with prompt + native audio. "
             "Source video + prompt. 5–20s or auto · 720p/1080p. "
-            "Est. ~$0.17/s @720p · ~$0.29/s @1080p (ballpark)."
+            "Optional Draft first → Enhance to full. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p · draft ~$0.06/s (ballpark)."
         ),
     ),
     # --- MiniMax H3 (Hailuo-03) — multimodal T2V/I2V/omni reference ---
