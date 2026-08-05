@@ -24,6 +24,8 @@ from media_studio.director_registry import (
     assemble_director_brief,
     balance_shot_times,
     count_director_ref_budget,
+    director_shows_pack_toggle,
+    director_is_single_ref_model,
     default_director_model,
     director_aspect_ui_choices,
     director_model_labels,
@@ -116,6 +118,19 @@ class DirectorView:
             on_select=self._on_duration,
             expand=True,
         )
+        _res_opts0 = list(getattr(spec0, "resolution_choices", None) or ())
+        self.res_dd = styled_dropdown(
+            label_text="Resolution",
+            options=_res_opts0 or ["—"],
+            value=(
+                spec0.default_resolution
+                if _res_opts0 and spec0.default_resolution in _res_opts0
+                else (_res_opts0[0] if _res_opts0 else "—")
+            ),
+            on_select=self._refresh_cost,
+            expand=True,
+        )
+        self.res_dd.visible = bool(_res_opts0)
         _aspect_opts0, _aspect_def0 = director_aspect_ui_choices(
             spec0, has_start_image=False
         )
@@ -453,7 +468,9 @@ class DirectorView:
                         weight=ft.FontWeight.W_700,
                     ),
                     ft.Text(
-                        "1. Set total duration and pick a multi-shot model.\n"
+                        "1. Set total duration and pick a model "
+                        "(Kling = multi-shot cuts; FLUX 3 = continuous take / first→last; "
+                        "Imagine = single reference storyboard).\n"
                         "2. Add shots; Auto-balance times (or set start/end manually).\n"
                         "3. Per shot: Character (who) + Scene (where) + action (what).\n"
                         "4. Multi-ref models bind character still + scene still; "
@@ -461,7 +478,8 @@ class DirectorView:
                         "5. Optional: Front/Hero only vs Full pack when the model counts "
                         "each angle (character identity + scene Angle B/C).\n"
                         "6. Watch Ref / Shot budget (blue / amber / red).\n"
-                        "7. Enhance assembled brief if needed, then Generate.",
+                        "7. Enhance assembled brief if needed, then Generate.\n"
+                        "Tip: FLUX 3 = continuous take / first→last; Kling = multi-shot cuts.",
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
@@ -495,7 +513,10 @@ class DirectorView:
             ft.Row([self.model_dd], spacing=0),
             self.model_best_for,
             self.model_notes,
-            ft.Row([self.dur_dd, self.aspect_dd, self.style_dd], spacing=8),
+            ft.Row(
+                [self.dur_dd, self.res_dd, self.aspect_dd, self.style_dd],
+                spacing=8,
+            ),
             self.aspect_hint,
             label("Audio intent", muted=True),
             self.gen_audio,
@@ -595,6 +616,17 @@ class DirectorView:
         except (TypeError, ValueError):
             return 10.0
 
+    def _selected_resolution(self, spec=None) -> str | None:
+        """UI resolution when the model exposes choices; else model default."""
+        sp = spec or self._current_spec()
+        choices = list(getattr(sp, "resolution_choices", None) or ())
+        if not choices:
+            return getattr(sp, "default_resolution", None)
+        cur = _dd(self.res_dd) if getattr(self, "res_dd", None) else None
+        if cur and cur in choices:
+            return cur
+        return getattr(sp, "default_resolution", None) or choices[0]
+
     def _cost_label(self) -> str:
         try:
             spec = self._current_spec()
@@ -609,15 +641,14 @@ class DirectorView:
                         except OSError:
                             seen_paths.add(str(p))
             n_refs = len(seen_paths)
-            res = None
-            if getattr(spec, "default_resolution", None):
-                res = spec.default_resolution
+            res = self._selected_resolution(spec)
+            eng = getattr(spec, "engine", "") or ""
             return format_director_cost(
                 spec,
                 duration_s=self._total_duration(),
                 generate_audio=audio,
                 resolution=res,
-                num_refs=n_refs if (getattr(spec, "engine", "") == "grok_imagine") else 0,
+                num_refs=n_refs if eng in ("grok_imagine",) else 0,
             )
         except Exception:
             return "Est. cost: —"
@@ -645,6 +676,14 @@ class DirectorView:
         self.dur_dd.options = dropdown_options(opts)
         if _dd(self.dur_dd) not in opts:
             self.dur_dd.value = str(spec.default_duration_s)
+        # Resolution (Grok / FLUX 3)
+        res_opts = list(getattr(spec, "resolution_choices", None) or ())
+        self.res_dd.visible = bool(res_opts)
+        if res_opts:
+            self.res_dd.options = dropdown_options(res_opts)
+            if _dd(self.res_dd) not in res_opts:
+                pref = getattr(spec, "default_resolution", None)
+                self.res_dd.value = pref if pref in res_opts else res_opts[0]
         self._sync_aspect_options()
         self.gen_audio.visible = bool(spec.supports_audio)
         self.gen_audio.value = bool(spec.default_generate_audio)
@@ -899,10 +938,19 @@ class DirectorView:
 
     def _current_angle_mode(self) -> str:
         shots = self._collect_shots()
-        return resolve_angle_mode(shots, requested=self._angle_mode_user)
+        spec = self._current_spec()
+        return resolve_angle_mode(
+            shots, requested=self._angle_mode_user, spec=spec
+        )
 
     def _set_angle_mode(self, mode: str) -> None:
-        self._angle_mode_user = mode
+        # Single-ref models cannot leave Front only
+        if director_is_single_ref_model(self._current_spec()) or not (
+            director_shows_pack_toggle(self._current_spec())
+        ):
+            self._angle_mode_user = "front_only"
+        else:
+            self._angle_mode_user = mode
         self._sync_ref_budget()
         try:
             self.page.update()
@@ -933,17 +981,28 @@ class DirectorView:
         try:
             spec = self._current_spec()
             shots = self._collect_shots()
-            # Multi-ref only: single-ref (O3) always Hero only — no pack toggle
-            multi_ref = bool(getattr(spec, "supports_scene_image_ref", False)) or (
-                (getattr(spec, "ref_budget_mode", "") or "") == "image_bag"
-            )
+            # Pack toggle only when model can use identity Full pack and/or scene angles
+            show_pack = director_shows_pack_toggle(spec)
+            single_ref = director_is_single_ref_model(spec)
             has_scene_pack = self._any_scene_angle_pack(shots)
             has_char_pack = self._any_character_pack()
-            # Multi-ref only (discover pack before extras bound); single-ref = Hero only
-            show_pack = multi_ref
             self.angle_mode_row.visible = show_pack
-            self.angle_mode_hint.visible = show_pack
-            ang = self._current_angle_mode() if show_pack else "front_only"
+            self.angle_mode_hint.visible = show_pack or single_ref
+            # Single-ref: force Front only (never Side/Close-up)
+            if not show_pack:
+                ang = "front_only"
+                if self._angle_mode_user not in ("front_only", "auto"):
+                    self._angle_mode_user = "front_only"
+            else:
+                ang = resolve_angle_mode(
+                    shots, requested=self._angle_mode_user, spec=spec
+                )
+            # Full pack button only when identity or scene pack can apply
+            try:
+                self.btn_pack_full.visible = show_pack
+                self.btn_pack_full.disabled = not show_pack
+            except Exception:
+                pass
             if show_pack:
                 # Dynamic label when scene angles are available
                 if has_scene_pack and not has_char_pack:
@@ -983,10 +1042,15 @@ class DirectorView:
                         "(and character is also bound)."
                     )
                 self.angle_mode_hint.value = " ".join(bits)
+            elif single_ref:
+                self.angle_mode_hint.value = (
+                    "Single-ref model — Front only (identity Side/Close-up not sent)."
+                )
+                self.angle_mode_hint.visible = True
             budget = count_director_ref_budget(
                 spec,
                 shots,
-                angle_mode=ang if multi_ref else "front_only",
+                angle_mode=ang,
             )
             self.ref_budget_label.value = (
                 f"Refs {budget.used} / {budget.max_refs}  ·  "
@@ -2446,6 +2510,46 @@ class DirectorView:
         except Exception:
             pass
 
+        # FLUX 3 continuous / first→last: still requirements before upload
+        eng = getattr(spec, "engine", "") or ""
+        if eng == "flux3":
+            stills: list[str] = []
+            for sh in shots:
+                for cand in (
+                    sh.character_path,
+                    sh.scene_path,
+                    sh.ref_path,
+                ):
+                    if cand and Path(str(cand)).is_file():
+                        try:
+                            p = str(Path(str(cand)).resolve())
+                        except OSError:
+                            p = str(cand)
+                        if p not in stills:
+                            stills.append(p)
+                        break
+            if getattr(spec, "requires_end_frame", False):
+                if len(stills) < 2:
+                    self.status.value = (
+                        "Cannot Generate — FLUX 3 First→Last needs two stills "
+                        "(Shot 1 = start, Shot 2 = end)."
+                    )
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+                    return
+            elif not stills:
+                self.status.value = (
+                    "Cannot Generate — FLUX 3 Continuous I2V needs a character "
+                    "or start still on Shot 1."
+                )
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+                return
+
         # Kling multi_prompt 512 hard limit — compact then block if still over
         max_c = getattr(spec, "multi_prompt_max_chars", None)
         if max_c:
@@ -2501,6 +2605,7 @@ class DirectorView:
                 spec,
                 duration_s=total,
                 generate_audio=bool(self.gen_audio.value),
+                resolution=self._selected_resolution(spec),
             )
             ok = await confirm_cost_if_needed(
                 self.page,
@@ -2547,16 +2652,14 @@ class DirectorView:
                 generate_audio=bool(self.gen_audio.value)
                 if self.gen_audio.visible
                 else None,
+                resolution=self._selected_resolution(spec),
                 polish=polish,
                 output_dir=self.state.output_dir,
                 on_progress=on_progress,
                 angle_mode=(
                     self._current_angle_mode()
-                    if (
-                        (getattr(spec, "ref_budget_mode", "") or "") == "image_bag"
-                        or bool(getattr(spec, "supports_scene_image_ref", False))
-                    )
-                    else None
+                    if director_shows_pack_toggle(spec)
+                    else "front_only"
                 ),
             )
             self.cost_text.value = result.cost_label or self._cost_label()

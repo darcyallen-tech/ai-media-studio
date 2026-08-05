@@ -12,13 +12,20 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
-### FLUX 3 Video (Black Forest Labs on fal) — Phase 1
+### Director — identity pack ref counting
+- Front only / Full pack respected: Full pack only on multi-image / element models (Grok, Kling V3)
+- Single-ref (FLUX 3 I2V, First→Last, O3): force Front only; hide Full pack; never count/send Side/Close-up
+- Auto: character + scene bound → Front only; budget display matches submitted refs
+
+### FLUX 3 Video (Black Forest Labs on fal) — Phase 1 + Director Phase 2
 - **Studio Video**: I2V · First→Last (start + end required) · Extend under V2V · T2V via Vision list
 - **Creative Vision**: T2V · I2V · Bridge first→last · **Extend Video** (source clip + prompt)
-- Controls: duration 5–20s (or auto where allowed) · 720p/1080p · native audio on/off
-- Cost est. ~$0.17/s @720p · ~$0.29/s @1080p (rate × duration × resolution)
+- **Director**: **FLUX 3 · Continuous I2V** (character still → one take) and **FLUX 3 · First→Last** (Shot 1→2 stills); not a Kling multi_prompt replacement
+- Controls: duration up to ~20s · 720p/1080p · generate_audio on/off · cost = $/s × duration × resolution
+- Best for: long continuous I2V, first→last transitions, native audio
+- How-to tip: FLUX 3 = continuous take / first→last; Kling = multi-shot cuts
 - fal: `blackforestlabs/flux-3/{text,image,first-last-frame}-to-video` + `extend-video`
-- Kling / Imagine / Seedance paths unchanged
+- Kling multi-shot / Imagine Director paths unchanged
 
 ### Studio modality sub-tabs (Image / Video)
 - Same row as **Image | Video** (to the right; no third bar): **I2I | T2I | R2I | Region** or **I2V | T2V | V2V | R2V**

@@ -88,6 +88,7 @@ def run_director(
     generate_audio: bool | None = None,
     negative_prompt: str | None = None,
     polish: DirectorPolish | None = None,
+    resolution: str | None = None,
     output_dir: str | Path,
     on_progress: ProgressCallback | None = None,
     angle_mode: str | None = None,
@@ -96,7 +97,7 @@ def run_director(
     Generate one multi-shot video from ordered Director shots.
 
     Validates times, uploads optional first-ref still for I2V multi-shot,
-    posts multi_prompt to Kling V3/O3 endpoints.
+    posts multi_prompt to Kling V3/O3 endpoints, or single-clip Grok / FLUX 3.
     When polish.output_mode is clip pack, also writes a shot-list .txt sidecar
     (API still returns a single multi-shot clip).
     """
@@ -123,16 +124,31 @@ def run_director(
 
     notes: list[str] = []
     start_url: str | None = None
+    end_url: str | None = None
     ref_urls: list[str] = []
     elements: list[dict[str, Any]] | None = None
-    is_grok = (getattr(spec, "engine", None) or "") == "grok_imagine"
-    # Kling: always attach full identity pack as element extras (budget still 1/char).
-    # Imagine: respect Front only / Full pack toggle.
+    eng = getattr(spec, "engine", None) or "kling_multi"
+    is_grok = eng == "grok_imagine"
+    is_flux3 = eng == "flux3"
+    from media_studio.director_registry import (
+        director_shows_pack_toggle,
+        resolve_angle_mode,
+    )
+
+    # Resolve pack mode: single-ref (FLUX I2V etc.) always front_only;
+    # multi-ref / elements: honor UI toggle (auto → scene+char = front only).
+    if director_shows_pack_toggle(spec):
+        plan_angle = resolve_angle_mode(
+            shots, requested=angle_mode or "auto", spec=spec
+        )
+    else:
+        plan_angle = "front_only"
     plan = collect_director_image_plan(
         shots,
-        angle_mode=angle_mode if is_grok else "full_pack",
+        angle_mode=plan_angle,
+        spec=spec,
     )
-    if is_grok and plan.get("angle_mode"):
+    if plan.get("angle_mode"):
         notes.append(f"Angle mode: {plan['angle_mode']}")
 
     # Low-res character warning (non-blocking)
@@ -188,7 +204,90 @@ def run_director(
 
     supports_scene_img = bool(getattr(spec, "supports_scene_image_ref", False))
 
-    if is_grok:
+    def _ordered_shot_stills() -> list[str]:
+        """Per-shot still preference: character → scene → manual ref (unique order)."""
+        ordered: list[str] = []
+        for sh in shots:
+            for cand in (
+                getattr(sh, "character_path", None),
+                getattr(sh, "scene_path", None) if supports_scene_img or is_flux3 else None,
+                getattr(sh, "ref_path", None),
+            ):
+                if not cand:
+                    continue
+                try:
+                    p = str(Path(str(cand)).resolve())
+                except OSError:
+                    p = str(cand)
+                if Path(p).is_file() and p not in ordered:
+                    ordered.append(p)
+                    break  # one still per shot for flux continuous / first-last
+        return ordered
+
+    if is_flux3:
+        stills = _ordered_shot_stills()
+        # Fallback: plan primaries
+        if not stills:
+            for p in (
+                plan.get("character_primary"),
+                plan.get("scene_start"),
+            ):
+                if p and Path(str(p)).is_file():
+                    try:
+                        rp = str(Path(str(p)).resolve())
+                    except OSError:
+                        rp = str(p)
+                    if rp not in stills:
+                        stills.append(rp)
+        needs_end = bool(getattr(spec, "requires_end_frame", False))
+        if needs_end:
+            if len(stills) < 2:
+                return DirectorResult(
+                    ok=False,
+                    model_key=spec.key,
+                    endpoint=spec.endpoint,
+                    status=(
+                        "FLUX 3 First→Last needs two stills — "
+                        "Shot 1 character/scene/ref = start, Shot 2 = end."
+                    ),
+                    notes=notes,
+                )
+            start_url = _upload(stills[0], "start frame")
+            end_url = _upload(stills[-1], "end frame")
+            if not start_url or not end_url:
+                return DirectorResult(
+                    ok=False,
+                    model_key=spec.key,
+                    endpoint=spec.endpoint,
+                    status="Could not upload start and end stills for FLUX 3 First→Last.",
+                    notes=notes,
+                )
+            notes.append(f"Start: {Path(stills[0]).name}")
+            notes.append(f"End: {Path(stills[-1]).name}")
+        else:
+            if stills:
+                start_url = _upload(stills[0], "start still")
+                if start_url:
+                    notes.append(f"Start still: {Path(stills[0]).name}")
+            if not start_url and (
+                any(sh.has_character_bind() for sh in shots)
+                or any(getattr(sh, "ref_path", None) for sh in shots)
+            ):
+                return DirectorResult(
+                    ok=False,
+                    model_key=spec.key,
+                    endpoint=spec.endpoint,
+                    status=(
+                        "FLUX 3 Continuous I2V needs a character or start still."
+                    ),
+                    notes=notes,
+                )
+            if plan.get("character_labels"):
+                notes.append(
+                    "Characters: "
+                    + ", ".join(dict.fromkeys(plan["character_labels"]))
+                )
+    elif is_grok:
         # Per-shot order: character then location plate (real multi-ref / R2V)
         cap = max(1, int(spec.max_shots or 7))
         upload_list: list[str] = []
@@ -370,9 +469,11 @@ def run_director(
             style_pack=style_pack,
             generate_audio=generate_audio,
             start_image_url=start_url,
+            end_image_url=end_url,
             negative_prompt=negative_prompt,
             polish=polish,
             ref_image_urls=ref_urls or None,
+            resolution=resolution or getattr(spec, "default_resolution", None),
             elements=elements,
         )
     except ValueError as exc:
@@ -419,11 +520,16 @@ def run_director(
     )
     accepted = director_accepted_aspects_label(spec, has_start_image=has_start)
 
-    kind = (
-        f"Grok Imagine · {len(ref_urls)} ref(s)"
-        if is_grok
-        else f"multi-shot × {len(shots)}"
-    )
+    if is_flux3:
+        kind = (
+            "FLUX 3 · first→last"
+            if getattr(spec, "requires_end_frame", False)
+            else "FLUX 3 · continuous I2V"
+        )
+    elif is_grok:
+        kind = f"Grok Imagine · {len(ref_urls)} ref(s)"
+    else:
+        kind = f"multi-shot × {len(shots)}"
     progress(f"{spec.label} · {kind}")
     progress(f"Endpoint: {endpoint}")
     if sent_aspect is not None:
@@ -482,6 +588,7 @@ def run_director(
             if generate_audio is not None
             else spec.default_generate_audio
         ),
+        resolution=resolution or getattr(spec, "default_resolution", None),
     )
     exact = extract_cost_usd_from_response(result)
     cost_usd = exact if exact is not None else est

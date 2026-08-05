@@ -2,6 +2,7 @@
 Director tab — multi-shot video models and prompt assembly.
 
 Kling V3 / O3 multi_prompt (customize): up to 6 shots, total ≤ 15s.
+Grok Imagine / FLUX 3: single continuous clip (not multi_prompt cuts).
 """
 
 from __future__ import annotations
@@ -74,8 +75,11 @@ class DirectorModelSpec:
     max_unique_refs: int = 7
     # "kling_element" = 1 per unique character + unique scenes; "image_bag" = each still file
     ref_budget_mode: str = "kling_element"
-    # "kling_multi" = multi_prompt; "grok_imagine" = single clip from refs + brief
+    # "kling_multi" = multi_prompt; "grok_imagine" / "flux3" = single continuous clip
     engine: str = "kling_multi"
+    # FLUX 3 first→last (and similar): require start + end stills
+    requires_end_frame: bool = False
+    end_image_param: str = "end_image_url"
 
 
 DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
@@ -199,10 +203,92 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
             "Est. $0.08–0.25/s by resolution + $0.01/ref."
         ),
     ),
+    # --- FLUX 3 continuous take / first→last (not Kling multi_prompt) ---
+    "flux 3 i2v director": DirectorModelSpec(
+        key="flux 3 i2v director",
+        label="FLUX 3 · Continuous I2V",
+        endpoint="blackforestlabs/flux-3/image-to-video",
+        i2v_endpoint="blackforestlabs/flux-3/image-to-video",
+        t2v_endpoint="blackforestlabs/flux-3/text-to-video",
+        max_shots=3,
+        min_duration_s=5,
+        max_duration_s=20,
+        allowed_durations=tuple(range(5, 21)),
+        default_duration_s=8,
+        aspect_choices=(
+            "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
+        ),
+        default_aspect="auto",
+        aspect_param="aspect_ratio",
+        i2v_accepts_aspect=True,
+        i2v_image_param="image_url",
+        cost_per_second=0.17,
+        cost_per_second_audio=None,  # audio included in base ballpark (toggle only)
+        cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        resolution_choices=("720p", "1080p"),
+        default_resolution="720p",
+        supports_audio=True,
+        default_generate_audio=True,
+        multi_prompt_max_chars=None,
+        supports_kling_elements=False,
+        supports_scene_image_ref=False,  # single start still
+        max_unique_refs=1,
+        ref_budget_mode="image_bag",
+        engine="flux3",
+        shot_min_s=1,
+        shot_max_s=20,
+        notes=(
+            "FLUX 3 continuous I2V — one take from a character/start still + brief. "
+            "Not multi_prompt cuts (use Kling for that). 5–20s · 720p/1080p · "
+            "optional native audio. Est. ~$0.17/s @720p · ~$0.29/s @1080p."
+        ),
+    ),
+    "flux 3 first last director": DirectorModelSpec(
+        key="flux 3 first last director",
+        label="FLUX 3 · First→Last",
+        endpoint="blackforestlabs/flux-3/first-last-frame-to-video",
+        i2v_endpoint="blackforestlabs/flux-3/first-last-frame-to-video",
+        max_shots=2,
+        min_duration_s=5,
+        max_duration_s=20,
+        allowed_durations=tuple(range(5, 21)),
+        default_duration_s=8,
+        aspect_choices=(
+            "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
+        ),
+        default_aspect="auto",
+        aspect_param="aspect_ratio",
+        i2v_accepts_aspect=True,
+        i2v_image_param="start_image_url",
+        cost_per_second=0.17,
+        cost_per_second_audio=None,
+        cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        resolution_choices=("720p", "1080p"),
+        default_resolution="720p",
+        supports_audio=True,
+        default_generate_audio=True,
+        multi_prompt_max_chars=None,
+        supports_kling_elements=False,
+        supports_scene_image_ref=True,  # end can be a second scene/character still
+        max_unique_refs=2,
+        ref_budget_mode="image_bag",
+        engine="flux3",
+        requires_end_frame=True,
+        end_image_param="end_image_url",
+        shot_min_s=1,
+        shot_max_s=20,
+        notes=(
+            "FLUX 3 first→last — continuous transition between two stills "
+            "(e.g. day→night). Shot 1 still = start, Shot 2 still = end. "
+            "Not multi_prompt cuts. 5–20s · 720p/1080p · optional audio. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p."
+        ),
+    ),
 }
 
 # Seedance / Wan / MiniMax H3 remain single-clip Vision/Studio models — they do not
-# expose Kling-style multi_prompt storyboard APIs, so they stay out of DIRECTOR_MODELS.
+# expose Kling-style multi_prompt storyboard APIs, so they stay out of DIRECTOR_MODELS
+# (except FLUX 3 continuous / first→last above).
 
 CAMERA_PRESETS: tuple[str, ...] = (
     "Push in",
@@ -1470,37 +1556,27 @@ def write_shot_list_sidecar(
         return None
 
 
-def build_grok_imagine_director_arguments(
-    spec: DirectorModelSpec,
+def _assemble_continuous_director_prompt(
     *,
     master: str,
     shots: list[DirectorShot],
-    duration_s: int | float,
-    aspect_ratio: str | None = None,
-    style_pack: str | None = None,
-    polish: DirectorPolish | None = None,
-    ref_image_urls: list[str] | None = None,
-    resolution: str | None = None,
-) -> tuple[str, dict[str, Any]]:
-    """
-    Grok Imagine Video 1.5 Director path: one clip from brief + ordered refs.
-
-    0 refs → T2V · 1 ref → I2V · 2+ refs → R2V with <IMAGE_n> tags.
-    """
+    style_pack: str | None,
+    polish: DirectorPolish | None,
+    generate_audio: bool,
+) -> str:
+    """Single-pass brief for Grok / FLUX continuous engines (not multi_prompt)."""
     brief = assemble_director_brief(
         master=master or "",
         shots=shots,
         style_pack=style_pack,
         polish=polish,
-        generate_audio=False,
+        generate_audio=generate_audio,
     )
     prompt = expand_master_with_polish(
-        master or "", polish, generate_audio=False
+        master or "", polish, generate_audio=generate_audio
     )
     if brief:
-        # Prefer full assembled brief for a single-pass model
         prompt = brief if not prompt else f"{prompt}\n{brief}"
-    # Real image refs: identity + location lock language (not text-only "character/scene")
     char_labels = [
         (sh.character_label or "character").strip()
         for sh in shots
@@ -1524,15 +1600,159 @@ def build_grok_imagine_director_arguments(
             f"{SCENE_LOCATION_LOCK} "
             f"Match location reference(s) for {places}."
         )
-    # Cite ordered refs when multi-image
+    if lock_lines:
+        prompt = f"{(prompt or '').rstrip()}\n" + "\n".join(lock_lines)
+    return (prompt or "").strip()
+
+
+def build_flux3_director_arguments(
+    spec: DirectorModelSpec,
+    *,
+    master: str,
+    shots: list[DirectorShot],
+    duration_s: int | float,
+    aspect_ratio: str | None = None,
+    style_pack: str | None = None,
+    polish: DirectorPolish | None = None,
+    generate_audio: bool | None = None,
+    start_image_url: str | None = None,
+    end_image_url: str | None = None,
+    resolution: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """
+    FLUX 3 Director path: one continuous clip (I2V or first→last).
+
+    Not Kling multi_prompt. Uses master + shot actions as a single prompt.
+    """
+    use_audio = (
+        bool(generate_audio)
+        if generate_audio is not None
+        else bool(spec.default_generate_audio)
+    )
+    if not spec.supports_audio:
+        use_audio = False
+
+    prompt = _assemble_continuous_director_prompt(
+        master=master or "",
+        shots=shots,
+        style_pack=style_pack,
+        polish=polish,
+        generate_audio=use_audio,
+    )
+    if not prompt:
+        raise ValueError(
+            "Enter a master brief or shot actions for FLUX 3 Director."
+        )
+
+    try:
+        total = int(round(float(duration_s)))
+    except (TypeError, ValueError):
+        total = int(spec.default_duration_s)
+    total = max(spec.min_duration_s, min(spec.max_duration_s, total))
+
+    res = (resolution or spec.default_resolution or "720p").strip()
+    if spec.resolution_choices and res not in spec.resolution_choices:
+        res = spec.default_resolution or "720p"
+
+    needs_end = bool(getattr(spec, "requires_end_frame", False))
+    start = (start_image_url or "").strip() or None
+    end = (end_image_url or "").strip() or None
+
+    if needs_end:
+        if not start or not end:
+            raise ValueError(
+                "FLUX 3 First→Last needs start + end stills "
+                "(Shot 1 character/scene/ref = start, Shot 2 = end)."
+            )
+        endpoint = spec.i2v_endpoint or spec.endpoint
+        start_field = (
+            getattr(spec, "i2v_image_param", None) or "start_image_url"
+        ).strip() or "start_image_url"
+        end_field = (
+            getattr(spec, "end_image_param", None) or "end_image_url"
+        ).strip() or "end_image_url"
+        args: dict[str, Any] = {
+            "prompt": prompt,
+            start_field: start,
+            end_field: end,
+            "duration": total,
+            "resolution": res,
+            "generate_audio": use_audio,
+            "safety_tolerance": 2,
+        }
+    elif start:
+        endpoint = spec.i2v_endpoint or spec.endpoint
+        img_param = (
+            getattr(spec, "i2v_image_param", None) or "image_url"
+        ).strip() or "image_url"
+        args = {
+            "prompt": prompt,
+            img_param: start,
+            "duration": total,
+            "resolution": res,
+            "generate_audio": use_audio,
+            "safety_tolerance": 2,
+        }
+    else:
+        endpoint = spec.t2v_endpoint or spec.endpoint
+        if not endpoint or "image-to-video" in (endpoint or ""):
+            raise ValueError(
+                "FLUX 3 Continuous I2V needs a character or start still "
+                "(or a T2V endpoint when no still is bound)."
+            )
+        args = {
+            "prompt": prompt,
+            "duration": total,
+            "resolution": res,
+            "generate_audio": use_audio,
+            "safety_tolerance": 2,
+        }
+
+    has_start = bool(start)
+    ar, ar_note = resolve_director_aspect_for_api(
+        spec, aspect_ratio, has_start_image=has_start
+    )
+    if ar and (spec.aspect_param or "aspect_ratio"):
+        # FLUX accepts "auto" and colon ratios
+        args[spec.aspect_param or "aspect_ratio"] = ar
+    if ar_note:
+        args["_aspect_note"] = ar_note
+    return endpoint, args
+
+
+def build_grok_imagine_director_arguments(
+    spec: DirectorModelSpec,
+    *,
+    master: str,
+    shots: list[DirectorShot],
+    duration_s: int | float,
+    aspect_ratio: str | None = None,
+    style_pack: str | None = None,
+    polish: DirectorPolish | None = None,
+    ref_image_urls: list[str] | None = None,
+    resolution: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """
+    Grok Imagine Video 1.5 Director path: one clip from brief + ordered refs.
+
+    0 refs → T2V · 1 ref → I2V · 2+ refs → R2V with <IMAGE_n> tags.
+    """
+    prompt = _assemble_continuous_director_prompt(
+        master=master or "",
+        shots=shots,
+        style_pack=style_pack,
+        polish=polish,
+        generate_audio=False,
+    )
     urls = [u for u in (ref_image_urls or []) if u]
     if len(urls) >= 2:
         tags = ", ".join(f"<IMAGE_{i}>" for i in range(len(urls)))
-        lock_lines.append(
-            f"Use {tags} as ordered visual refs (character identity and/or location plates)."
-        )
-    if lock_lines:
-        prompt = f"{(prompt or '').rstrip()}\n" + "\n".join(lock_lines)
+        if "<image_0>" not in prompt.lower():
+            prompt = (
+                f"{(prompt or '').rstrip()}\n"
+                f"Use {tags} as ordered visual refs "
+                f"(character identity and/or location plates)."
+            )
     prompt = (prompt or "").strip()
     if not prompt:
         raise ValueError("Enter a master brief or shot actions for Grok Imagine Director.")
@@ -1611,6 +1831,7 @@ def build_director_arguments(
     style_pack: str | None = None,
     generate_audio: bool | None = None,
     start_image_url: str | None = None,
+    end_image_url: str | None = None,
     negative_prompt: str | None = None,
     polish: DirectorPolish | None = None,
     ref_image_urls: list[str] | None = None,
@@ -1623,11 +1844,13 @@ def build_director_arguments(
 
     Kling: multi_prompt + shot_type=customize (≤512 chars/shot when limited).
     Grok Imagine: single clip T2V / I2V / R2V from shot refs.
+    FLUX 3: single continuous I2V or first→last (not multi_prompt cuts).
 
     Kling I2V OpenAPI has no aspect_ratio (frame follows start still).
     O3 I2V uses image_url; V3 I2V uses start_image_url + optional elements.
     """
-    if (getattr(spec, "engine", None) or "kling_multi") == "grok_imagine":
+    eng = getattr(spec, "engine", None) or "kling_multi"
+    if eng == "grok_imagine":
         return build_grok_imagine_director_arguments(
             spec,
             master=master,
@@ -1637,6 +1860,20 @@ def build_director_arguments(
             style_pack=style_pack,
             polish=polish,
             ref_image_urls=ref_image_urls,
+            resolution=resolution,
+        )
+    if eng == "flux3":
+        return build_flux3_director_arguments(
+            spec,
+            master=master,
+            shots=shots,
+            duration_s=duration_s,
+            aspect_ratio=aspect_ratio,
+            style_pack=style_pack,
+            polish=polish,
+            generate_audio=generate_audio,
+            start_image_url=start_image_url,
+            end_image_url=end_image_url,
             resolution=resolution,
         )
 
@@ -1769,24 +2006,89 @@ class DirectorRefBudget:
         return self.shot_count > self.max_shots
 
 
+def director_accepts_identity_full_pack(spec: DirectorModelSpec) -> bool:
+    """
+    True when Side/Close-up can be submitted as real multi-image / element extras.
+
+    - Kling V3 elements: extras attach to the element (budget still 1 per character)
+    - Image-bag models with room for multiple stills (e.g. Grok max 7)
+    - Single-slot bags (FLUX Continuous I2V max 1, First→Last max 2 as frames):
+      Front only — never count or send identity extras
+    """
+    if bool(getattr(spec, "supports_kling_elements", False)):
+        return True
+    mode = (getattr(spec, "ref_budget_mode", None) or "").strip()
+    if mode == "image_bag":
+        # Need headroom for primary + Side + Close-up as separate bag files
+        return int(getattr(spec, "max_unique_refs", 0) or 0) >= 3
+    return False
+
+
+def director_accepts_scene_full_pack(spec: DirectorModelSpec) -> bool:
+    """Scene Angle B/C as extra image refs (multi-ref models only)."""
+    if not bool(getattr(spec, "supports_scene_image_ref", False)):
+        return False
+    # First→Last: the 2 slots are start/end frames — not multi-angle packs
+    if bool(getattr(spec, "requires_end_frame", False)):
+        return False
+    # Need room beyond a single plate for angle extras (Grok / Kling V3)
+    return int(getattr(spec, "max_unique_refs", 0) or 0) >= 3
+
+
+def director_shows_pack_toggle(spec: DirectorModelSpec) -> bool:
+    """Show Front/Hero only vs Full pack when either pack can affect submission."""
+    return director_accepts_identity_full_pack(spec) or director_accepts_scene_full_pack(
+        spec
+    )
+
+
+def director_is_single_ref_model(spec: DirectorModelSpec) -> bool:
+    """
+    Single primary image path (or first+last frames) — no identity Full pack.
+
+    FLUX Continuous (max 1), O3 single image_url, etc.
+    """
+    if director_shows_pack_toggle(spec):
+        return False
+    mode = (getattr(spec, "ref_budget_mode", None) or "").strip()
+    max_r = int(getattr(spec, "max_unique_refs", 0) or 0)
+    if mode == "image_bag" and max_r <= 2:
+        return True
+    if mode == "kling_element" and not bool(
+        getattr(spec, "supports_kling_elements", False)
+    ):
+        # O3-style: one image_url, no elements
+        return not bool(getattr(spec, "supports_scene_image_ref", False))
+    return max_r <= 1
+
+
 def resolve_angle_mode(
     shots: list[DirectorShot],
     *,
     requested: str | None = None,
+    spec: DirectorModelSpec | None = None,
 ) -> str:
     """
-    Imagine bag-of-images / multi-ref angle mode (characters + optional scene pack).
+    Identity / scene pack mode for multi-ref models.
 
     ``front_only`` | ``full_pack``. Default: Front only if any scene is bound,
     else Full pack. ``front_only`` = character primary + scene hero only;
     ``full_pack`` = character identity extras + scene Angle B/C.
+
+    Single-ref models always resolve to ``front_only`` (pack toggle hidden).
     """
+    if spec is not None and not director_shows_pack_toggle(spec):
+        return "front_only"
     req = (requested or "auto").strip().lower()
     if req in ("front_only", "front", "primary", "hero_only", "hero"):
         return "front_only"
     if req in ("full_pack", "full", "all", "pack"):
+        # Don't honor Full pack when model cannot use identity/scene extras
+        if spec is not None and not director_shows_pack_toggle(spec):
+            return "front_only"
         return "full_pack"
     any_scene = any(sh.has_scene_bind() or sh.has_scene_ref() for sh in shots)
+    # Auto: character + scene → Front only (keep identity + location lean)
     return "front_only" if any_scene else "full_pack"
 
 
@@ -1799,17 +2101,20 @@ def count_director_ref_budget(
     """
     Count UNIQUE assets for the job (not per-shot duplicates).
 
-    Kling element-style: 1 per unique character (Front+Side+Close-up = 1 element)
-    + 1 per unique scene/start image when the model accepts scene image refs.
-
-    Imagine image-bag: each selected still file once. ``front_only`` uses only
-    character primary; ``full_pack`` includes identity extras.
+    Matches what is actually submitted:
+    - Kling element-style: 1 per unique character (Front+Side+Close-up = 1 element)
+      + 1 per unique scene/start image when the model accepts scene image refs
+    - Image-bag: each selected still file once. ``front_only`` = primary only;
+      ``full_pack`` includes identity extras only when the model accepts them
+    - Single-ref (FLUX I2V etc.): always front only — never count Side/Close-up
     """
     mode = (getattr(spec, "ref_budget_mode", None) or "kling_element").strip()
     max_refs = int(getattr(spec, "max_unique_refs", None) or 7)
     max_shots = int(spec.max_shots or 6)
     n_shots = len(shots)
-    ang = resolve_angle_mode(shots, requested=angle_mode)
+    ang = resolve_angle_mode(shots, requested=angle_mode, spec=spec)
+    allow_id_pack = director_accepts_identity_full_pack(spec) and ang == "full_pack"
+    allow_scene_pack = director_accepts_scene_full_pack(spec) and ang == "full_pack"
 
     # Unique characters by primary path
     char_keys: dict[str, DirectorShot] = {}
@@ -1839,7 +2144,7 @@ def count_director_ref_budget(
             continue
         if Path(key).is_file():
             scene_keys.add(key)
-        if ang == "full_pack":
+        if allow_scene_pack:
             for ex in sh.scene_extra_paths or ():
                 try:
                     ep = str(Path(ex).resolve())
@@ -1855,8 +2160,8 @@ def count_director_ref_budget(
     if mode == "image_bag":
         files: set[str] = set()
         for key, sh in char_keys.items():
-            if ang == "full_pack":
-                files.add(key)
+            files.add(key)
+            if allow_id_pack:
                 for ex in sh.character_extra_paths or ():
                     try:
                         ep = str(Path(ex).resolve())
@@ -1864,19 +2169,26 @@ def count_director_ref_budget(
                         ep = (ex or "").strip()
                     if ep and Path(ep).is_file():
                         files.add(ep)
-            else:
-                files.add(key)
         if supports_scene_img:
             files |= scene_keys
-            if ang == "full_pack":
+            if allow_scene_pack:
                 files |= scene_extra_keys
+        # First→Last / continuous: only count stills that will actually be sent
+        # (max_unique_refs is a hard cap for unique bag slots)
         used = len(files)
+        # Cap displayed used at what the model can accept? No — over-budget should
+        # show real unique selected stills that would be candidates; but for
+        # single-ref we already force front only so used should be correct.
         n_images = used
         detail_bits = []
         if n_chars:
+            pack_lbl = (
+                " (full pack)"
+                if allow_id_pack
+                else " (front only)"
+            )
             detail_bits.append(
-                f"{n_chars} character{'s' if n_chars != 1 else ''}"
-                + (" (full pack)" if ang == "full_pack" else " (front only)")
+                f"{n_chars} character{'s' if n_chars != 1 else ''}{pack_lbl}"
             )
         if n_scenes and supports_scene_img:
             detail_bits.append(
@@ -1885,8 +2197,10 @@ def count_director_ref_budget(
         detail = " + ".join(detail_bits) if detail_bits else "no refs"
         reason = ""
         if used > max_refs:
-            tip = "remove a scene or use Front only" if ang == "full_pack" else (
-                "remove a scene or character"
+            tip = (
+                "remove a scene or use Front only"
+                if allow_id_pack or allow_scene_pack
+                else "remove a scene or character"
             )
             reason = f"{detail} = {used}/{max_refs} — {tip}."
         return DirectorRefBudget(
@@ -1905,11 +2219,12 @@ def count_director_ref_budget(
 
     # kling_element: elements (unique chars as 1 each) + unique scene image urls
     # Full pack: each extra scene angle still counts as an image_url (not elements API)
+    # Character Side/Close-up never add to used (pack = 1 element each)
     n_elements = n_chars
     n_img = 0
     if supports_scene_img:
         n_img = n_scenes
-        if ang == "full_pack":
+        if allow_scene_pack:
             n_img += len(scene_extra_keys)
     used = n_elements + n_img
     detail_bits = []
@@ -1919,7 +2234,7 @@ def count_director_ref_budget(
         )
     if n_img:
         pack_note = ""
-        if ang == "full_pack" and scene_extra_keys:
+        if allow_scene_pack and scene_extra_keys:
             pack_note = f" incl. {len(scene_extra_keys)} angle still(s)"
         detail_bits.append(
             f"{n_img} scene image{'s' if n_img != 1 else ''}{pack_note}"
@@ -1942,7 +2257,7 @@ def count_director_ref_budget(
         shot_count=n_shots,
         max_shots=max_shots,
         mode=mode,
-        angle_mode="n/a",
+        angle_mode=ang if director_shows_pack_toggle(spec) else "front_only",
         n_characters=n_chars,
         n_scenes=n_scenes if supports_scene_img else 0,
         n_images=n_img,
@@ -1955,6 +2270,7 @@ def collect_director_image_plan(
     shots: list[DirectorShot],
     *,
     angle_mode: str | None = None,
+    spec: DirectorModelSpec | None = None,
 ) -> dict[str, Any]:
     """
     Plan which stills bind as character vs scene for API upload.
@@ -1962,6 +2278,7 @@ def collect_director_image_plan(
     Multi-character and multi-scene across shots supported.
     Order for Grok: per shot, character then location (when distinct).
     ``angle_mode``: front_only | full_pack (image_bag models).
+    ``spec``: when provided, single-ref models force front_only (no Side/Close-up).
 
     Returns:
       character_primary, characters, character_extras, character_labels
@@ -1973,7 +2290,11 @@ def collect_director_image_plan(
       per_shot_pairs: list of (char_path|None, scene_path|None)
       angle_mode: resolved front_only | full_pack
     """
-    ang = resolve_angle_mode(shots, requested=angle_mode)
+    ang = resolve_angle_mode(shots, requested=angle_mode, spec=spec)
+    # Extra clamp: never attach identity extras on models that cannot use them
+    if spec is not None and not director_accepts_identity_full_pack(spec):
+        if ang == "full_pack" and not director_accepts_scene_full_pack(spec):
+            ang = "front_only"
     char_primary: str | None = None
     char_extras: list[str] = []
     char_labels: list[str] = []
@@ -2011,6 +2332,14 @@ def collect_director_image_plan(
             p = path
         return p if Path(p).is_file() else None
 
+    # Identity extras only when full_pack AND model accepts multi-image / elements
+    use_id_extras = ang == "full_pack" and (
+        spec is None or director_accepts_identity_full_pack(spec)
+    )
+    use_scene_extras = ang == "full_pack" and (
+        spec is None or director_accepts_scene_full_pack(spec)
+    )
+
     for sh in shots:
         char_p = _norm(sh.character_path) if sh.has_character_bind() else None
         loc_p = _norm(sh.location_still_path())
@@ -2032,7 +2361,7 @@ def collect_director_image_plan(
                     if ex and Path(ex).is_file()
                 ][:4]
                 # front_only: do not attach side/close-up stills to the bag
-                if ang == "front_only":
+                if not use_id_extras:
                     extras_list = []
                 characters.append(
                     {
@@ -2042,7 +2371,7 @@ def collect_director_image_plan(
                         "extras": extras_list,
                     }
                 )
-            if ang != "front_only":
+            if use_id_extras:
                 for ex in sh.character_extra_paths or ():
                     if not ex:
                         continue
@@ -2073,7 +2402,7 @@ def collect_director_image_plan(
                     }
                 )
             # Full pack: attach Angle B/C as additional refs (multi-ref models)
-            if ang != "front_only":
+            if use_scene_extras:
                 for ex in sh.scene_extra_paths or ():
                     if not ex:
                         continue
@@ -2093,7 +2422,7 @@ def collect_director_image_plan(
     return {
         "character_primary": char_primary,
         "characters": characters,
-        "character_extras": char_extras[:4] if ang != "front_only" else [],
+        "character_extras": char_extras[:4] if use_id_extras else [],
         "character_labels": char_labels,
         "scene_start": scene_start,
         "scenes": scenes,

@@ -223,6 +223,25 @@ _BEST_FOR: dict[str, BestFor] = {
         "strong reference consistency, native audio, motion quality",
         "Director via Grok Imagine 1.5 — ordered shot refs as R2V/I2V/T2V single clip.",
     ),
+    "flux 3 i2v director": BestFor(
+        "long continuous I2V + optional native audio",
+        "Director FLUX 3 continuous take from a character/start still — not multi-shot cuts. "
+        "5–20s · 720p/1080p · generate_audio. Use Kling for multi_prompt cuts.",
+    ),
+    "flux 3 · continuous i2v": BestFor(
+        "long continuous I2V + optional native audio",
+        "Director FLUX 3 continuous take from a character/start still. "
+        "5–20s · 720p/1080p · optional audio. Kling = multi-shot cuts.",
+    ),
+    "flux 3 first last director": BestFor(
+        "first→last transitions (day→night) + native audio",
+        "Director FLUX 3 first→last: Shot 1 still → Shot 2 still continuous transition. "
+        "5–20s · 720p/1080p · generate_audio. Not multi_prompt cuts.",
+    ),
+    "flux 3 · first→last": BestFor(
+        "first→last transitions (day→night) + native audio",
+        "Director FLUX 3 first→last continuous transition between two stills.",
+    ),
     # --- FLUX 3 Video (BFL on fal) ---
     "flux 3": BestFor(
         "full-quality BFL video, native audio, up to 20s",
