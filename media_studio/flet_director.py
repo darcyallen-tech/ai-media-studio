@@ -50,22 +50,34 @@ from media_studio.flet_scene_picker import ScenePicker
 from media_studio.flet_enhance import make_enhance_button, run_prompt_enhance
 from media_studio.flet_pickers import pick_image
 from media_studio.flet_progress import JobProgress, classify_progress
+from media_studio.flet_dialogs import close_dialog, show_dialog, show_snack
 from media_studio.flet_result_actions import make_result_action_row, show_result_actions
 from media_studio.flet_source_strip import PreviousSourcesStrip, ResolveSourcesStrip
 from media_studio.flet_theme import (
     ACCENT,
     ACCENT_BRIGHT,
     BORDER,
+    FONT_MD,
     FONT_SM,
     PANEL,
     PANEL_ELEVATED,
     TEXT,
     TEXT_MUTED,
+    PillNav,
     dropdown_options,
     label,
     make_estimated_cost_box,
     section_title,
     styled_dropdown,
+)
+from media_studio.director_keyframes import (
+    KEYFRAME_MAX_PINS,
+    KeyframePin,
+    auto_spread_pin_times,
+    format_keyframe_take_cost,
+    keyframe_duration_choices,
+    run_keyframe_take,
+    validate_keyframe_pins,
 )
 from media_studio.flet_video_player import VideoResultPlayer
 from media_studio.helper_none import HELPER_NONE
@@ -82,18 +94,30 @@ def _dd(dd: ft.Dropdown) -> str | None:
 
 
 class DirectorView:
-    """Multi-shot Director workspace."""
+    """Director workspace: Multi-shot (cuts) + Keyframe Take (FLUX 3 continuous)."""
 
     def __init__(self, page: ft.Page, state: StudioState) -> None:
         self.page = page
         self.state = state
         self._result_path: str | None = None
         self._shots: list[dict[str, Any]] = []  # row widgets + data
+        self._director_mode: str = "multi_shot"  # multi_shot | keyframe_take
+        self._kf_pins: list[dict[str, Any]] = []
+        self._kf_draft_cache: str | None = None
+
+        self._mode_nav = PillNav(
+            [
+                ("multi_shot", "Multi-shot"),
+                ("keyframe_take", "Keyframe Take"),
+            ],
+            selected="multi_shot",
+            on_change=self._on_director_mode,
+        )
 
         spec0 = default_director_model()
         labels = director_model_labels()
         self.model_dd = styled_dropdown(
-            label_text="Model (multi-shot only)",
+            label_text="Model (multi-shot)",
             options=labels,
             value=spec0.label if spec0.label in labels else (labels[0] if labels else None),
             on_select=self._on_model,
@@ -469,18 +493,12 @@ class DirectorView:
                         weight=ft.FontWeight.W_700,
                     ),
                     ft.Text(
-                        "1. Set total duration and pick a model "
-                        "(Kling = multi-shot cuts; FLUX 3 = continuous take / first→last; "
-                        "Imagine = single reference storyboard).\n"
-                        "2. Add shots; Auto-balance times (or set start/end manually).\n"
-                        "3. Per shot: Character (who) + Scene (where) + action (what).\n"
-                        "4. Multi-ref models bind character still + scene still; "
-                        "single-ref uses character image and describes location in text.\n"
-                        "5. Optional: Front/Hero only vs Full pack when the model counts "
-                        "each angle (character identity + scene Angle B/C).\n"
-                        "6. Watch Ref / Shot budget (blue / amber / red).\n"
-                        "7. Enhance assembled brief if needed, then Generate.\n"
-                        "Tip: FLUX 3 = continuous take / first→last; Kling = multi-shot cuts.",
+                        "Modes: Multi-shot = hard cuts / multi_prompt (Kling). "
+                        "Keyframe Take = pose plates → one continuous FLUX 3 motion.\n"
+                        "Multi-shot: duration + model → shots → Character/Scene → Generate.\n"
+                        "Keyframe Take: ordered pins (still + time) + global prompt → "
+                        "one continuous take (max 10 pins @ 24 fps).\n"
+                        "Tip: Multi-shot = cuts; Keyframe Take = continuous motion.",
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
@@ -494,22 +512,147 @@ class DirectorView:
             padding=10,
         )
 
+        # ----- Keyframe Take controls -----
+        self._init_keyframe_take_controls()
+
+    def _init_keyframe_take_controls(self) -> None:
+        """UI for FLUX 3 Keyframe Take (continuous shot)."""
+        self.kf_dur_dd = styled_dropdown(
+            label_text="Duration (s)",
+            options=keyframe_duration_choices(),
+            value="8",
+            on_select=self._on_kf_duration,
+            expand=True,
+        )
+        self.kf_res_dd = styled_dropdown(
+            label_text="Resolution",
+            options=["720p", "1080p"],
+            value="720p",
+            on_select=self._on_kf_cost_refresh,
+            expand=True,
+        )
+        self.kf_aspect_dd = styled_dropdown(
+            label_text="Aspect",
+            options=[
+                "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
+            ],
+            value="auto",
+            on_select=self._on_kf_cost_refresh,
+            expand=True,
+        )
+        self.kf_audio = ft.Checkbox(
+            label="Generate audio",
+            value=True,
+            on_change=self._on_kf_cost_refresh,
+        )
+        self.kf_draft = ft.Checkbox(
+            label="Draft first (cheaper preview)",
+            value=False,
+            on_change=self._on_kf_cost_refresh,
+        )
+        self.kf_prompt = ft.TextField(
+            label="Global motion prompt (continuous take)",
+            multiline=True,
+            min_lines=3,
+            max_lines=8,
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            hint_text=(
+                "One continuous shot — layout lock from pins, then action + audio. "
+                "No hard-cut multi-shot language."
+            ),
+        )
+        self.kf_pins_host = ft.Column(spacing=6, tight=True)
+        self.kf_pins_meta = ft.Text(
+            "Pins 0 / 10", size=FONT_SM, color=TEXT_MUTED
+        )
+        self.btn_kf_add_pin = ft.OutlinedButton(
+            content="Add from Library / disk",
+            icon=ft.Icons.PHOTO_LIBRARY_OUTLINED,
+            on_click=self._kf_add_pin_pick,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            tooltip="Pick a still from disk (Library exports live under outputs/)",
+        )
+        self.btn_kf_auto_times = ft.TextButton(
+            content="Auto-spread times",
+            icon=ft.Icons.TIMELINE,
+            on_click=self._kf_auto_spread,
+            style=ft.ButtonStyle(color=ACCENT),
+            tooltip="Evenly place pin times from 0s to duration",
+        )
+        self.kf_prev_strip = PreviousSourcesStrip(
+            self.page,
+            get_output_dir=lambda: self.state.output_dir,
+            on_load=self._kf_on_prev_still,
+            media_kind="image",
+            max_items=8,
+        )
+        self.kf_prev_strip.label.value = "Previously used (click to add pin)"
+        self.kf_resolve_strip = ResolveSourcesStrip(
+            self.page,
+            on_load=self._kf_on_prev_still,
+            media_kind="image",
+        )
+        self._lightbox_dialog: ft.AlertDialog | None = None
+        self._lightbox_img: ft.Image | None = None
+        self._lightbox_title: ft.Text | None = None
+        self.kf_char_picker = CharacterPicker(
+            self.page,
+            on_select=self._kf_on_character_add_pin,
+            on_clear=None,
+            label_text="Character → Add as pin",
+            compact=True,
+        )
+        self.kf_scene_picker = None
+        try:
+            from media_studio.flet_scene_picker import ScenePicker
+
+            self.kf_scene_picker = ScenePicker(
+                self.page,
+                on_select=self._kf_on_scene_add_pin,
+                on_clear=None,
+                label_text="Scene → Add as pin",
+                compact=True,
+            )
+        except Exception:
+            self.kf_scene_picker = None
+        self.btn_kf_enhance = make_enhance_button(on_click=self._on_kf_enhance)
+        self.btn_kf_generate = ft.FilledButton(
+            content="Generate Keyframe Take",
+            on_click=self._run_keyframe_take,
+            style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+            height=42,
+        )
+        self.btn_kf_enhance_full = ft.OutlinedButton(
+            content="Enhance to full",
+            icon=ft.Icons.AUTO_FIX_HIGH,
+            on_click=self._on_kf_enhance_full,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            disabled=True,
+            tooltip="Promote draft_cache to full quality",
+        )
+        self.kf_cost_text, self.kf_cost_box = make_estimated_cost_box(
+            initial=format_keyframe_take_cost(duration_s=8, resolution="720p")
+        )
+        self.kf_notes = ft.Text(
+            "FLUX 3 keyframes-to-video — pose plates at times → one continuous take. "
+            "Max 10 pins · 24 fps frame indices · 5–20s · 720p/1080p.",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=3,
+        )
+
     # ----- layout -----
 
     def build(self) -> ft.Control:
         from media_studio.flet_layout import make_split_workspace
         from media_studio.flet_theme import RAIL_WIDTH
 
-        left = [
-            section_title("Director"),
-            ft.Text(
-                "Multi-shot generation — ordered shots, per-shot camera + action, "
-                "one master brief. Not for editing existing plates (use Frame Editor).",
-                size=FONT_SM,
-                color=TEXT_MUTED,
-            ),
-            self.howto_box,
-            ft.Divider(height=1, color=BORDER),
+        multi_controls: list[ft.Control] = [
             label("Master", muted=True),
             ft.Row([self.model_dd], spacing=0),
             self.model_best_for,
@@ -568,6 +711,66 @@ class DirectorView:
             self.prompt_count_label,
             ft.Row([self.btn_rebuild, self.btn_enhance, self.btn_generate], spacing=8),
             self.cost_box,
+        ]
+        self.multi_shot_panel = ft.Column(
+            multi_controls, spacing=8, tight=True, visible=True
+        )
+
+        kf_scene = (
+            self.kf_scene_picker.root
+            if self.kf_scene_picker is not None
+            else ft.Container()
+        )
+        kf_controls: list[ft.Control] = [
+            self.kf_notes,
+            ft.Row(
+                [self.kf_dur_dd, self.kf_res_dd, self.kf_aspect_dd],
+                spacing=8,
+            ),
+            self.kf_audio,
+            self.kf_draft,
+            self.kf_prompt,
+            ft.Divider(height=1, color=BORDER),
+            label("Pins (still + time, max 10)", muted=True),
+            self.kf_pins_meta,
+            self.kf_pins_host,
+            ft.Row(
+                [self.btn_kf_add_pin, self.btn_kf_auto_times],
+                spacing=8,
+                wrap=True,
+            ),
+            self.kf_prev_strip.root,
+            self.kf_resolve_strip.root,
+            label("Add pin from Character / Scene", muted=True),
+            self.kf_char_picker.root,
+            kf_scene,
+            ft.Row(
+                [
+                    self.btn_kf_enhance,
+                    self.btn_kf_generate,
+                    self.btn_kf_enhance_full,
+                ],
+                spacing=8,
+            ),
+            self.kf_cost_box,
+        ]
+        self.keyframe_panel = ft.Column(
+            kf_controls, spacing=8, tight=True, visible=False
+        )
+
+        left = [
+            section_title("Director"),
+            ft.Text(
+                "Multi-shot cuts or Keyframe Take continuous motion. "
+                "Not for editing existing plates (use Frame Editor).",
+                size=FONT_SM,
+                color=TEXT_MUTED,
+            ),
+            self._mode_nav.row,
+            self.howto_box,
+            ft.Divider(height=1, color=BORDER),
+            self.multi_shot_panel,
+            self.keyframe_panel,
             self.job_progress.control,
             self.status,
         ]
@@ -575,8 +778,7 @@ class DirectorView:
             [
                 section_title("Result"),
                 ft.Text(
-                    "Multi-shot clip (optional shot-list sidecar). "
-                    "Library · Show in folder · Send to Resolve.",
+                    "Clip output · Library · Show in folder · Send to Resolve / Upscale.",
                     size=FONT_SM,
                     color=TEXT_MUTED,
                 ),
@@ -589,6 +791,30 @@ class DirectorView:
             expand=False,
         )
         return make_split_workspace(left, right, left_width=max(RAIL_WIDTH, 500))
+
+    def _on_director_mode(self, mode_id: str) -> None:
+        self._director_mode = mode_id if mode_id in (
+            "multi_shot",
+            "keyframe_take",
+        ) else "multi_shot"
+        is_kf = self._director_mode == "keyframe_take"
+        try:
+            self.multi_shot_panel.visible = not is_kf
+            self.keyframe_panel.visible = is_kf
+        except Exception:
+            pass
+        if is_kf:
+            self._kf_refresh_cost()
+            self._kf_sync_pins_meta()
+            try:
+                self.kf_prev_strip.refresh()
+                self.kf_resolve_strip.refresh()
+            except Exception:
+                pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     # ----- helpers -----
 
@@ -638,8 +864,19 @@ class DirectorView:
             self.btn_generate.tooltip = (
                 None if ready else "Add your FAL API key in Settings"
             )
+            try:
+                self.btn_kf_generate.disabled = not ready
+                self.btn_kf_generate.tooltip = (
+                    None if ready else "Add your FAL API key in Settings"
+                )
+            except Exception:
+                pass
             xai = has_xai_key()
             self.btn_enhance.disabled = not xai
+            try:
+                self.btn_kf_enhance.disabled = not xai
+            except Exception:
+                pass
             self.btn_enhance.tooltip = (
                 "Rewrite master + per-shot prompts for the Director model"
                 if xai
@@ -2790,6 +3027,716 @@ class DirectorView:
             self.job_progress.finish_error(err, self.page)
             self.status.value = err
             traceback.print_exc()
+        finally:
+            self.state.clear_busy("director")
+            self.apply_key_gates()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+
+    # =========================================================================
+    # Keyframe Take (FLUX 3 continuous)
+    # =========================================================================
+
+    def _kf_duration(self) -> float:
+        try:
+            return float(_dd(self.kf_dur_dd) or 8)
+        except (TypeError, ValueError):
+            return 8.0
+
+    def _kf_collect_pins(self) -> list:
+        from media_studio.director_keyframes import KeyframePin
+
+        out: list = []
+        for row in self._kf_pins:
+            path = row.get("path")
+            if not path:
+                continue
+            try:
+                t = float(row["time_field"].value or 0)
+            except (TypeError, ValueError, AttributeError):
+                t = float(row.get("time_s") or 0)
+            out.append(
+                KeyframePin(
+                    path=str(path),
+                    time_s=t,
+                    label=str(row.get("label") or ""),
+                )
+            )
+        return out
+
+    def _kf_refresh_cost(self, e=None) -> None:
+        try:
+            self.kf_cost_text.value = format_keyframe_take_cost(
+                duration_s=self._kf_duration(),
+                resolution=_dd(self.kf_res_dd) or "720p",
+                draft=bool(self.kf_draft.value),
+            )
+        except Exception:
+            pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _on_kf_duration(self, e) -> None:
+        self._kf_refresh_cost()
+
+    async def _on_kf_cost_refresh(self, e=None) -> None:
+        self._kf_refresh_cost()
+
+    def _kf_sync_pins_meta(self) -> None:
+        n = len(self._kf_pins)
+        self.kf_pins_meta.value = f"Pins {n} / {KEYFRAME_MAX_PINS}"
+        try:
+            self.btn_kf_add_pin.disabled = n >= KEYFRAME_MAX_PINS
+        except Exception:
+            pass
+
+    def _kf_rebuild_pin_rows(self) -> None:
+        rows: list = []
+        for i, pin in enumerate(self._kf_pins):
+            rows.append(self._kf_make_pin_row(i, pin))
+        self.kf_pins_host.controls = rows
+        self._kf_sync_pins_meta()
+
+    def _kf_make_pin_row(self, index: int, pin: dict) -> ft.Control:
+        path = pin.get("path") or ""
+        name = Path(path).name if path else "—"
+        has_file = bool(path and Path(path).is_file())
+        thumb = ft.Image(
+            src=path if has_file else "",
+            width=48,
+            height=48,
+            fit=ft.BoxFit.COVER,
+            visible=has_file,
+            border_radius=4,
+        )
+        thumb_tap = ft.Container(
+            content=thumb,
+            on_click=self._kf_make_expand(index),
+            ink=True,
+            tooltip="Click to enlarge",
+            border_radius=4,
+            clip_behavior=ft.ClipBehavior.HARD_EDGE,
+        )
+        btn_expand = ft.IconButton(
+            icon=ft.Icons.ZOOM_IN,
+            icon_size=18,
+            icon_color=TEXT_MUTED,
+            tooltip="Enlarge pin still",
+            on_click=self._kf_make_expand(index),
+            disabled=not has_file,
+        )
+        time_field = ft.TextField(
+            label="t (s)",
+            value=str(pin.get("time_s", 0)),
+            width=72,
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            on_change=self._on_kf_cost_refresh,
+        )
+        pin["time_field"] = time_field
+        lab = ft.Text(
+            pin.get("label") or name,
+            size=FONT_SM,
+            color=TEXT,
+            max_lines=1,
+            expand=True,
+        )
+        btn_rm = ft.IconButton(
+            icon=ft.Icons.CLOSE,
+            icon_size=18,
+            icon_color=TEXT_MUTED,
+            tooltip="Remove pin",
+            on_click=self._kf_make_remove(index),
+        )
+        btn_up = ft.IconButton(
+            icon=ft.Icons.ARROW_UPWARD,
+            icon_size=16,
+            icon_color=TEXT_MUTED,
+            tooltip="Move up",
+            on_click=self._kf_make_move(index, -1),
+            disabled=index <= 0,
+        )
+        btn_dn = ft.IconButton(
+            icon=ft.Icons.ARROW_DOWNWARD,
+            icon_size=16,
+            icon_color=TEXT_MUTED,
+            tooltip="Move down",
+            on_click=self._kf_make_move(index, 1),
+            disabled=index >= len(self._kf_pins) - 1,
+        )
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Text(f"{index + 1}", size=FONT_SM, color=TEXT_MUTED, width=18),
+                    thumb_tap,
+                    lab,
+                    time_field,
+                    btn_expand,
+                    btn_up,
+                    btn_dn,
+                    btn_rm,
+                ],
+                spacing=6,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+            padding=6,
+        )
+
+    def _kf_make_expand(self, index: int):
+        async def _click(_e: ft.ControlEvent) -> None:
+            if 0 <= index < len(self._kf_pins):
+                path = self._kf_pins[index].get("path") or ""
+                if path and Path(path).is_file():
+                    lab = self._kf_pins[index].get("label") or Path(path).name
+                    self._open_preview(
+                        path, title=f"Keyframe pin {index + 1} · {lab}"
+                    )
+                else:
+                    self.status.value = "Pin still missing — cannot enlarge."
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+
+        return _click
+
+    def _open_preview(self, path: str, *, title: str = "Still preview") -> None:
+        """Large still overlay (same pattern as Characters / Scenes)."""
+        p = Path(path)
+        if not p.is_file():
+            self.status.value = f"Missing still: {path}"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+        win_w = float(getattr(self.page.window, "width", None) or 1400)
+        win_h = float(getattr(self.page.window, "height", None) or 900)
+        body_w = int(min(max(win_w - 80, 640), win_w * 0.9))
+        body_h = int(min(max(win_h - 100, 480), win_h * 0.88))
+
+        if self._lightbox_img is None:
+            self._lightbox_img = ft.Image(
+                src="",
+                fit=ft.BoxFit.CONTAIN,
+                expand=True,
+                gapless_playback=True,
+            )
+        if self._lightbox_title is None:
+            self._lightbox_title = ft.Text(
+                title,
+                size=FONT_MD,
+                color=TEXT,
+                weight=ft.FontWeight.W_700,
+                expand=True,
+                max_lines=1,
+                overflow=ft.TextOverflow.ELLIPSIS,
+            )
+        self._lightbox_img.src = str(p.resolve())
+        self._lightbox_title.value = title
+
+        async def _close(_e: ft.ControlEvent) -> None:
+            close_dialog(self.page, self._lightbox_dialog)
+
+        body = ft.Container(
+            width=body_w,
+            height=body_h,
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            self._lightbox_title,
+                            ft.IconButton(
+                                icon=ft.Icons.CLOSE,
+                                icon_color=TEXT,
+                                on_click=_close,
+                                tooltip="Close",
+                            ),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Container(
+                        content=self._lightbox_img,
+                        expand=True,
+                        bgcolor="#0a0c10",
+                        border_radius=8,
+                        border=ft.Border.all(1, BORDER),
+                        alignment=ft.Alignment.CENTER,
+                        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                    ),
+                ],
+                spacing=8,
+                expand=True,
+            ),
+        )
+        self._lightbox_dialog = ft.AlertDialog(
+            modal=True,
+            content=body,
+            actions=[],
+        )
+        show_dialog(self.page, self._lightbox_dialog)
+
+    def _kf_make_remove(self, index: int):
+        async def _click(_e) -> None:
+            if 0 <= index < len(self._kf_pins):
+                self._kf_pins.pop(index)
+                self._kf_rebuild_pin_rows()
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+
+        return _click
+
+    def _kf_make_move(self, index: int, delta: int):
+        async def _click(_e) -> None:
+            j = index + delta
+            if 0 <= index < len(self._kf_pins) and 0 <= j < len(self._kf_pins):
+                self._kf_pins[index], self._kf_pins[j] = (
+                    self._kf_pins[j],
+                    self._kf_pins[index],
+                )
+                self._kf_rebuild_pin_rows()
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+
+        return _click
+
+    def _kf_add_pin_data(self, path: str, label: str = "") -> int:
+        """Append a pin; returns 0-based index or -1 on failure."""
+        if len(self._kf_pins) >= KEYFRAME_MAX_PINS:
+            self.status.value = f"Max {KEYFRAME_MAX_PINS} pins."
+            return -1
+        try:
+            resolved = str(Path(path).resolve())
+        except OSError:
+            resolved = path
+        if not Path(resolved).is_file():
+            self.status.value = f"Still missing: {path}"
+            return -1
+        n = len(self._kf_pins)
+        times = auto_spread_pin_times(n + 1, self._kf_duration())
+        t = times[-1] if times else 0.0
+        self._kf_pins.append(
+            {"path": resolved, "time_s": t, "label": label or Path(resolved).name}
+        )
+        self._kf_apply_spread_times()
+        self._kf_rebuild_pin_rows()
+        try:
+            self.kf_prev_strip.record_and_refresh(resolved)
+        except Exception:
+            pass
+        self.status.value = f"Pin added: {Path(resolved).name}"
+        return len(self._kf_pins) - 1
+
+    def _kf_replace_pin(self, index: int, path: str, label: str = "") -> int:
+        """Replace pin at index with a new still; keeps time. Returns index."""
+        try:
+            resolved = str(Path(path).resolve())
+        except OSError:
+            resolved = path
+        if not Path(resolved).is_file():
+            self.status.value = f"Still missing: {path}"
+            return max(0, index)
+        if index < 0 or index >= len(self._kf_pins):
+            return self._kf_add_pin_data(resolved, label=label)
+        pin = self._kf_pins[index]
+        pin["path"] = resolved
+        pin["label"] = label or Path(resolved).name
+        self._kf_rebuild_pin_rows()
+        try:
+            self.kf_prev_strip.record_and_refresh(resolved)
+        except Exception:
+            pass
+        self.status.value = f"Pin {index + 1} replaced: {Path(resolved).name}"
+        return index
+
+    def receive_keyframe_pin(
+        self,
+        path: str,
+        *,
+        pin_index: int | None = None,
+        label: str = "",
+    ) -> int:
+        """
+        Send-to handoff: add or replace a Keyframe Take pin.
+
+        Switches to Keyframe Take mode, focuses Director, returns pin index used.
+        """
+        # Ensure Keyframe Take UI is visible
+        try:
+            self._mode_nav.set_selected("keyframe_take", notify=False)
+        except Exception:
+            pass
+        self._on_director_mode("keyframe_take")
+        if pin_index is not None:
+            idx = self._kf_replace_pin(int(pin_index), path, label=label)
+        else:
+            idx = self._kf_add_pin_data(path, label=label)
+            if idx < 0:
+                idx = max(0, len(self._kf_pins) - 1)
+        name = Path(path).name if path else "still"
+        try:
+            show_snack(self.page, f"Director · Keyframe Take · Pin {idx + 1}: {name}")
+        except Exception:
+            pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        return idx
+
+    def _kf_on_prev_still(self, path: str) -> None:
+        """Previously used / Resolve strip → add as new pin."""
+        self._kf_add_pin_data(path)
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _kf_apply_spread_times(self) -> None:
+        times = auto_spread_pin_times(len(self._kf_pins), self._kf_duration())
+        for pin, t in zip(self._kf_pins, times):
+            pin["time_s"] = t
+            tf = pin.get("time_field")
+            if tf is not None:
+                try:
+                    tf.value = str(t)
+                except Exception:
+                    pass
+
+    async def _kf_auto_spread(self, e) -> None:
+        self._kf_apply_spread_times()
+        self._kf_rebuild_pin_rows()
+        self.status.value = "Pin times auto-spread across duration."
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _kf_add_pin_pick(self, e) -> None:
+        try:
+            files = await pick_image(self.page, dialog_title="Keyframe pin still")
+        except Exception as exc:
+            self.status.value = f"Picker error: {exc}"
+            self.page.update()
+            return
+        if not files or not files[0].path:
+            return
+        self._kf_add_pin_data(str(files[0].path))
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _kf_on_character_add_pin(self, still_path: str, choice) -> None:
+        # Prefer front/hero still
+        path = still_path
+        label = getattr(choice, "label", None) or getattr(choice, "name", None) or ""
+        try:
+            cid = getattr(choice, "character_id", None) or getattr(choice, "id", None)
+            bundle = preferred_character_still_bundle(cid, still_path=still_path)
+            if bundle.get("path"):
+                path = bundle["path"]
+            if bundle.get("label"):
+                label = bundle["label"]
+        except Exception:
+            pass
+        self._kf_add_pin_data(path, label=str(label or "Character"))
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _kf_on_scene_add_pin(self, still_path: str, choice) -> None:
+        label = getattr(choice, "label", None) or getattr(choice, "name", None) or "Scene"
+        # Prefer hero plate when available
+        path = still_path
+        try:
+            hero = getattr(choice, "hero_path", None) or getattr(choice, "still_path", None)
+            if hero and Path(str(hero)).is_file():
+                path = str(hero)
+        except Exception:
+            pass
+        self._kf_add_pin_data(path, label=str(label))
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _on_kf_enhance(self, e) -> None:
+        pins = self._kf_collect_pins()
+        model = "FLUX 3 · Keyframe Take"
+
+        def _extra() -> dict:
+            return {
+                "workspace": "director",
+                "mode": "keyframe_take",
+                "modality": "keyframes",
+                "model_prompt_brief": "flux3_video",
+                "has_start_still": bool(pins),
+                "pin_count": len(pins),
+                "pin_times": [p.time_s for p in pins],
+                "duration_s": self._kf_duration(),
+                "draft_first": bool(self.kf_draft.value),
+                "guidance": (
+                    "FLUX 3 Keyframe Take: one continuous motion prompt. "
+                    "Pins are pose plates at times — layout lock between pins; "
+                    "no hard-cut multi-shot language. Format first; audio first-class."
+                ),
+            }
+
+        await run_prompt_enhance(
+            page=self.page,
+            state=self.state,
+            prompt_field=self.kf_prompt,
+            get_model=lambda: model,
+            get_image=lambda: pins[0].path if pins else None,
+            get_extra_context=_extra,
+            status_ctrl=self.status,
+            job_progress=self.job_progress,
+            enhance_btn=self.btn_kf_enhance,
+            busy_controls=[self.btn_kf_generate],
+            context_label="keyframe take prompt",
+            allow_empty_with_context=False,
+            busy_scope="director",
+        )
+        self.apply_key_gates()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _run_keyframe_take(self, e) -> None:
+        if self.state.is_busy("director"):
+            return
+        from media_studio.secrets_store import has_fal_key
+
+        if not has_fal_key():
+            self.status.value = "FAL API key required — open Settings (gear icon)."
+            self.page.update()
+            return
+
+        pins = self._kf_collect_pins()
+        dur = self._kf_duration()
+        errs = validate_keyframe_pins(pins, duration_s=dur)
+        if errs:
+            self.status.value = "Cannot Generate — " + " · ".join(errs)
+            self.page.update()
+            return
+        prompt = (self.kf_prompt.value or "").strip()
+        if not prompt:
+            self.status.value = "Enter a global motion prompt."
+            self.page.update()
+            return
+
+        # Soft inject layout-lock when pins present
+        if pins and "layout" not in prompt.lower() and "preserve" not in prompt.lower():
+            # Don't mutate user field — only enhance service path; generate uses as-is
+            # but add a note
+            pass
+
+        try:
+            from media_studio.flet_dialogs import confirm_cost_if_needed
+            from media_studio.director_keyframes import estimate_keyframe_take_cost
+
+            est = estimate_keyframe_take_cost(
+                duration_s=dur,
+                resolution=_dd(self.kf_res_dd) or "720p",
+                draft=bool(self.kf_draft.value),
+            )
+            ok = await confirm_cost_if_needed(
+                self.page,
+                estimated_usd=est,
+                job_label="Director · Keyframe Take",
+            )
+            if not ok:
+                self.status.value = "Generate cancelled (cost guard)."
+                self.page.update()
+                return
+        except Exception:
+            pass
+
+        if not self.state.try_busy("director"):
+            return
+        self.btn_kf_generate.disabled = True
+        self.job_progress.start("Starting Keyframe Take…", self.page)
+        self.status.value = "Running FLUX 3 Keyframe Take…"
+        self.page.update()
+
+        def on_progress(msg: str) -> None:
+            self.job_progress.set_message(classify_progress(msg), self.page)
+
+        try:
+            from media_studio.job_context import to_thread_with_job
+
+            result = await to_thread_with_job(
+                self.state,
+                run_keyframe_take,
+                prompt=prompt,
+                pins=pins,
+                duration_s=dur,
+                aspect_ratio=_dd(self.kf_aspect_dd) or "auto",
+                resolution=_dd(self.kf_res_dd) or "720p",
+                generate_audio=bool(self.kf_audio.value),
+                draft=bool(self.kf_draft.value),
+                output_dir=self.state.output_dir,
+                on_progress=on_progress,
+            )
+            self.kf_cost_text.value = result.cost_label or format_keyframe_take_cost(
+                duration_s=dur,
+                resolution=_dd(self.kf_res_dd) or "720p",
+                draft=bool(self.kf_draft.value),
+            )
+            if result.ok and result.path:
+                self._result_path = result.path
+                done = result.status or "OK"
+                self.job_progress.finish_ok(done, self.page)
+                self.status.value = done
+                try:
+                    self.player.set_result(result.path)
+                except Exception:
+                    pass
+                if result.is_draft and result.draft_cache_url:
+                    self._kf_draft_cache = result.draft_cache_url
+                    self.btn_kf_enhance_full.disabled = False
+                else:
+                    self._kf_draft_cache = None
+                    self.btn_kf_enhance_full.disabled = True
+                try:
+                    show_result_actions(
+                        self.btn_folder, self.btn_resolve, visible=True
+                    )
+                    self.result_actions_row.visible = True
+                except Exception:
+                    pass
+                try:
+                    self._refresh_send_menu(result.path)
+                except Exception:
+                    pass
+            else:
+                err = result.status or "Failed."
+                self.job_progress.finish_error(err, self.page)
+                self.status.value = err
+        except Exception as exc:
+            from media_studio.errors import friendly_error
+
+            err = friendly_error(exc, context="Keyframe Take", media_kind="image")
+            self.job_progress.finish_error(err, self.page)
+            self.status.value = err
+            traceback.print_exc()
+        finally:
+            self.state.clear_busy("director")
+            self.apply_key_gates()
+            try:
+                self.btn_kf_generate.disabled = False
+            except Exception:
+                pass
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+    async def _on_kf_enhance_full(self, e) -> None:
+        if self.state.is_busy("director"):
+            return
+        cache = (self._kf_draft_cache or "").strip()
+        if not cache:
+            self.status.value = "Enhance to full needs a draft first."
+            self.page.update()
+            return
+        from media_studio.secrets_store import has_fal_key
+
+        if not has_fal_key():
+            self.status.value = "FAL API key required."
+            self.page.update()
+            return
+        if not self.state.try_busy("director"):
+            return
+        self.btn_kf_enhance_full.disabled = True
+        self.job_progress.start("Enhancing draft to full…", self.page)
+        self.page.update()
+
+        def on_progress(msg: str) -> None:
+            self.job_progress.set_message(classify_progress(msg), self.page)
+
+        try:
+            from media_studio.flux3_draft import (
+                estimate_full_cost_usd,
+                run_draft_enhance,
+            )
+            from media_studio.job_context import to_thread_with_job
+
+            # Fake spec-like for full cost
+            class _S:
+                cost_per_second = 0.17
+                cost_per_second_by_resolution = {"720p": 0.17, "1080p": 0.29}
+                default_resolution = "720p"
+                label = "FLUX 3 · Keyframe Take"
+
+            dur = self._kf_duration()
+            full_est = estimate_full_cost_usd(
+                _S(),
+                duration_s=dur,
+                resolution=_dd(self.kf_res_dd) or "720p",
+                generate_audio=bool(self.kf_audio.value),
+            )
+            result = await to_thread_with_job(
+                self.state,
+                run_draft_enhance,
+                draft_cache_url=cache,
+                output_dir=self.state.output_dir,
+                prompt_hint=(self.kf_prompt.value or "keyframe")[:40],
+                model_key="flux 3 keyframe take",
+                on_progress=on_progress,
+                duration_s=dur,
+                full_cost_usd=full_est,
+            )
+            if result.ok and result.path:
+                self._result_path = result.path
+                self._kf_draft_cache = None
+                self.btn_kf_enhance_full.disabled = True
+                self.kf_cost_text.value = result.cost_estimate or self.kf_cost_text.value
+                done = result.status or "Enhance to full OK"
+                self.job_progress.finish_ok(done, self.page)
+                self.status.value = done
+                try:
+                    self.player.set_result(result.path)
+                except Exception:
+                    pass
+                try:
+                    show_result_actions(
+                        self.btn_folder, self.btn_resolve, visible=True
+                    )
+                    self._refresh_send_menu(result.path)
+                except Exception:
+                    pass
+            else:
+                err = result.status or "Enhance failed."
+                self.job_progress.finish_error(err, self.page)
+                self.status.value = err
+                self.btn_kf_enhance_full.disabled = False
+        except Exception as exc:
+            from media_studio.errors import friendly_error
+
+            err = friendly_error(exc, context="Keyframe enhance")
+            self.job_progress.finish_error(err, self.page)
+            self.status.value = err
+            self.btn_kf_enhance_full.disabled = False
         finally:
             self.state.clear_busy("director")
             self.apply_key_gates()

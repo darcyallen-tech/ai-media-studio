@@ -119,7 +119,7 @@ Dashboards:
 | **Studio** | Image (scenarios, Region edit, compare) · Video (Received / Blank / Camera Lock) |
 | **Tools** | Image \| Video tools + large result viewer (upscale, **Inpaint**, **Denoise**, **Slow Mo**, cleanup, sky, …) |
 | **Creative Vision** | **Text → Image**, **Image → Image**, Text → Video, Image → Video, Bridge / Connect, **Extend Video** |
-| **Director** | Multi-shot storyboard (Kling) · continuous I2V / first→last (FLUX 3) · Imagine reference storyboard |
+| **Director** | **Multi-shot** cuts (Kling / Imagine) · **Keyframe Take** continuous pins (FLUX 3) · FLUX continuous I2V / first→last |
 | **VFX** | In-scene effects on a plate + **Element plates** (black / clean for Screen·Add in Resolve); fire, smoke, energy, weather, debris, lens packs |
 | **Motion Sync** | Character still + driving video → motion transfer (Kling Motion Control, Wan Motion) |
 | **Frame Editor** | Aleph 2.0 keyframe edit via **Runware** + optional fal 1080p proxy |

@@ -242,6 +242,15 @@ _BEST_FOR: dict[str, BestFor] = {
         "first→last transitions (day→night) + native audio",
         "Director FLUX 3 first→last continuous transition between two stills.",
     ),
+    "flux 3 keyframe take": BestFor(
+        "pose plates → continuous take, up to 10 pins",
+        "Director Keyframe Take: ordered stills at times → FLUX 3 keyframes-to-video. "
+        "Not multi-shot cuts. 5–20s · 720p/1080p · optional audio.",
+    ),
+    "flux 3 · keyframe take": BestFor(
+        "pose plates → continuous take, up to 10 pins",
+        "Director Keyframe Take: ordered stills at times → continuous motion.",
+    ),
     # --- FLUX 3 Video (BFL on fal) ---
     "flux 3": BestFor(
         "full-quality BFL video, native audio, up to 20s",

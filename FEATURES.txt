@@ -145,10 +145,14 @@ Element plates: obvious “Pure black / clean plate (Screen · Add in Resolve)�
 and tip copy. In-scene keeps plate geometry/lighting language in the prompt.
 
 ==============================================================================
-DIRECTOR (multi-shot)
+DIRECTOR (multi-shot + keyframe take)
 ==============================================================================
 Peer tab to Studio / Creative Vision / Frame Editor — generate multi-shot clips
 from a master brief + ordered shot list (not for editing existing plates).
+
+Modes (pill): **Multi-shot** | **Keyframe Take**
+  Multi-shot = hard cuts / multi_prompt (Kling, Imagine storyboard, FLUX continuous I2V)
+  Keyframe Take = FLUX 3 keyframes-to-video — ordered pose plates → one continuous take
 
 - Master: global prompt, total duration (model max, e.g. 3–15s), aspect, style pack
   (None | Cinematic | Marvel-style | Documentary | Luxury RE), multi-shot model only
@@ -191,7 +195,14 @@ from a master brief + ordered shot list (not for editing existing plates).
   Seedance / Wan / H3 stay single-clip outside Director.
 - FLUX 3 Director: up to 20s · 720p/1080p · generate_audio; cost ~$0.17/s @720p ·
   ~$0.29/s @1080p; Continuous = character/start still; First→Last = Shot 1 + Shot 2 stills
-- How-to: FLUX 3 = continuous take / first→last; Kling = multi-shot cuts
+- How-to: Multi-shot = cuts; Keyframe Take = pose plates → continuous motion;
+  FLUX 3 continuous I2V / first→last also under Multi-shot models
+- **Keyframe Take**: up to 10 pins (still + time s); auto-spread or manual times;
+  global prompt + FLUX 3 Enhance brief; 5–20s · 720p/1080p · generate_audio;
+  Character/Scene → Add as pin (front/hero); Draft first + Enhance to full;
+  fal `blackforestlabs/flux-3/keyframes-to-video` (frame_index @ 24 fps);
+  pin thumb click/expand → large preview; Previously used strip; Send to ▾ →
+  Director → Keyframe Take (Add as next pin / Replace pin N) from Library / results
 - Est. cost: Studio-style bordered block directly under Generate; live on model /
   duration / audio / resolution (when exposed)
 - Shot list 2–6 rows (hard-capped by model): start/end time, camera preset

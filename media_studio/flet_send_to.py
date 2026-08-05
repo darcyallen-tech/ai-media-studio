@@ -443,6 +443,53 @@ def send_to_director(
     return _click
 
 
+def send_to_director_keyframe(
+    state: Any,
+    path: str,
+    *,
+    pin_index: int | None = None,
+    status_cb: Callable[[str], None] | None = None,
+) -> Callable:
+    """
+    Send a still into Director · Keyframe Take as a pin.
+
+    ``pin_index`` None → append as next pin; int → replace that pin (0-based).
+    Switches to Director and Keyframe Take mode.
+    """
+
+    async def _click(_e: ft.ControlEvent) -> None:
+        dv = getattr(state, "director_view", None)
+        assigned = 0
+        if dv is not None and hasattr(dv, "receive_keyframe_pin"):
+            assigned = int(
+                dv.receive_keyframe_pin(path, pin_index=pin_index) or 0
+            )
+        elif dv is not None and hasattr(dv, "_kf_add_pin_data"):
+            try:
+                if hasattr(dv, "_on_director_mode"):
+                    dv._on_director_mode("keyframe_take")
+                try:
+                    dv._mode_nav.set_selected("keyframe_take", notify=False)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            if pin_index is not None and hasattr(dv, "_kf_replace_pin"):
+                dv._kf_replace_pin(int(pin_index), path)
+                assigned = int(pin_index)
+            else:
+                dv._kf_add_pin_data(path)
+                assigned = max(0, len(getattr(dv, "_kf_pins", []) or []) - 1)
+        switch = getattr(state, "switch_to_director", None)
+        if switch:
+            switch()
+        msg = f"Sent to Director · Keyframe Take · Pin {assigned + 1}: {Path(path).name}"
+        if status_cb:
+            status_cb(msg)
+
+    return _click
+
+
 # ---------------------------------------------------------------------------
 # Build menu items (nested flyouts)
 # ---------------------------------------------------------------------------
@@ -456,6 +503,17 @@ def _director_shot_count(state: Any) -> int:
     shots = getattr(dv, "_shots", None)
     try:
         return len(shots) if shots is not None else 0
+    except Exception:
+        return 0
+
+
+def _director_keyframe_pin_count(state: Any) -> int:
+    dv = getattr(state, "director_view", None)
+    if dv is None:
+        return 0
+    pins = getattr(dv, "_kf_pins", None)
+    try:
+        return len(pins) if pins is not None else 0
     except Exception:
         return 0
 
@@ -503,18 +561,39 @@ def director_shot_menu_items(
     status_cb: Callable[[str], None] | None = None,
 ) -> list[ft.Control]:
     """
-    Dynamic Director targets: Shot 1 … Shot N for currently defined rows.
-    If no shots yet, offer Shot 1 (receive creates it).
+    Dynamic Director targets: Multi-shot Shot 1…N + Keyframe Take pin actions.
+    If no multi-shot rows yet, offer Shot 1 (receive creates it).
     """
     n = _director_shot_count(state)
     if n <= 0:
         n = 1
-    return [
+    multi = [
         _item(
             f"Shot {i + 1}",
             send_to_director(state, path, shot_index=i, status_cb=status_cb),
         )
         for i in range(n)
+    ]
+    # Keyframe Take: add next pin + replace existing pins
+    kf_items: list[ft.Control] = [
+        _item(
+            "Add as next pin",
+            send_to_director_keyframe(state, path, pin_index=None, status_cb=status_cb),
+        )
+    ]
+    n_pins = _director_keyframe_pin_count(state)
+    for i in range(n_pins):
+        kf_items.append(
+            _item(
+                f"Replace pin {i + 1}",
+                send_to_director_keyframe(
+                    state, path, pin_index=i, status_cb=status_cb
+                ),
+            )
+        )
+    return [
+        _submenu("Multi-shot", multi),
+        _submenu("Keyframe Take", kf_items),
     ]
 
 

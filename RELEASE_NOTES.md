@@ -12,6 +12,16 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### Director · Keyframe Take (FLUX 3 continuous)
+- New Director mode pill: **Multi-shot** | **Keyframe Take**
+- Keyframe Take: ordered pins (still + time, max 10) → `blackforestlabs/flux-3/keyframes-to-video`
+- Auto-spread times or manual; 5–20s · 720p/1080p · audio; Character/Scene → Add as pin
+- Draft first + Enhance to full; cost live; Send to Upscale / Resolve
+- How-to: Multi-shot = cuts; Keyframe Take = pose plates → continuous motion
+- QoL: pin thumb expand/lightbox; Send to ▾ → Director → Keyframe Take (add/replace pin);
+  Previously used strip under pins; Add from Library / disk
+- Multi-shot / Kling paths unchanged
+
 ### FLUX 3 Draft + Send to Video Upscale
 - **Draft first** on FLUX 3 T2V/I2V/First→Last/Extend (Studio + Creative Vision): cheaper draft preview, then **Enhance to full** via `draft-enhance` + draft_cache
 - Cost labels distinguish draft vs full (~$0.06/s draft ballpark · full by resolution)
