@@ -16,6 +16,7 @@ VisionMode = Literal[
     "text_to_video",
     "image_to_video",
     "bridge",
+    "extend",
 ]
 
 
@@ -29,6 +30,8 @@ class VisionModelSpec:
     cost_estimate_usd: float
     notes: str = ""
     cost_per_second: float | None = None
+    # e.g. {"720p": 0.17, "1080p": 0.29} — overrides flat cost_per_second by res
+    cost_per_second_by_resolution: dict[str, float] = field(default_factory=dict)
     # Duration API shape
     duration_param: str = "duration"
     duration_choices: tuple[str, ...] = ("4s", "6s", "8s")
@@ -47,8 +50,12 @@ class VisionModelSpec:
     last_frame_field: str = "last_frame_url"
     # I2V start frame / I2I source field
     image_field: str = "image_url"
+    # Extend / V2V-style: source clip field
+    video_field: str = "video_url"
     # I2V optional end frame (e.g. Hailuo / MiniMax H3) — hide UI when False
     supports_end_frame: bool = False
+    # Dedicated first→last endpoints require both frames
+    requires_end_frame: bool = False
     # Omni reference-to-video (MiniMax H3): images + videos + audio
     omni_reference: bool = False
     max_ref_videos: int = 0
@@ -804,6 +811,31 @@ T2V_MODELS: dict[str, VisionModelSpec] = {
         native_stereo_audio=True,
         prompt_citation_style="plain",
     ),
+    "flux 3 t2v": VisionModelSpec(
+        key="flux 3 t2v",
+        label="FLUX 3 · Text→Video",
+        mode="text_to_video",
+        endpoint="blackforestlabs/flux-3/text-to-video",
+        cost_estimate_usd=1.36,  # 8s × $0.17 @720p
+        cost_per_second=0.17,
+        cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        notes=(
+            "FLUX 3 (BFL on fal) T2V — full quality with optional native audio. "
+            "5–20s or auto · 720p/1080p. Est. ~$0.17/s @720p · ~$0.29/s @1080p."
+        ),
+        duration_choices=("auto",) + tuple(str(i) for i in range(5, 21)),
+        default_duration="8",
+        aspect_choices=(
+            "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
+        ),
+        default_aspect="auto",
+        resolution_choices=("720p", "1080p"),
+        default_resolution="720p",
+        supports_audio=True,
+        supports_negative=False,
+        duration_as_int=True,
+        extra_defaults={"generate_audio": True, "safety_tolerance": 2},
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -932,6 +964,33 @@ I2V_MODELS: dict[str, VisionModelSpec] = {
         native_stereo_audio=True,
         image_field="image_url",
     ),
+    "flux 3 i2v": VisionModelSpec(
+        key="flux 3 i2v",
+        label="FLUX 3 · Image→Video",
+        mode="image_to_video",
+        endpoint="blackforestlabs/flux-3/image-to-video",
+        cost_estimate_usd=1.36,  # 8s × $0.17
+        cost_per_second=0.17,
+        cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        notes=(
+            "FLUX 3 I2V (BFL on fal) — animate a still with optional native audio. "
+            "5–20s or auto · 720p/1080p. Est. ~$0.17/s @720p · ~$0.29/s @1080p."
+        ),
+        duration_choices=("auto",) + tuple(str(i) for i in range(5, 21)),
+        default_duration="8",
+        aspect_choices=(
+            "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
+        ),
+        default_aspect="auto",
+        resolution_choices=("720p", "1080p"),
+        default_resolution="720p",
+        supports_audio=True,
+        supports_negative=False,
+        supports_end_frame=False,
+        duration_as_int=True,
+        image_field="image_url",
+        extra_defaults={"generate_audio": True, "safety_tolerance": 2},
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -987,6 +1046,69 @@ BRIDGE_MODELS: dict[str, VisionModelSpec] = {
         default_resolution="768P",
         extra_defaults={"prompt_optimizer": True},
     ),
+    "flux 3 bridge": VisionModelSpec(
+        key="flux 3 bridge",
+        label="FLUX 3 · First→Last frame",
+        mode="bridge",
+        endpoint="blackforestlabs/flux-3/first-last-frame-to-video",
+        cost_estimate_usd=1.36,  # 8s × $0.17
+        cost_per_second=0.17,
+        cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        notes=(
+            "FLUX 3 first→last (BFL on fal) — bridge two stills (day→night, porch→interior). "
+            "Requires start + end. 5–20s · 720p/1080p · optional native audio. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p."
+        ),
+        duration_choices=tuple(str(i) for i in range(5, 21)),
+        default_duration="8",
+        aspect_choices=(
+            "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
+        ),
+        default_aspect="auto",
+        resolution_choices=("720p", "1080p"),
+        default_resolution="720p",
+        supports_audio=True,
+        supports_negative=False,
+        first_frame_field="start_image_url",
+        last_frame_field="end_image_url",
+        requires_end_frame=True,
+        duration_as_int=True,
+        extra_defaults={"generate_audio": True, "safety_tolerance": 2},
+    ),
+}
+
+# ---------------------------------------------------------------------------
+# Extend video (source clip + prompt)
+# ---------------------------------------------------------------------------
+
+EXTEND_MODELS: dict[str, VisionModelSpec] = {
+    "flux 3 extend": VisionModelSpec(
+        key="flux 3 extend",
+        label="FLUX 3 · Extend Video",
+        mode="extend",
+        endpoint="blackforestlabs/flux-3/extend-video",
+        cost_estimate_usd=1.36,  # 8s × $0.17
+        cost_per_second=0.17,
+        cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        notes=(
+            "FLUX 3 extend (BFL on fal) — continue an existing clip with a prompt. "
+            "Source video under 50 MB / 15s. 5–20s or auto · 720p/1080p · optional audio. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p. Also Studio Video → V2V."
+        ),
+        duration_choices=("auto",) + tuple(str(i) for i in range(5, 21)),
+        default_duration="8",
+        aspect_choices=(
+            "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
+        ),
+        default_aspect="auto",
+        resolution_choices=("720p", "1080p"),
+        default_resolution="720p",
+        supports_audio=True,
+        supports_negative=False,
+        duration_as_int=True,
+        video_field="video_url",
+        extra_defaults={"generate_audio": True, "safety_tolerance": 2},
+    ),
 }
 
 
@@ -999,6 +1121,8 @@ def models_for_mode(mode: VisionMode) -> dict[str, VisionModelSpec]:
         return T2V_MODELS
     if mode == "image_to_video":
         return I2V_MODELS
+    if mode == "extend":
+        return EXTEND_MODELS
     return BRIDGE_MODELS
 
 
@@ -1016,7 +1140,14 @@ def find_vision_model(
     registries = (
         [models_for_mode(mode)]
         if mode
-        else [T2I_MODELS, I2I_MODELS, T2V_MODELS, I2V_MODELS, BRIDGE_MODELS]
+        else [
+            T2I_MODELS,
+            I2I_MODELS,
+            T2V_MODELS,
+            I2V_MODELS,
+            BRIDGE_MODELS,
+            EXTEND_MODELS,
+        ]
     )
     for reg in registries:
         if raw in reg:
@@ -1036,6 +1167,7 @@ def default_vision_model(mode: VisionMode) -> VisionModelSpec:
         "veo 3.1 fast",
         "veo 3.1 fast i2v",
         "veo 3.1 fast bridge",
+        "flux 3 extend",
     ):
         if key in reg:
             return reg[key]
@@ -1056,6 +1188,9 @@ def duration_seconds(token: str | None) -> float:
     if not token:
         return 8.0
     t = str(token).strip().lower()
+    # FLUX 3 / Seedance-style "auto" — use a mid ballpark for cost UI
+    if t in ("auto", "default"):
+        return 8.0
     # Keep only leading number (handles "8s", "8 sec", "10")
     num = ""
     for ch in t:
@@ -1126,21 +1261,36 @@ def estimate_vision_cost(
     secs = duration_seconds(dur_token)
     default_secs = duration_seconds(spec.default_duration) or 8.0
 
-    if spec.cost_per_second is not None and float(spec.cost_per_second) > 0:
+    by_res = getattr(spec, "cost_per_second_by_resolution", None) or {}
+    rate: float | None = None
+    if by_res:
+        res_key = (resolution or spec.default_resolution or "720p").strip().lower()
+        if not res_key or res_key in ("auto", "default"):
+            res_key = (spec.default_resolution or "720p").strip().lower()
+        # Match keys case-insensitively
+        amap = {str(k).lower(): float(v) for k, v in by_res.items()}
+        rate = amap.get(res_key) or amap.get("720p") or next(iter(amap.values()), None)
+
+    if rate is None and spec.cost_per_second is not None and float(spec.cost_per_second) > 0:
+        rate = float(spec.cost_per_second)
+
+    if rate is not None and rate > 0:
         # Full job total — never return the bare $/s figure
-        base = float(spec.cost_per_second) * secs
+        base = float(rate) * secs
     else:
         # Flat estimate assumed for default_duration; scale linearly with selected length
         flat = float(spec.cost_estimate_usd or 0.0)
         base = flat * (secs / default_secs) if default_secs > 0 else flat
 
-    # Resolution multipliers only when the model bills by res (not flat $/s Veo/H3)
+    # Resolution multipliers only when the model bills by res (not flat $/s Veo/H3/FLUX table)
     ep = (spec.endpoint or "").lower()
     is_flat_rate = (
         "veo3.1" in ep
         or "veo3" in ep
         or "minimax/h3" in ep
         or "hailuo-03" in ep
+        or "flux-3" in ep
+        or bool(by_res)
         or (spec.cost_per_second is not None and "2k" in (spec.default_resolution or "").lower())
     )
     if not is_flat_rate:
@@ -1206,6 +1356,7 @@ def build_vision_arguments(
     ref_urls: list[str] | None = None,
     ref_video_urls: list[str] | None = None,
     ref_audio_urls: list[str] | None = None,
+    source_video_url: str | None = None,
     duration: str | None = None,
     aspect_ratio: str | None = None,
     resolution: str | None = None,
@@ -1273,10 +1424,11 @@ def build_vision_arguments(
 
     ep = spec.endpoint.lower()
     is_h3 = "minimax/h3" in ep or "hailuo-03" in ep
+    is_flux3 = "flux-3" in ep or "blackforestlabs/flux-3" in ep
 
     dur = (duration or spec.default_duration or "").strip()
     if dur and spec.duration_param and spec.duration_choices:
-        # Normalize: some models want "8s", others "8" / "5"
+        # Normalize: some models want "8s", others "8" / "5" / "auto"
         if "veo" in ep or "luma" in ep:
             if not dur.endswith("s") and dur.isdigit():
                 dur = f"{dur}s"
@@ -1285,20 +1437,28 @@ def build_vision_arguments(
             or "seedance" in ep
             or "hailuo" in ep
             or is_h3
+            or is_flux3
             or "grok-imagine-video" in ep
             or getattr(spec, "duration_as_int", False)
         ):
             dur = dur.replace("s", "").strip()
-        if spec.duration_choices and dur not in spec.duration_choices:
-            # try closest allowed
-            dur = spec.default_duration
-        if getattr(spec, "duration_as_int", False) or is_h3:
-            try:
-                args[spec.duration_param] = int(str(dur).replace("s", ""))
-            except (TypeError, ValueError):
-                args[spec.duration_param] = dur
+        if str(dur).lower() == "auto" and any(
+            str(c).lower() == "auto" for c in (spec.duration_choices or ())
+        ):
+            args[spec.duration_param] = "auto"
         else:
-            args[spec.duration_param] = dur
+            if spec.duration_choices and dur not in spec.duration_choices:
+                # try closest allowed (skip auto)
+                dur = spec.default_duration
+            if str(dur).lower() == "auto":
+                args[spec.duration_param] = "auto"
+            elif getattr(spec, "duration_as_int", False) or is_h3 or is_flux3:
+                try:
+                    args[spec.duration_param] = int(str(dur).replace("s", ""))
+                except (TypeError, ValueError):
+                    args[spec.duration_param] = dur
+            else:
+                args[spec.duration_param] = dur
 
     aspect = (aspect_ratio or spec.default_aspect or "").strip()
     is_grok_v = "grok-imagine-video" in ep
@@ -1314,6 +1474,18 @@ def build_vision_arguments(
         if "image-to-video" not in ep:
             if aspect and aspect not in ("", "—"):
                 args["aspect_ratio"] = aspect
+    elif is_flux3:
+        res = resolution or spec.default_resolution or "720p"
+        if res and spec.resolution_choices:
+            # Prefer exact allowed casing
+            picked = None
+            for a in spec.resolution_choices:
+                if str(a).lower() == str(res).lower():
+                    picked = str(a)
+                    break
+            args["resolution"] = picked or str(res)
+        if aspect and aspect not in ("", "—"):
+            args["aspect_ratio"] = aspect
     elif is_grok_v:
         res = resolution or spec.default_resolution
         if res and spec.resolution_choices:
@@ -1342,6 +1514,9 @@ def build_vision_arguments(
 
     if generate_audio is not None and spec.supports_audio:
         args["generate_audio"] = bool(generate_audio)
+    elif is_flux3 and "generate_audio" not in args and spec.supports_audio:
+        # Prefer explicit UI value; fall back to extra_defaults already merged
+        pass
 
     neg = (negative_prompt or "").strip()
     if neg and spec.supports_negative:
@@ -1362,6 +1537,15 @@ def build_vision_arguments(
             raise ValueError("Bridge needs both a start frame and an end frame.")
         args[spec.first_frame_field] = first_frame_url
         args[spec.last_frame_field] = last_frame_url
+
+    elif spec.mode == "extend":
+        vid = (source_video_url or "").strip()
+        if not vid and ref_video_urls:
+            vid = str(ref_video_urls[0] or "").strip()
+        if not vid:
+            raise ValueError("Extend needs a source video clip.")
+        vfield = (getattr(spec, "video_field", None) or "video_url").strip() or "video_url"
+        args[vfield] = vid
 
     elif spec.mode == "text_to_video":
         if getattr(spec, "omni_reference", False) or (

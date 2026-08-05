@@ -551,8 +551,21 @@ class StudioVideoView:
         self.start_time.visible = bool(opts.get("start_time_visible", False))
 
     async def _pick_end_frame(self, e: ft.ControlEvent) -> None:
+        req = False
         try:
-            files = await pick_image(self.page, dialog_title="I2V end frame (optional)")
+            vspec = resolve_video_model(_dd_value(self.model_dd))
+            req = bool(
+                vspec
+                and (
+                    getattr(vspec, "requires_end_frame", False)
+                    or "first-last-frame" in (vspec.endpoint or "")
+                )
+            )
+        except Exception:
+            req = False
+        title = "I2V end frame (required)" if req else "I2V end frame (optional)"
+        try:
+            files = await pick_image(self.page, dialog_title=title)
         except Exception as exc:
             self.status_text.value = f"Picker error: {exc}"
             self.page.update()
@@ -1404,6 +1417,29 @@ class StudioVideoView:
                 )
                 self.page.update()
                 return
+            # FLUX 3 first→last (and similar) require both stills
+            try:
+                vspec = resolve_video_model(model)
+                needs_end = bool(
+                    vspec
+                    and (
+                        getattr(vspec, "requires_end_frame", False)
+                        or "first-last-frame" in (vspec.endpoint or "")
+                    )
+                )
+                has_end = bool(
+                    getattr(self, "end_path", None)
+                    and Path(self.end_path).is_file()  # type: ignore[arg-type]
+                )
+                if needs_end and not has_end:
+                    self.status_text.value = (
+                        f"{vspec.label if vspec else 'This model'} needs start + end "
+                        "stills (first→last frame)."
+                    )
+                    self.page.update()
+                    return
+            except Exception:
+                pass
         elif modality == "v2v":
             if not has_clip:
                 self.status_text.value = (

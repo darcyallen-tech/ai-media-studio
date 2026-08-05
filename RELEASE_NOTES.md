@@ -12,6 +12,14 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### FLUX 3 Video (Black Forest Labs on fal) — Phase 1
+- **Studio Video**: I2V · First→Last (start + end required) · Extend under V2V · T2V via Vision list
+- **Creative Vision**: T2V · I2V · Bridge first→last · **Extend Video** (source clip + prompt)
+- Controls: duration 5–20s (or auto where allowed) · 720p/1080p · native audio on/off
+- Cost est. ~$0.17/s @720p · ~$0.29/s @1080p (rate × duration × resolution)
+- fal: `blackforestlabs/flux-3/{text,image,first-last-frame}-to-video` + `extend-video`
+- Kling / Imagine / Seedance paths unchanged
+
 ### Studio modality sub-tabs (Image / Video)
 - Same row as **Image | Video** (to the right; no third bar): **I2I | T2I | R2I | Region** or **I2V | T2V | V2V | R2V**
 - Defaults: Image → I2I, Video → I2V; model dropdown filtered strictly by sub-tab
@@ -25,7 +33,7 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - Duration 5–15s · 2K · cost est. ~$0.26/s (scales with duration); native stereo always on output
 - **Studio Video**: MiniMax H3 I2V + Omni Reference in the model picker (still + optional motion plate as Video 1)
 - fal endpoints: `minimax/h3/text-to-video`, `image-to-video` (`end_image_url`), `reference-to-video`
-- Does not wire Flux 3 or Seedance 2.5; existing Kling / Seedance 2.0 / Aleph / Veo paths unchanged
+- Existing Kling / Seedance 2.0 / Aleph / Veo paths unchanged (FLUX 3 wired separately above)
 
 ### Grok Imagine Video 1.5 (fal) — first-class video
 - **Studio Video**: I2V + R2V (up to 7 stills; `<IMAGE_n>` tags); **Creative Vision**: T2V + I2V + Reference pack

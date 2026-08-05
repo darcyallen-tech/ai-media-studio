@@ -373,6 +373,8 @@ class VideoModelSpec:
     # Prompt citation style for auto-inject: "at" → @Image1; "plain" → Image 1
     prompt_citation_style: str = "at"
     supports_end_frame: bool = False  # I2V optional last frame (end_image_url)
+    # First→last dedicated endpoints (e.g. FLUX 3) require both start + end stills
+    requires_end_frame: bool = False
     # Native stereo always on output (no generate_audio toggle) — MiniMax H3
     native_stereo_audio: bool = False
     keep_audio_param: str | None = "keep_audio"
@@ -1223,6 +1225,115 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
             "Source clip @Video1 + optional still @Image1. Est. ~$0.15/s @720p."
         ),
     ),
+    # --- FLUX 3 Video (Black Forest Labs on fal) — full quality ---
+    "flux 3 i2v": VideoModelSpec(
+        key="flux 3 i2v",
+        label="Video · FLUX 3 – Image-to-Video",
+        endpoint="blackforestlabs/flux-3/image-to-video",
+        task="image_to_video",
+        image_field=None,
+        i2v_image_field="image_url",
+        multi_image=False,
+        max_ref_images=1,
+        keep_audio_param=None,
+        generate_audio_param="generate_audio",
+        default_generate_audio=True,
+        duration_param="duration",
+        duration_as_int=True,
+        default_duration="8",
+        min_duration_seconds=5.0,
+        max_duration_seconds=20.0,
+        allowed_durations=("auto",) + tuple(str(i) for i in range(5, 21)),
+        resolution_param="resolution",
+        allowed_resolutions=("720p", "1080p"),
+        default_resolution="720p",
+        aspect_ratio_param="aspect_ratio",
+        allowed_aspect_ratios=(
+            "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
+        ),
+        default_aspect_ratio="auto",
+        cost_per_second=0.17,
+        cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        extra_defaults={"safety_tolerance": 2},
+        notes=(
+            "FLUX 3 I2V (BFL on fal) — animate a still with native audio. "
+            "5–20s or auto · 720p/1080p · generate_audio default on. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p (ballpark)."
+        ),
+    ),
+    "flux 3 first last": VideoModelSpec(
+        key="flux 3 first last",
+        label="Video · FLUX 3 – First→Last Frame",
+        endpoint="blackforestlabs/flux-3/first-last-frame-to-video",
+        task="image_to_video",
+        image_field=None,
+        i2v_image_field="start_image_url",
+        multi_image=False,
+        max_ref_images=1,
+        supports_end_frame=True,
+        requires_end_frame=True,
+        keep_audio_param=None,
+        generate_audio_param="generate_audio",
+        default_generate_audio=True,
+        duration_param="duration",
+        duration_as_int=True,
+        default_duration="8",
+        min_duration_seconds=5.0,
+        max_duration_seconds=20.0,
+        allowed_durations=tuple(str(i) for i in range(5, 21)),
+        resolution_param="resolution",
+        allowed_resolutions=("720p", "1080p"),
+        default_resolution="720p",
+        aspect_ratio_param="aspect_ratio",
+        allowed_aspect_ratios=(
+            "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
+        ),
+        default_aspect_ratio="auto",
+        cost_per_second=0.17,
+        cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        extra_defaults={"safety_tolerance": 2},
+        notes=(
+            "FLUX 3 first→last (BFL on fal) — bridge two stills with native audio. "
+            "Requires start + end stills. 5–20s · 720p/1080p. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p (ballpark)."
+        ),
+    ),
+    "flux 3 extend": VideoModelSpec(
+        key="flux 3 extend",
+        label="Video · FLUX 3 – Extend Video",
+        endpoint="blackforestlabs/flux-3/extend-video",
+        task="video_edit",
+        video_field="video_url",
+        image_field=None,
+        multi_image=False,
+        max_ref_images=0,
+        keep_audio_param=None,
+        generate_audio_param="generate_audio",
+        default_generate_audio=True,
+        duration_param="duration",
+        duration_as_int=True,
+        default_duration="8",
+        min_duration_seconds=5.0,
+        max_duration_seconds=20.0,
+        allowed_durations=("auto",) + tuple(str(i) for i in range(5, 21)),
+        resolution_param="resolution",
+        allowed_resolutions=("720p", "1080p"),
+        default_resolution="720p",
+        aspect_ratio_param="aspect_ratio",
+        allowed_aspect_ratios=(
+            "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
+        ),
+        default_aspect_ratio="auto",
+        auto_image_refs_in_prompt=False,
+        cost_per_second=0.17,
+        cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        extra_defaults={"safety_tolerance": 2},
+        notes=(
+            "FLUX 3 extend (BFL on fal) — continue an existing clip with prompt + native audio. "
+            "Source video + prompt. 5–20s or auto · 720p/1080p. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p (ballpark)."
+        ),
+    ),
     # --- MiniMax H3 (Hailuo-03) — multimodal T2V/I2V/omni reference ---
     "minimax h3 i2v": VideoModelSpec(
         key="minimax h3 i2v",
@@ -1471,6 +1582,24 @@ _ALIASES: dict[str, str] = {
     "video · minimax h3 – omni reference": "minimax h3 reference",
     "minimax/h3/reference-to-video": "minimax h3 reference",
     "fal-ai/minimax/hailuo-03/reference-to-video": "minimax h3 reference",
+    # FLUX 3 Video (BFL on fal)
+    "flux 3": "flux 3 i2v",
+    "flux 3 i2v": "flux 3 i2v",
+    "flux 3 image-to-video": "flux 3 i2v",
+    "flux 3 image to video": "flux 3 i2v",
+    "video · flux 3 – image-to-video": "flux 3 i2v",
+    "blackforestlabs/flux-3/image-to-video": "flux 3 i2v",
+    "flux 3 first last": "flux 3 first last",
+    "flux 3 first→last": "flux 3 first last",
+    "flux 3 first-last": "flux 3 first last",
+    "flux 3 bridge": "flux 3 first last",
+    "video · flux 3 – first→last frame": "flux 3 first last",
+    "blackforestlabs/flux-3/first-last-frame-to-video": "flux 3 first last",
+    "flux 3 extend": "flux 3 extend",
+    "flux 3 extend video": "flux 3 extend",
+    "flux 3 v2v": "flux 3 extend",
+    "video · flux 3 – extend video": "flux 3 extend",
+    "blackforestlabs/flux-3/extend-video": "flux 3 extend",
 }
 
 
@@ -1493,7 +1622,7 @@ def model_dropdown_choices() -> list[str]:
     ):
         if key in IMAGE_EDIT_MODELS:
             labels.append(IMAGE_EDIT_MODELS[key].label)
-    # Video V2V edit (camera-lock workflow)
+    # Video V2V edit (camera-lock workflow) + extend
     for key in (
         "kling o3 standard edit",
         "kling o3 pro edit",
@@ -1501,6 +1630,7 @@ def model_dropdown_choices() -> list[str]:
         "kling o1 pro edit",
         "seedance 2.0 v2v",
         "seedance 2.0 fast v2v",
+        "flux 3 extend",
         "ltx retake",
         "grok imagine edit video",
     ):
@@ -1519,6 +1649,8 @@ def model_dropdown_choices() -> list[str]:
         "seedance 2.0 i2v",
         "seedance 2.0 fast i2v",
         "seedance 2.0 reference",
+        "flux 3 i2v",
+        "flux 3 first last",
         "minimax h3 i2v",
         "minimax h3 reference",
     ):
@@ -2179,8 +2311,22 @@ def build_i2v_arguments(
             )
 
     end = params.get("end_image_url") or other.get("end_image_url")
-    if end and (spec.supports_end_frame or "hailuo" in spec.endpoint or "minimax/h3" in spec.endpoint):
+    end_ok = bool(
+        spec.supports_end_frame
+        or getattr(spec, "requires_end_frame", False)
+        or "hailuo" in spec.endpoint
+        or "minimax/h3" in spec.endpoint
+        or "first-last-frame" in (spec.endpoint or "")
+    )
+    if end and end_ok:
         args["end_image_url"] = str(end)
+    elif getattr(spec, "requires_end_frame", False) or "first-last-frame" in (
+        spec.endpoint or ""
+    ):
+        raise ValueError(
+            f"{spec.label} needs both a start still and an end still "
+            "(first→last frame)."
+        )
 
     # Reference videos (Seedance video_urls or H3 reference_video_urls)
     vrefs = (

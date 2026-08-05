@@ -63,6 +63,7 @@ def run_vision(
     ref_paths: list[str] | None = None,
     ref_video_paths: list[str] | None = None,
     ref_audio_paths: list[str] | None = None,
+    source_video_path: str | None = None,
     duration: str | None = None,
     aspect_ratio: str | None = None,
     resolution: str | None = None,
@@ -74,7 +75,7 @@ def run_vision(
     on_progress: ProgressCallback | None = None,
 ) -> VisionResult:
     """
-    Generate a Creative Vision still (T2I / I2I) or clip (T2V / I2V / bridge).
+    Generate a Creative Vision still (T2I / I2I) or clip (T2V / I2V / bridge / extend).
 
     Still modes index as Image; video modes as creative_vision (Video filter).
     T2I supports multi-variant (1–4): multi-output in one call when the model
@@ -103,6 +104,7 @@ def run_vision(
     image_url = None
     first_url = None
     last_url = None
+    source_video_url = None
     ref_urls: list[str] = []
     ref_video_urls: list[str] = []
     ref_audio_urls: list[str] = []
@@ -113,6 +115,24 @@ def run_vision(
     try:
         if mode == "text_to_image":
             pass  # no uploads
+        elif mode == "extend":
+            vp = Path(source_video_path) if source_video_path else None
+            if (not vp or not vp.is_file()) and ref_video_paths:
+                for cand in ref_video_paths:
+                    p = Path(cand) if cand else None
+                    if p and p.is_file():
+                        vp = p
+                        break
+            if not vp or not vp.is_file():
+                return VisionResult(
+                    ok=False,
+                    model_key=spec.key,
+                    endpoint=spec.endpoint,
+                    status="Extend needs a source video clip.",
+                    cost_label=format_vision_cost(spec, duration_token=duration),
+                )
+            progress(f"Uploading source clip: {vp.name}")
+            source_video_url = upload_file(vp, on_progress=progress)
         elif mode == "image_to_image":
             ip = Path(image_path) if image_path else None
             if not ip or not ip.is_file():
@@ -315,6 +335,7 @@ def run_vision(
                 ref_urls=ref_urls or None,
                 ref_video_urls=ref_video_urls or None,
                 ref_audio_urls=ref_audio_urls or None,
+                source_video_url=source_video_url,
                 duration=duration,
                 aspect_ratio=aspect_ratio,
                 resolution=resolution,

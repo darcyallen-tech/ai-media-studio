@@ -55,7 +55,13 @@ def resolve_vision_studio_model(model_choice: str | None):
         from media_studio.vision_registry import find_vision_model
 
         # Explicit modes first (Studio modality lists)
-        for mode in ("text_to_video", "text_to_image", "image_to_video", "bridge"):
+        for mode in (
+            "text_to_video",
+            "text_to_image",
+            "image_to_video",
+            "bridge",
+            "extend",
+        ):
             spec = find_vision_model(model_choice, mode)  # type: ignore[arg-type]
             if spec is not None:
                 return spec
@@ -97,9 +103,14 @@ def resolve_active_model(
 
 
 def _control_options_vision(spec: Any) -> dict[str, Any]:
-    """control_options payload for Creative Vision T2I / T2V models."""
+    """control_options payload for Creative Vision T2I / video models."""
     mode = getattr(spec, "mode", "") or ""
-    if mode == "text_to_video":
+    if mode in (
+        "text_to_video",
+        "image_to_video",
+        "bridge",
+        "extend",
+    ):
         dur_choices = list(spec.duration_choices or ()) or ["5", "6", "8"]
         dur_value = (
             spec.default_duration
@@ -124,7 +135,7 @@ def _control_options_vision(spec: Any) -> dict[str, Any]:
             else NONE
         )
         return {
-            "kind": "text_to_video",
+            "kind": mode or "text_to_video",
             "resolution_choices": res_choices if show_res else [NONE],
             "resolution_value": res_value,
             "resolution_visible": show_res,
@@ -205,6 +216,9 @@ def control_options(model_choice: str | None) -> dict[str, Any]:
     if vspec is not None and getattr(vspec, "mode", "") in (
         "text_to_video",
         "text_to_image",
+        "image_to_video",
+        "bridge",
+        "extend",
     ):
         return _control_options_vision(vspec)
 

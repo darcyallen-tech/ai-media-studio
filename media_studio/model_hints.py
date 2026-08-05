@@ -223,6 +223,65 @@ _BEST_FOR: dict[str, BestFor] = {
         "strong reference consistency, native audio, motion quality",
         "Director via Grok Imagine 1.5 — ordered shot refs as R2V/I2V/T2V single clip.",
     ),
+    # --- FLUX 3 Video (BFL on fal) ---
+    "flux 3": BestFor(
+        "full-quality BFL video, native audio, up to 20s",
+        "FLUX 3 (Black Forest Labs on fal): T2V / I2V / first→last / extend. "
+        "5–20s · 720p/1080p · optional native audio. "
+        "Est. ~$0.17/s @720p · ~$0.29/s @1080p.",
+    ),
+    "flux 3 i2v": BestFor(
+        "animate a still, full quality + optional audio",
+        "FLUX 3 image-to-video from a start still. 5–20s · 720p/1080p · "
+        "generate_audio toggle. Est. ~$0.17/s @720p · ~$0.29/s @1080p.",
+    ),
+    "video · flux 3 – image-to-video": BestFor(
+        "animate a still, full quality + optional audio",
+        "FLUX 3 image-to-video from a start still. 5–20s · 720p/1080p.",
+    ),
+    "flux 3 · image→video": BestFor(
+        "animate a still, full quality + optional audio",
+        "FLUX 3 image-to-video from a start still. 5–20s · 720p/1080p.",
+    ),
+    "flux 3 first last": BestFor(
+        "day→night / porch→interior first→last bridge",
+        "FLUX 3 first→last: requires start + end stills. 5–20s · 720p/1080p · "
+        "optional native audio. Est. ~$0.17/s @720p · ~$0.29/s @1080p.",
+    ),
+    "video · flux 3 – first→last frame": BestFor(
+        "day→night / porch→interior first→last bridge",
+        "FLUX 3 first→last bridge between two stills. Start + end required.",
+    ),
+    "flux 3 bridge": BestFor(
+        "day→night / porch→interior first→last bridge",
+        "FLUX 3 first→last bridge between two stills. Start + end required.",
+    ),
+    "flux 3 · first→last frame": BestFor(
+        "day→night / porch→interior first→last bridge",
+        "FLUX 3 first→last bridge between two stills. Start + end required.",
+    ),
+    "flux 3 extend": BestFor(
+        "continue a clip with prompt + optional audio",
+        "FLUX 3 extend-video: source clip + prompt. Source under 50 MB / 15s. "
+        "5–20s or auto · 720p/1080p. Est. ~$0.17/s @720p · ~$0.29/s @1080p.",
+    ),
+    "video · flux 3 – extend video": BestFor(
+        "continue a clip with prompt + optional audio",
+        "FLUX 3 extend: source clip + prompt. Studio V2V or Vision Extend.",
+    ),
+    "flux 3 · extend video": BestFor(
+        "continue a clip with prompt + optional audio",
+        "FLUX 3 extend: source clip + prompt. Studio V2V or Vision Extend.",
+    ),
+    "flux 3 t2v": BestFor(
+        "full-quality text→video + optional native audio",
+        "FLUX 3 text-to-video. 5–20s or auto · 720p/1080p · generate_audio. "
+        "Est. ~$0.17/s @720p · ~$0.29/s @1080p.",
+    ),
+    "flux 3 · text→video": BestFor(
+        "full-quality text→video + optional native audio",
+        "FLUX 3 text-to-video. 5–20s or auto · 720p/1080p · generate_audio.",
+    ),
     # --- Motion Sync ---
     "kling motion control v3 pro": BestFor(
         "finished motion transfer, identity + motion quality",

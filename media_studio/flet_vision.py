@@ -1,5 +1,5 @@
 """
-Creative Vision tab — T2I / I2I / T2V / I2V / bridge shots.
+Creative Vision tab — T2I / I2I / T2V / I2V / bridge / extend shots.
 
 Separate from Studio listing camera-lock flows. Expensive models; cost shown
 before generate. Same export habits: Library, folder, Resolve, Send to ▾.
@@ -95,6 +95,7 @@ class CreativeVisionView:
         self._mode: VisionMode = "text_to_video"
         self.start_path: str | None = None
         self.end_path: str | None = None
+        self.extend_path: str | None = None
         self.ref_paths: list[str] = []
         # MiniMax H3 omni: motion + audio plates (stills use ref_paths)
         self.ref_video_paths: list[str] = []
@@ -109,6 +110,7 @@ class CreativeVisionView:
                 ("text_to_video", "Text → Video"),
                 ("image_to_video", "Image → Video"),
                 ("bridge", "Bridge / Connect"),
+                ("extend", "Extend Video"),
             ],
             selected=self._mode,
             on_change=self._on_mode,
@@ -338,6 +340,21 @@ class CreativeVisionView:
             icon=ft.Icons.IMAGE_OUTLINED,
             on_click=self._pick_end,
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+        )
+        self.extend_label = ft.Text(
+            "No source clip", size=FONT_SM, color=TEXT_MUTED, max_lines=2
+        )
+        self.btn_extend = ft.OutlinedButton(
+            content="Source clip",
+            icon=ft.Icons.VIDEO_FILE_OUTLINED,
+            on_click=self._pick_extend_video,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+        )
+        self.extend_col = ft.Column(
+            [self.extend_label, self.btn_extend],
+            spacing=4,
+            tight=True,
+            visible=False,
         )
         self.char_picker = CharacterPicker(
             page,
@@ -720,6 +737,7 @@ class CreativeVisionView:
                 spacing=16,
                 tight=True,
             ),
+            self.extend_col,
             self.char_picker.root,
             self.refs_hint,
             self.refs_actions_row,
@@ -1257,6 +1275,7 @@ class CreativeVisionView:
             "text_to_video",
             "image_to_video",
             "bridge",
+            "extend",
         ):
             return
         self._mode = mode_id  # type: ignore[assignment]
@@ -1273,6 +1292,13 @@ class CreativeVisionView:
             cur = (self.prompt.value or "").strip()
             if not cur or "Bridge the start frame" not in cur:
                 self.prompt.value = default_bridge_prompt()
+        elif self._mode == "extend":
+            cur = (self.prompt.value or "").strip()
+            if not cur or "Bridge the start frame" in cur.lower():
+                self.prompt.value = (
+                    "Continue the motion from the final frames of the source clip. "
+                    "Keep subject identity and camera language consistent."
+                )
         elif self._mode == "image_to_image":
             cur = (self.prompt.value or "").strip()
             low = cur.lower()
@@ -1617,13 +1643,26 @@ class CreativeVisionView:
         is_i2i = self._mode == "image_to_image"
         is_i2v = self._mode == "image_to_video"
         is_bridge = self._mode == "bridge"
+        is_extend = self._mode == "extend"
         is_omni = self._is_omni_model()
         still = is_still_mode(self._mode)
-        show_start = (is_i2v or is_bridge or is_i2i) and not is_omni
-        show_end = (is_bridge or (is_i2v and self._supports_end_frame())) and not is_omni
+        show_start = (is_i2v or is_bridge or is_i2i) and not is_omni and not is_extend
+        show_end = (
+            (is_bridge or (is_i2v and self._supports_end_frame()))
+            and not is_omni
+            and not is_extend
+        )
         # Source / start still picker
         self.btn_start.visible = show_start
         self.btn_end.visible = show_end
+        try:
+            self.extend_col.visible = is_extend
+            if is_extend and self.extend_path:
+                self.extend_label.value = f"Source: {Path(self.extend_path).name}"
+            elif is_extend:
+                self.extend_label.value = "No source clip (required)"
+        except Exception:
+            pass
         try:
             if is_i2i:
                 self.btn_start.content = "Source still"
@@ -1650,7 +1689,7 @@ class CreativeVisionView:
             pass
         # Hide generic video ref pack row when omni panel owns refs
         try:
-            if is_omni:
+            if is_omni or is_extend:
                 self.refs_actions_row.visible = False
                 self.refs_hint.visible = False
                 self.refs_chips.visible = False
@@ -1658,7 +1697,7 @@ class CreativeVisionView:
             pass
         # Previously used + From Resolve stills for I2I (and I2V/bridge start) + omni
         try:
-            show_src_strips = is_i2i or is_i2v or is_bridge or is_omni
+            show_src_strips = is_i2i or is_i2v or is_bridge or is_omni or is_extend
             self.prev_strip.root.visible = show_src_strips
             self.resolve_strip.root.visible = show_src_strips
             if show_src_strips:
@@ -1673,6 +1712,20 @@ class CreativeVisionView:
             self.end_preview.visible = bool(self.end_path) and show_end
         except Exception:
             pass
+
+    async def _pick_extend_video(self, e: ft.ControlEvent) -> None:
+        try:
+            files = await pick_video(self.page, dialog_title="Source clip to extend")
+        except Exception as exc:
+            self.status.value = f"Picker error: {exc}"
+            self.page.update()
+            return
+        if not files or not files[0].path:
+            return
+        self.extend_path = str(Path(files[0].path).resolve())
+        self.extend_label.value = f"Source: {Path(self.extend_path).name}"
+        self.status.value = f"Extend source: {Path(self.extend_path).name}"
+        self.page.update()
 
     def _sync_helper_controls_for_mode(self, *, is_still: bool = False, is_t2i: bool = False) -> None:
         """
@@ -2277,6 +2330,7 @@ class CreativeVisionView:
         """
         Receive a video from Send-to.
 
+        Extend mode: set as source clip.
         Omni (MiniMax H3): attach as Video N motion plate.
         Otherwise: surface status (Studio Video / Tools for full clip workflows).
         """
@@ -2290,6 +2344,23 @@ class CreativeVisionView:
         except OSError as exc:
             self.status.value = f"Video error: {exc}"
             return False
+        # Prefer Extend when already in extend mode or model is an extend model
+        try:
+            lab = (_dd(self.model_dd) or "").lower()
+            if self._mode == "extend" or "extend" in lab:
+                if self._mode != "extend":
+                    self._on_mode("extend")
+                self.extend_path = resolved
+                self.extend_label.value = f"Source: {name}"
+                self.extend_col.visible = True
+                self.status.value = status or f"Extend source: {name}"
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+                return True
+        except Exception:
+            pass
         if self._is_omni_model() or (
             self._mode == "text_to_video"
             and "omni" in (( _dd(self.model_dd) or "").lower())
@@ -2560,6 +2631,7 @@ class CreativeVisionView:
             "text_to_video",
             "image_to_video",
             "bridge",
+            "extend",
         ):
             self._mode = p.mode  # type: ignore[assignment]
             try:
@@ -2685,6 +2757,11 @@ class CreativeVisionView:
                 and Path(self.end_path).is_file()
             ):
                 self.status.value = "Bridge needs both start and end stills."
+                self.page.update()
+                return
+        if self._mode == "extend":
+            if not (self.extend_path and Path(self.extend_path).is_file()):
+                self.status.value = "Extend needs a source video clip."
                 self.page.update()
                 return
 
@@ -2824,11 +2901,14 @@ class CreativeVisionView:
                     if self._mode == "bridge"
                     else (self.end_path if self._mode == "image_to_video" else None)
                 ),
+                source_video_path=(
+                    self.extend_path if self._mode == "extend" else None
+                ),
                 ref_paths=(
                     (refs or None)
                     if (
                         self._mode == "image_to_image"
-                        or not still_job
+                        or (not still_job and self._mode != "extend")
                     )
                     else None
                 ),

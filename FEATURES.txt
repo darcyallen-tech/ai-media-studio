@@ -300,9 +300,11 @@ Secondary workspaces: Received, Blank Canvas, Camera Lock (map → I2V / V2V)
 - Camera-lock style prompts for furniture / day-night / etc.
 - Models: Kling family, Seedance 2.0 I2V/V2V/reference, MiniMax H3 I2V + Omni
   Reference (still + optional motion plate as Video 1), **Grok Imagine Video 1.5**
-  I2V + R2V (up to 7 stills), others on fal
+  I2V + R2V (up to 7 stills), **FLUX 3** I2V + First→Last + Extend (V2V), others on fal
 - MiniMax H3: 5–15s · 2K · ~$0.26/s; native stereo on output
 - Grok Imagine 1.5: 1–15s · 480p–1080p; native audio; ~$0.08–0.25/s + $0.01/ref
+- FLUX 3 (BFL on fal): 5–20s (or auto) · 720p/1080p · optional native audio ·
+  ~$0.17/s @720p · ~$0.29/s @1080p; First→Last requires start + end stills
 - Grok Enhance on video prompts (modality-aware citations for R2V / first–last I2V)
 - Duration / resolution guidance, cost estimate (job total)
 - Export: Show in folder, Send to Resolve, Library
@@ -397,7 +399,8 @@ Modes (left → right):
 
   Text → Video (T2V)
     e.g. Veo 3.1 / Veo 3.1 Fast / Reference pack, Luma Ray 2,
-         MiniMax H3 T2V, MiniMax H3 Omni reference, **Grok Imagine 1.5 T2V / Reference pack**
+         MiniMax H3 T2V, MiniMax H3 Omni reference, **Grok Imagine 1.5 T2V / Reference pack**,
+         **FLUX 3 T2V**
     Veo on fal: ~$0.40/s standard, ~$0.15/s Fast (totals = rate × duration)
     MiniMax H3 (Hailuo-03) on fal (minimax/h3/*):
       - T2V: prompt · duration 5–15s · aspect · 2K · native stereo
@@ -409,17 +412,27 @@ Modes (left → right):
       - T2V / I2V / R2V (1–7 stills; tag <IMAGE_0>…); native audio; 1–15s
       - Est. $0.08/s @480p · $0.14/s @720p · $0.25/s @1080p + $0.01/ref image
       - Also Studio Video I2V/R2V + Director reference storyboard
+    FLUX 3 Video on fal (blackforestlabs/flux-3/*):
+      - T2V / I2V / first→last / extend · 5–20s (or auto) · 720p/1080p
+      - Optional generate_audio · Est. ~$0.17/s @720p · ~$0.29/s @1080p
+      - Also Studio Video I2V / First→Last / Extend (V2V)
 
   Image → Video (I2V)
     Start still → motion (Veo, Kling O3 Pro, Seedance 2.0, Hailuo 02, MiniMax H3,
-      Grok Imagine 1.5, …)
+      Grok Imagine 1.5, FLUX 3, …)
     MiniMax H3 I2V: first frame still; optional last-frame still (first→last
       transitions: day→night, porch→interior); 5–15s · 2K · native stereo
     Grok Imagine 1.5 I2V: start still + motion prompt; native audio; 480p–1080p
+    FLUX 3 I2V: start still + motion; optional audio; 5–20s · 720p/1080p
 
   Bridge / Connect
-    Start frame + end frame → in-between (Veo first→last, Hailuo start+end)
+    Start frame + end frame → in-between (Veo first→last, Hailuo start+end,
+      **FLUX 3 first→last**)
     (H3 first→last also available as I2V with optional end frame)
+
+  Extend Video
+    Source clip + prompt → continued motion (**FLUX 3 extend-video**)
+    Source under 50 MB / 15s on fal; duration / res / audio as above
 
 Shared Vision UI:
   - Video modes: Camera / shot helpers (shot type, lens feel, motion, style)

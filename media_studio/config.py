@@ -38,6 +38,7 @@ MODEL_OPTIONS: list[str] = [""] + [
     "grok imagine edit video",
     "seedance 2.0 v2v",
     "seedance 2.0 fast v2v",
+    "flux 3 extend",
     # image-to-video
     "kling o3 standard i2v",
     "kling o3 pro i2v",
@@ -50,6 +51,8 @@ MODEL_OPTIONS: list[str] = [""] + [
     "seedance 2.0 i2v",
     "seedance 2.0 fast i2v",
     "seedance 2.0 reference",
+    "flux 3 i2v",
+    "flux 3 first last",
     "minimax h3 i2v",
     "minimax h3 reference",
 ]
