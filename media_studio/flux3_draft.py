@@ -104,6 +104,78 @@ def load_flux3_video_enhance_brief() -> str:
     )
 
 
+def is_flux3_i2v_endpoint(endpoint: str | None) -> bool:
+    """True for pure FLUX 3 image-to-video (not first→last / extend / T2V)."""
+    ep = (endpoint or "").lower()
+    return "blackforestlabs/flux-3/image-to-video" in ep and "first-last" not in ep
+
+
+def is_flux3_i2v_model_choice(model_choice: str | None) -> bool:
+    """True when UI model is FLUX 3 I2V (Studio or Vision label/key)."""
+    raw = (model_choice or "").strip().lower()
+    if not raw:
+        return False
+    if "first" in raw and "last" in raw:
+        return False
+    if "extend" in raw or "t2v" in raw or "text→video" in raw or "text-to-video" in raw:
+        return False
+    if "flux 3 i2v" in raw or "flux 3 · image→video" in raw:
+        return True
+    if "flux 3" in raw and ("image-to-video" in raw or "image→video" in raw):
+        return True
+    if "video · flux 3 – image-to-video" in raw:
+        return True
+    try:
+        from media_studio.fal.models import resolve_video_model
+
+        v = resolve_video_model(model_choice)
+        if v and is_flux3_i2v_endpoint(v.endpoint):
+            return True
+    except Exception:
+        pass
+    try:
+        from media_studio.vision_registry import find_vision_model
+
+        vs = find_vision_model(model_choice, "image_to_video")
+        if vs and is_flux3_i2v_endpoint(vs.endpoint):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+# I2V still intent: first frame (layout lock) vs character likeness only
+I2V_ROLE_START = "start_frame"
+I2V_ROLE_IDENTITY = "identity_ref"
+
+
+def normalize_i2v_image_role(role: str | None) -> str:
+    r = (role or "").strip().lower()
+    if r in (
+        "identity",
+        "identity_ref",
+        "character",
+        "character_ref",
+        "likeness",
+    ):
+        return I2V_ROLE_IDENTITY
+    return I2V_ROLE_START
+
+
+def flux3_i2v_role_prompt_note(role: str | None) -> str:
+    """Short prompt suffix / guidance for start vs identity (empty if none)."""
+    if normalize_i2v_image_role(role) == I2V_ROLE_IDENTITY:
+        return (
+            "Use the reference image for character likeness / identity only; "
+            "freer framing and action — do not treat the plate as a locked opening "
+            "frame or preserve exact composition."
+        )
+    return (
+        "The image is the start frame: preserve layout, architecture, scale, and "
+        "camera angle; then action-only motion over time."
+    )
+
+
 def flux3_enhance_mode_hint(
     *,
     modality: str | None = None,
@@ -111,14 +183,17 @@ def flux3_enhance_mode_hint(
     has_end_still: bool = False,
     has_source_video: bool = False,
     draft_mode: bool = False,
+    image_role: str | None = None,
 ) -> str:
     """Short mode-specific add-on for the Enhance user payload."""
     bits: list[str] = []
     m = (modality or "").strip().lower()
+    role = normalize_i2v_image_role(image_role) if image_role else None
     if draft_mode or "draft" in m:
         bits.append(
             "Draft path: keep the rewrite lean and cinematic; same FLUX 3 biases "
-            "(format first, audio, layout lock if still) — draft is preview quality only."
+            "(format first, audio, layout lock only if start-frame role) — "
+            "draft is preview quality only."
         )
     if has_end_still or m in ("bridge", "first_last", "first-last", "flf"):
         bits.append(
@@ -130,9 +205,17 @@ def flux3_enhance_mode_hint(
             "Extend: continue from the source clip’s final frames; do not reset geography."
         )
     elif has_start_still or m in ("i2v", "image_to_video", "image-to-video"):
-        bits.append(
-            "I2V: open with layout lock from the start still, then action-only motion."
-        )
+        if role == I2V_ROLE_IDENTITY:
+            bits.append(
+                "I2V · Character / identity ref: match likeness only; freer framing "
+                "and action. Do NOT write layout lock, preserve exact framing, or "
+                "treat the plate as a locked opening frame."
+            )
+        else:
+            bits.append(
+                "I2V · Start frame: open with layout lock from the start still, "
+                "then action-only motion."
+            )
     elif m in ("t2v", "text_to_video", "text-to-video"):
         bits.append(
             "T2V: format-first continuous shot; duration as setup→turn→payoff when length allows."
@@ -153,6 +236,7 @@ def flux3_video_enhance_guidance(
     draft_mode: bool = False,
     creative_direction: str | None = None,
     lean: bool = False,
+    image_role: str | None = None,
 ) -> str:
     """
     Guidance string for Enhance extra_context when FLUX 3 Video is selected.
@@ -166,6 +250,7 @@ def flux3_video_enhance_guidance(
         has_end_still=has_end_still,
         has_source_video=has_source_video,
         draft_mode=draft_mode,
+        image_role=image_role,
     )
     parts = [
         "CRITICAL — locked target is FLUX 3 Video (not Kling multi-shot, not Imagine, "
@@ -173,11 +258,18 @@ def flux3_video_enhance_guidance(
         "chosen_model must remain the locked FLUX 3 model.",
         mode_hint,
     ]
+    role = normalize_i2v_image_role(image_role) if image_role else None
     if lean:
-        parts.append(
-            "User wants minimal direction: lean rewrite — format lead + beats + "
-            "layout lock (if I2V) + essential audio only."
-        )
+        if role == I2V_ROLE_IDENTITY:
+            parts.append(
+                "User wants minimal direction: lean rewrite — format lead + beats + "
+                "identity/likeness only (no layout lock) + essential audio only."
+            )
+        else:
+            parts.append(
+                "User wants minimal direction: lean rewrite — format lead + beats + "
+                "layout lock (if start-frame I2V) + essential audio only."
+            )
     cd = (creative_direction or "").strip()
     if cd:
         parts.append(
@@ -272,11 +364,74 @@ def format_draft_vs_full_cost(
     return "Est. cost: —"
 
 
+def endpoint_omits_aspect_ratio(endpoint: str | None) -> bool:
+    """
+    True when the fal endpoint rejects aspect_ratio entirely
+    (not even ``auto``). FLUX 3 pure I2V + its /draft twin.
+    """
+    ep = (endpoint or "").strip().lower()
+    if not ep:
+        return False
+    # Pure I2V (full or draft) — not first-last / extend / T2V / keyframes
+    if "blackforestlabs/flux-3/image-to-video" in ep and "first-last" not in ep:
+        return True
+    return False
+
+
 def strip_resolution_for_draft(arguments: dict[str, Any]) -> dict[str, Any]:
-    """Draft OpenAPI has no resolution field."""
+    """Draft OpenAPI has no resolution field; also drop rejected aspect_ratio."""
     out = dict(arguments)
     out.pop("resolution", None)
+    # Defense-in-depth: draft I2V must never post aspect_ratio
+    out.pop("aspect_ratio", None)
     return out
+
+
+def strip_omitted_aspect(
+    arguments: dict[str, Any],
+    *,
+    endpoint: str | None = None,
+) -> dict[str, Any]:
+    """Remove aspect_ratio when the target endpoint rejects it."""
+    out = dict(arguments or {})
+    if endpoint_omits_aspect_ratio(endpoint):
+        out.pop("aspect_ratio", None)
+    return out
+
+
+def i2v_max_identity_refs(spec: Any) -> int:
+    """
+    Max character/identity stills the I2V (or R2V) model accepts.
+
+    FLUX 3 pure I2V → 1 (no multi character-element API).
+    Multi-ref / image_urls models → max_ref_images.
+    Single image_url I2V → 1.
+    """
+    if spec is None:
+        return 1
+    ep = (getattr(spec, "endpoint", None) or "").lower()
+    key = (getattr(spec, "key", None) or "").lower()
+    # FLUX 3 I2V: single still only (start OR identity — not multi-element)
+    if is_flux3_i2v_endpoint(ep) or (
+        "flux 3" in key and "i2v" in key and "first" not in key
+    ):
+        return 1
+    multi = bool(getattr(spec, "multi_image", False))
+    cap = max(1, int(getattr(spec, "max_ref_images", 1) or 1))
+    field = (getattr(spec, "i2v_image_field", None) or getattr(spec, "image_field", None) or "")
+    field = str(field).lower()
+    if "reference-to-video" in ep or field in ("image_urls", "reference_image_urls"):
+        return max(1, cap)
+    if multi and cap > 1 and field != "image_url":
+        return cap
+    # Seedance reference / Grok R2V style
+    if multi and cap > 1 and "reference" in key:
+        return cap
+    return 1
+
+
+def i2v_supports_multi_identity(spec: Any) -> bool:
+    return i2v_max_identity_refs(spec) > 1
 
 
 @dataclass

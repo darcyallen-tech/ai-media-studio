@@ -117,12 +117,23 @@ def _control_options_vision(spec: Any) -> dict[str, Any]:
             if spec.default_duration in dur_choices
             else dur_choices[0]
         )
-        ar_choices = list(spec.aspect_choices or ()) or ["16:9"]
-        ar_value = (
-            spec.default_aspect
-            if spec.default_aspect in ar_choices
-            else ar_choices[0]
-        )
+        omit_ar = bool(getattr(spec, "omit_aspect_ratio", False))
+        if omit_ar:
+            from media_studio.vision_registry import ASPECT_FOLLOWS_STILL
+
+            ar_choices = [ASPECT_FOLLOWS_STILL]
+            ar_value = ASPECT_FOLLOWS_STILL
+            show_ar = True  # show disabled "Follows still"
+            ar_enabled = False
+        else:
+            ar_choices = list(spec.aspect_choices or ()) or ["16:9"]
+            ar_value = (
+                spec.default_aspect
+                if spec.default_aspect in ar_choices
+                else ar_choices[0]
+            )
+            show_ar = True
+            ar_enabled = True
         res_choices = list(spec.resolution_choices or ())
         show_res = bool(res_choices)
         res_value = (
@@ -148,7 +159,9 @@ def _control_options_vision(spec: Any) -> dict[str, Any]:
             "duration_api": True,
             "aspect_choices": ar_choices,
             "aspect_value": ar_value,
-            "aspect_visible": True,
+            "aspect_visible": show_ar,
+            "aspect_enabled": ar_enabled,
+            "aspect_follows_still": omit_ar,
             "strength_visible": False,
             "strength_value": 0.6,
             "generate_audio_visible": bool(getattr(spec, "supports_audio", False)),
@@ -296,15 +309,40 @@ def control_options(model_choice: str | None) -> dict[str, Any]:
             if spec.default_duration in dur_choices
             else (dur_choices[0] if dur_choices else "5")
         )
+        # No aspect_ratio param (e.g. FLUX 3 I2V) → show disabled "Follows still"
         show_ar = bool(spec.aspect_ratio_param)
-        if show_ar and spec.allowed_aspect_ratios:
+        ar_enabled = True
+        aspect_follows_still = False
+        ep_low = (getattr(spec, "endpoint", None) or "").lower()
+        flux3_i2v = (
+            "blackforestlabs/flux-3/image-to-video" in ep_low
+            and "first-last" not in ep_low
+        )
+        if not show_ar and (
+            flux3_i2v or getattr(spec, "task", "") == "image_to_video"
+        ):
+            # Prefer explicit follows-still for I2V models that derive frame from still
+            if flux3_i2v or not show_ar:
+                from media_studio.vision_registry import ASPECT_FOLLOWS_STILL
+
+                show_ar = True
+                ar_enabled = False
+                aspect_follows_still = True
+                ar_choices = [ASPECT_FOLLOWS_STILL]
+                ar_value = ASPECT_FOLLOWS_STILL
+            else:
+                ar_choices = [NONE]
+                ar_value = NONE
+        elif show_ar and spec.allowed_aspect_ratios:
             ar_choices = list(spec.allowed_aspect_ratios)
+            ar_value = NONE
         elif show_ar:
             ar_choices = ASPECT_COMMON
+            ar_value = NONE
         else:
             ar_choices = [NONE]
-        ar_value = NONE
-        if show_ar:
+            ar_value = NONE
+        if show_ar and ar_enabled:
             if (
                 spec.default_aspect_ratio
                 and spec.default_aspect_ratio in ar_choices
@@ -350,6 +388,8 @@ def control_options(model_choice: str | None) -> dict[str, Any]:
             "aspect_choices": ar_choices if show_ar else [NONE],
             "aspect_value": ar_value if show_ar else NONE,
             "aspect_visible": show_ar,
+            "aspect_enabled": ar_enabled if show_ar else False,
+            "aspect_follows_still": aspect_follows_still,
             "strength_visible": False,
             "strength_value": 0.8,
             "generate_audio_visible": show_gen_audio,
@@ -392,7 +432,16 @@ def build_parameters_dict(
         except (TypeError, ValueError):
             pass
     if aspect_ratio and aspect_ratio != NONE:
-        params["aspect_ratio"] = aspect_ratio
+        ar_l = str(aspect_ratio).strip().lower()
+        # Never pass UI sentinels that mean "omit" (FLUX 3 I2V / follows still)
+        if ar_l not in (
+            "follows still",
+            "auto (from start still)",
+            "auto (from ref still)",
+            "none",
+            "—",
+        ):
+            params["aspect_ratio"] = aspect_ratio
     if strength is not None:
         try:
             params["strength"] = float(strength)

@@ -78,7 +78,13 @@ class VisionModelSpec:
     # Max images per single fal call (T2I multi-variant). UI may request more
     # and vision_service will run sequential calls when needed.
     max_num_images: int = 1
+    # Never send aspect_ratio (e.g. FLUX 3 I2V — frame follows the still)
+    omit_aspect_ratio: bool = False
     extra_defaults: dict[str, Any] = field(default_factory=dict)
+
+
+# UI sentinel when aspect follows the still (disabled control)
+ASPECT_FOLLOWS_STILL = "Follows still"
 
 
 # UI batch cap for still multi-variant generate (Phase 2)
@@ -985,15 +991,16 @@ I2V_MODELS: dict[str, VisionModelSpec] = {
         cost_per_second_draft=0.06,
         notes=(
             "FLUX 3 I2V (BFL on fal) — animate a still with optional native audio. "
+            "Aspect follows the still (no aspect_ratio). "
+            "Start frame = layout lock; Character = identity ref (freer framing). "
             "5–20s or auto · 720p/1080p. Draft first → Enhance to full. "
             "Est. ~$0.17/s @720p · ~$0.29/s @1080p · draft ~$0.06/s."
         ),
         duration_choices=("auto",) + tuple(str(i) for i in range(5, 21)),
         default_duration="8",
-        aspect_choices=(
-            "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
-        ),
-        default_aspect="auto",
+        aspect_choices=(ASPECT_FOLLOWS_STILL,),
+        default_aspect=ASPECT_FOLLOWS_STILL,
+        omit_aspect_ratio=True,
         resolution_choices=("720p", "1080p"),
         default_resolution="720p",
         supports_audio=True,
@@ -1504,8 +1511,24 @@ def build_vision_arguments(
                     picked = str(a)
                     break
             args["resolution"] = picked or str(res)
-        if aspect and aspect not in ("", "—"):
-            args["aspect_ratio"] = aspect
+        # FLUX 3 I2V rejects aspect_ratio (even "auto") — frame follows still.
+        # T2V / first→last / extend may still accept aspect when not omit_aspect_ratio.
+        omit_ar = bool(getattr(spec, "omit_aspect_ratio", False)) or (
+            "image-to-video" in ep and "first-last" not in ep
+        )
+        if omit_ar:
+            args.pop("aspect_ratio", None)
+        elif aspect and aspect not in (
+            "",
+            "—",
+            "none",
+            ASPECT_FOLLOWS_STILL.lower(),
+            "follows still",
+        ):
+            # Skip UI sentinels
+            al = aspect.strip().lower()
+            if al not in ("follows still", "auto (from start still)"):
+                args["aspect_ratio"] = aspect
     elif is_grok_v:
         res = resolution or spec.default_resolution
         if res and spec.resolution_choices:

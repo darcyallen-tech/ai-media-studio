@@ -25,6 +25,7 @@ from media_studio.flux3_draft import (
     draft_endpoint_for,
     estimate_draft_cost_usd,
     model_supports_draft,
+    strip_omitted_aspect,
     strip_resolution_for_draft,
 )
 from media_studio.naming import job_media_dir, make_output_stem, timestamp_now, unique_path
@@ -226,6 +227,18 @@ def run_image_to_video(
         progress(f"Running DRAFT image-to-video on fal… ({endpoint})")
     else:
         progress("Running image-to-video on fal…")
+    # Hard omit aspect_ratio for FLUX 3 I2V full + draft (never send, even auto)
+    arguments = strip_omitted_aspect(arguments, endpoint=endpoint)
+    arguments = strip_omitted_aspect(
+        arguments, endpoint=getattr(spec, "endpoint", None)
+    )
+    if "aspect_ratio" in arguments and (
+        "flux-3/image-to-video" in (endpoint or "").lower()
+    ):
+        arguments.pop("aspect_ratio", None)
+        notes.append(
+            "aspect_ratio stripped before submit — FLUX 3 I2V/draft rejects it."
+        )
 
     t0 = time.perf_counter()
     try:

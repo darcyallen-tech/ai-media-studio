@@ -261,6 +261,71 @@ class StudioVideoView:
             expand=True,
         )
         self.aspect_dd.visible = bool(opts.get("aspect_visible", False))
+        try:
+            self.aspect_dd.disabled = not bool(opts.get("aspect_enabled", True))
+        except Exception:
+            pass
+        # Start frame vs Character identity ref(s)
+        # video_ref_path = Start / source frame (composition); _identity_refs = character stills
+        self._i2v_image_role = "start_frame"
+        self._still_from_character = False
+        self._identity_refs: list[str] = []  # character / identity stills
+        self._identity_from_char: set[str] = set()  # paths that came from Character picker
+        from media_studio.flet_character_picker import CharacterPicker
+
+        self.char_picker = CharacterPicker(
+            page,
+            on_select=self._on_character_picked,
+            on_clear=self._on_character_picker_clear,
+            label_text="Character (identity)",
+        )
+        self.char_picker.root.visible = False
+        self.identity_count_label = ft.Text(
+            "",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            visible=False,
+        )
+        self.btn_add_identity = ft.OutlinedButton(
+            content="Add character reference",
+            icon=ft.Icons.PERSON_ADD_ALT_1,
+            on_click=self._add_identity_ref_upload,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=34,
+            visible=False,
+            tooltip="Add another identity still (multi-ref models only)",
+        )
+        self.btn_use_char_as_start = ft.TextButton(
+            content="Use as start frame",
+            on_click=self._use_identity_as_start,
+            style=ft.ButtonStyle(color=ACCENT),
+            height=32,
+            visible=False,
+            tooltip="Copy the first character still into Start / source frame (layout lock)",
+        )
+        self.identity_list = ft.Column(spacing=4, tight=True, visible=False)
+        self.identity_hint = ft.Text(
+            "",
+            size=11,
+            color=TEXT_MUTED,
+            max_lines=3,
+            visible=False,
+        )
+        self.start_frame_hint = ft.Text(
+            "Composition opening frame — layout lock when set",
+            size=11,
+            color=TEXT_MUTED,
+            max_lines=2,
+        )
+        self.i2v_role_dd = styled_dropdown(
+            label_text="Still role (legacy)",
+            options=["Start frame", "Character / identity ref"],
+            value="Start frame",
+            on_select=self._on_i2v_role_change,
+            expand=True,
+        )
+        self.i2v_role_dd.visible = False  # slots replace the toggle; kept for safety
+        self.i2v_role_hint = ft.Text("", size=FONT_SM, color=TEXT_MUTED, visible=False)
         self.keep_audio = ft.Checkbox(
             label="Keep source audio",
             value=bool(opts.get("keep_audio_value", True)),
@@ -336,10 +401,11 @@ class StudioVideoView:
         self.state.on_keys_changed(self.apply_key_gates)
         self.apply_key_gates()
         self.btn_pick_ref = ft.OutlinedButton(
-            content="Upload ref",
+            content="Upload start",
             icon=ft.Icons.IMAGE,
             on_click=self._pick_ref,
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            tooltip="Start / source frame (composition — layout lock)",
         )
         self.btn_pick_vid = ft.OutlinedButton(
             content="Upload video",
@@ -362,11 +428,36 @@ class StudioVideoView:
         # Originating Image scenario for Received workspace prompt
         self._received_scenario_label: str | None = state.scenario_label
 
+        self.btn_clear_start = ft.TextButton(
+            content="Clear start",
+            on_click=self._clear_start_frame,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+            height=32,
+            visible=False,
+        )
         self._ref_col = ft.Column(
             [
-                label("Reference still", muted=True),
+                label("Start / source frame", muted=True),
+                self.start_frame_hint,
                 ft.Stack([self.ref_placeholder, self.ref_preview]),
-                self.btn_pick_ref,
+                ft.Row(
+                    [self.btn_pick_ref, self.btn_clear_start],
+                    spacing=4,
+                    wrap=True,
+                ),
+                ft.Divider(height=1, color=BORDER),
+                label("Character / identity ref", muted=True),
+                self.identity_hint,
+                self.char_picker.root,
+                self.identity_count_label,
+                self.identity_list,
+                ft.Row(
+                    [self.btn_add_identity, self.btn_use_char_as_start],
+                    spacing=4,
+                    wrap=True,
+                ),
+                self.i2v_role_dd,
+                self.i2v_role_hint,
             ],
             spacing=4,
             tight=True,
@@ -465,6 +556,10 @@ class StudioVideoView:
             self.btn_pick_end.visible = show_end
         except Exception:
             pass
+        try:
+            self._sync_i2v_role_ui()
+        except Exception:
+            pass
 
         # Native stereo note for H3
         try:
@@ -549,6 +644,15 @@ class StudioVideoView:
         self.aspect_dd.options = [ft.DropdownOption(key=x, text=x) for x in ar_choices]
         self.aspect_dd.value = opts.get("aspect_value") or ar_choices[0]
         self.aspect_dd.visible = bool(opts.get("aspect_visible", False))
+        try:
+            self.aspect_dd.disabled = not bool(opts.get("aspect_enabled", True))
+            if opts.get("aspect_follows_still"):
+                self.aspect_dd.label = "Aspect (follows still)"
+            else:
+                self.aspect_dd.label = "Aspect ratio"
+        except Exception:
+            pass
+        self._sync_i2v_role_ui()
         self.keep_audio.value = bool(opts.get("keep_audio_value", True))
         self.keep_audio.visible = bool(opts.get("keep_audio_visible", True))
         # Native stereo models (H3): no generate_audio toggle
@@ -1164,16 +1268,281 @@ class StudioVideoView:
                 start = max(0.0, float(self.start_time.value or 0))
             except (TypeError, ValueError):
                 start = 0.0
+        # Omit aspect when control is disabled / Follows still (FLUX 3 I2V)
+        ar = _dd_value(self.aspect_dd)
+        if getattr(self.aspect_dd, "disabled", False) or (
+            ar and str(ar).strip().lower() in ("follows still", "—", "none")
+        ):
+            ar = None
+        extra: dict[str, Any] = {}
+        has_start = bool(
+            self.state.video_ref_path and Path(str(self.state.video_ref_path)).is_file()
+        )
+        has_id = bool(self._identity_refs)
+        if has_start:
+            extra["image_role"] = "start_frame"
+        elif has_id:
+            extra["image_role"] = "identity_ref"
+        elif self._flux3_i2v_active():
+            extra["image_role"] = self._i2v_image_role or "start_frame"
         return parameters_to_json(
             build_parameters_dict(
                 duration=_dd_value(self.dur_dd),
                 resolution=_dd_value(self.res_dd),
-                aspect_ratio=_dd_value(self.aspect_dd),
+                aspect_ratio=ar,
                 keep_audio=bool(self.keep_audio.value),
                 generate_audio=bool(self.gen_audio.value),
                 start_time=start,
+                extra=extra or None,
             )
         )
+
+    def _flux3_i2v_active(self) -> bool:
+        try:
+            from media_studio.flux3_draft import is_flux3_i2v_model_choice
+            from media_studio.studio_modality import normalize_video_modality
+
+            model = _dd_value(self.model_dd) or ""
+            modality = normalize_video_modality(getattr(self, "_modality", "i2v"))
+            return modality == "i2v" and is_flux3_i2v_model_choice(model)
+        except Exception:
+            return False
+
+    def _current_i2v_spec(self) -> Any:
+        try:
+            return resolve_video_model(_dd_value(self.model_dd))
+        except Exception:
+            return None
+
+    def _identity_cap(self) -> int:
+        from media_studio.flux3_draft import i2v_max_identity_refs
+
+        return i2v_max_identity_refs(self._current_i2v_spec())
+
+    def _sync_i2v_role_ui(self) -> None:
+        """Refresh Start vs Character slots + multi-ref Add for I2V/R2V."""
+        from media_studio.flux3_draft import (
+            i2v_supports_multi_identity,
+            is_flux3_i2v_model_choice,
+        )
+        from media_studio.studio_modality import normalize_video_modality
+
+        modality = normalize_video_modality(getattr(self, "_modality", "i2v"))
+        show_id = modality in ("i2v", "r2v")
+        flux3 = self._flux3_i2v_active()
+        cap = self._identity_cap() if show_id else 1
+        multi = show_id and i2v_supports_multi_identity(self._current_i2v_spec())
+        n = len(self._identity_refs)
+
+        try:
+            self.char_picker.root.visible = show_id
+            if show_id:
+                self.char_picker.refresh()
+        except Exception:
+            pass
+
+        self.identity_hint.visible = show_id
+        self.identity_count_label.visible = show_id
+        self.identity_list.visible = show_id and n > 0
+        self.btn_use_char_as_start.visible = show_id and n > 0
+        self.btn_clear_start.visible = bool(
+            self.state.video_ref_path and Path(str(self.state.video_ref_path)).is_file()
+        )
+
+        if flux3:
+            self.identity_hint.value = (
+                "Likeness only (single ref). FLUX 3 has no multi character-element API — "
+                "for multiple people, composite a still first or use Director · Keyframe Take."
+            )
+            self.btn_add_identity.visible = False
+            self.btn_add_identity.tooltip = (
+                "FLUX 3 I2V is single identity ref only. Use Keyframe Take or a composite still."
+            )
+            self.identity_count_label.value = f"{min(n, 1)} / 1 ref" if show_id else ""
+        elif show_id:
+            self.identity_hint.value = (
+                "Likeness only — freer framing (not a locked opening frame). "
+                + ("Multi-ref: add more characters below." if multi else "Single identity ref.")
+            )
+            self.btn_add_identity.visible = multi and n < cap
+            self.btn_add_identity.tooltip = (
+                f"Add another identity still (max {cap})"
+                if multi
+                else "This model allows one identity ref"
+            )
+            self.identity_count_label.value = f"{n} / {cap} refs"
+        else:
+            self.identity_hint.value = ""
+            self.btn_add_identity.visible = False
+            self.identity_count_label.value = ""
+
+        self._rebuild_identity_list_ui()
+        # Derive role from slots
+        has_start = bool(
+            self.state.video_ref_path and Path(str(self.state.video_ref_path)).is_file()
+        )
+        if has_start:
+            self._i2v_image_role = "start_frame"
+        elif n > 0:
+            self._i2v_image_role = "identity_ref"
+        model = _dd_value(self.model_dd) or ""
+        if is_flux3_i2v_model_choice(model) and modality == "i2v" and not multi:
+            # Best For already notes single identity
+            pass
+
+    def _rebuild_identity_list_ui(self) -> None:
+        self.identity_list.controls.clear()
+        for i, path in enumerate(list(self._identity_refs)):
+            name = Path(path).name if path else f"Ref {i + 1}"
+            thumb = ft.Image(
+                src=path if path and Path(path).is_file() else "",
+                width=48,
+                height=36,
+                fit=ft.BoxFit.COVER,
+                border_radius=4,
+                visible=bool(path and Path(path).is_file()),
+            )
+            row = ft.Row(
+                [
+                    thumb,
+                    ft.Text(
+                        f"Char {i + 1}: {name}",
+                        size=FONT_SM,
+                        color=TEXT,
+                        expand=True,
+                        max_lines=1,
+                    ),
+                    ft.IconButton(
+                        icon=ft.Icons.CLOSE,
+                        icon_size=16,
+                        tooltip="Remove",
+                        on_click=self._make_remove_identity(i),
+                    ),
+                ],
+                spacing=6,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            )
+            self.identity_list.controls.append(row)
+
+    def _make_remove_identity(self, index: int):
+        async def _click(_e: ft.ControlEvent) -> None:
+            if 0 <= index < len(self._identity_refs):
+                gone = self._identity_refs.pop(index)
+                self._identity_from_char.discard(gone)
+            self._sync_i2v_role_ui()
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click
+
+    def _add_identity_path(self, path: str, *, from_character: bool = False) -> None:
+        p = str(Path(path).resolve())
+        if not Path(p).is_file():
+            return
+        cap = self._identity_cap()
+        if p in self._identity_refs:
+            return
+        if len(self._identity_refs) >= cap:
+            # Replace last or first when at cap of 1
+            if cap == 1:
+                self._identity_refs = [p]
+            else:
+                self.status_text.value = f"Max {cap} identity refs for this model."
+                return
+        else:
+            self._identity_refs.append(p)
+        if from_character:
+            self._identity_from_char.add(p)
+        self._still_from_character = from_character
+        self._i2v_image_role = (
+            "start_frame"
+            if (
+                self.state.video_ref_path
+                and Path(str(self.state.video_ref_path)).is_file()
+            )
+            else "identity_ref"
+        )
+
+    async def _add_identity_ref_upload(self, e: ft.ControlEvent | None = None) -> None:
+        try:
+            files = await pick_image(self.page, dialog_title="Character identity still")
+        except Exception as exc:
+            self.status_text.value = f"Picker error: {exc}"
+            self.page.update()
+            return
+        if not files or not files[0].path:
+            return
+        self._add_identity_path(files[0].path, from_character=False)
+        self._sync_i2v_role_ui()
+        self.status_text.value = f"Identity ref: {Path(files[0].path).name}"
+        self.page.update()
+
+    async def _use_identity_as_start(self, e: ft.ControlEvent | None = None) -> None:
+        """Explicit: copy first character still into Start / source frame."""
+        if not self._identity_refs:
+            self.status_text.value = "Add a character ref first."
+            self.page.update()
+            return
+        self._set_start_frame(self._identity_refs[0])
+        self._i2v_image_role = "start_frame"
+        self._sync_i2v_role_ui()
+        self.status_text.value = (
+            f"Start frame ← character still: {Path(self._identity_refs[0]).name}"
+        )
+        self.page.update()
+
+    async def _clear_start_frame(self, e: ft.ControlEvent | None = None) -> None:
+        self.state.video_ref_path = None
+        self.ref_preview.src = ""
+        self.ref_preview.visible = False
+        self.ref_placeholder.visible = True
+        if self._identity_refs:
+            self._i2v_image_role = "identity_ref"
+        self._sync_i2v_role_ui()
+        self._refresh_cost_job()
+        self.page.update()
+
+    async def _on_i2v_role_change(self, e: ft.ControlEvent | None = None) -> None:
+        val = (_dd_value(self.i2v_role_dd) or "Start frame").strip().lower()
+        if "character" in val or "identity" in val:
+            self._i2v_image_role = "identity_ref"
+        else:
+            self._i2v_image_role = "start_frame"
+            self._still_from_character = False
+        self._sync_i2v_role_ui()
+        self._refresh_cost_job()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _on_character_picked(self, path: str, choice: Any) -> None:
+        """Character picker → always identity-ref slot (never silent start frame)."""
+        label = getattr(choice, "label", None) or Path(path).name
+        self._add_identity_path(path, from_character=True)
+        self._sync_i2v_role_ui()
+        self.status_text.value = f"Character identity: {label}"
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _on_character_picker_clear(self) -> None:
+        self._still_from_character = False
+
+    def _set_start_frame(self, path: str) -> None:
+        p = str(Path(path).resolve())
+        self.state.video_ref_path = p
+        self.ref_preview.src = p
+        self.ref_preview.visible = True
+        self.ref_placeholder.visible = False
+        self.btn_clear_start.visible = True
+
+    def _set_ref_still(self, path: str) -> None:
+        """Legacy: set start frame still."""
+        self._set_start_frame(path)
 
     def _estimate(self) -> str:
         model = _dd_value(self.model_dd) or DEFAULT_VIDEO_EDIT_MODEL
@@ -1265,6 +1634,15 @@ class StudioVideoView:
             ]
             self.aspect_dd.value = opts.get("aspect_value") or ar_choices[0]
             self.aspect_dd.visible = bool(opts.get("aspect_visible", False))
+            try:
+                self.aspect_dd.disabled = not bool(opts.get("aspect_enabled", True))
+                if opts.get("aspect_follows_still"):
+                    self.aspect_dd.label = "Aspect (follows still)"
+                else:
+                    self.aspect_dd.label = "Aspect ratio"
+            except Exception:
+                pass
+            self._sync_i2v_role_ui()
             self.keep_audio.value = bool(opts.get("keep_audio_value", True))
             self.keep_audio.visible = bool(opts.get("keep_audio_visible", True))
             self.gen_audio.value = bool(opts.get("generate_audio_value", False))
@@ -1277,7 +1655,9 @@ class StudioVideoView:
 
     async def _pick_ref(self, e: ft.ControlEvent) -> None:
         try:
-            files = await pick_image(self.page, dialog_title="Reference still")
+            files = await pick_image(
+                self.page, dialog_title="Start / source frame (composition)"
+            )
         except Exception as exc:
             self.status_text.value = f"Picker error: {exc}"
             self.page.update()
@@ -1285,12 +1665,12 @@ class StudioVideoView:
         if not files or not files[0].path:
             return
         path = str(Path(files[0].path).resolve())
-        self.state.video_ref_path = path
-        self.ref_preview.src = path
-        self.ref_preview.visible = True
-        self.ref_placeholder.visible = False
+        self._set_start_frame(path)
+        self._still_from_character = False
+        self._i2v_image_role = "start_frame"
+        self._sync_i2v_role_ui()
         self._refresh_cost_job()
-        self.status_text.value = f"Reference: {Path(path).name}"
+        self.status_text.value = f"Start frame: {Path(path).name}"
         self.page.update()
 
     async def _pick_video(self, e: ft.ControlEvent) -> None:
@@ -1365,6 +1745,12 @@ class StudioVideoView:
                 and self.draft_first.visible
                 and self.draft_first.value
             )
+            has_id = bool(self._identity_refs)
+            role = (
+                "start_frame"
+                if has_still
+                else ("identity_ref" if has_id else self._i2v_image_role)
+            )
             snap: dict[str, Any] = {
                 "workspace": "studio_video",
                 "modality": modality,
@@ -1372,13 +1758,30 @@ class StudioVideoView:
                 "has_end_still": has_end,
                 "has_source_video": has_clip and modality in ("v2v", "r2v"),
                 "draft_first": draft_on,
+                "identity_ref_count": len(self._identity_refs),
             }
             # FLUX 3 Video — full crash course injected in enhance_prompt; set flags here
             try:
-                from media_studio.flux3_draft import is_flux3_video_model_choice
+                from media_studio.flux3_draft import (
+                    is_flux3_i2v_model_choice,
+                    is_flux3_video_model_choice,
+                )
 
                 if is_flux3_video_model_choice(model):
                     snap["model_prompt_brief"] = "flux3_video"
+                    if is_flux3_i2v_model_choice(model) and modality == "i2v":
+                        snap["image_role"] = role or "start_frame"
+                        snap["i2v_image_role"] = snap["image_role"]
+                if has_id and len(self._identity_refs) > 1:
+                    snap["guidance_extra"] = (
+                        "Multiple character identity refs attached — name them in the "
+                        "rewrite as character from ref 1, ref 2, … for likeness; "
+                        + (
+                            "start frame is present → layout lock the opening plate; "
+                            if has_still
+                            else "no start frame → identity only, no layout lock. "
+                        )
+                    )
                     # Modality mapping for flux3_enhance_mode_hint
                     if modality == "t2v":
                         snap["modality"] = "t2v"
@@ -1654,10 +2057,10 @@ class StudioVideoView:
                 self.page.update()
                 return
         elif modality == "i2v":
-            if not has_still:
+            has_id = bool(self._identity_refs)
+            if not has_still and not has_id:
                 self.status_text.value = (
-                    "I2V needs a start still — upload a reference image "
-                    "or send a still from Studio Image."
+                    "I2V needs a Start / source frame and/or Character identity ref."
                 )
                 self.page.update()
                 return
@@ -1815,16 +2218,49 @@ class StudioVideoView:
                 # I2V: still only (optional clip ignored unless R2V)
                 # V2V: clip required; still optional ref
                 # R2V: still and/or clip (clip → motion ref for H3 omni)
-                img = self.state.video_ref_path if has_still else None
+                # Start frame preferred as primary; identity refs as extras (multi-ref)
+                # Identity-only → first character still as primary + identity role
+                id_refs = [
+                    p
+                    for p in self._identity_refs
+                    if p and Path(p).is_file()
+                ]
+                img = None
+                extras: list[str] = []
+                if has_still:
+                    img = self.state.video_ref_path
+                    extras = [
+                        p
+                        for p in id_refs
+                        if Path(p).resolve()
+                        != Path(str(self.state.video_ref_path)).resolve()
+                    ]
+                elif id_refs:
+                    img = id_refs[0]
+                    extras = id_refs[1:]
                 vid = None
                 if modality == "v2v" and has_clip:
                     vid = self.state.video_source_path
                 elif modality == "r2v" and has_clip:
                     vid = self.state.video_source_path
+                # Multi-ref prompt naming for enhance-style models
+                gen_prompt = prompt
+                if extras and "ref 1" not in prompt.lower() and "image 1" not in prompt.lower():
+                    n_all = 1 + len(extras)
+                    if n_all > 1 and (
+                        "seedance" in (model or "").lower()
+                        or "reference" in (model or "").lower()
+                        or "grok" in (model or "").lower()
+                    ):
+                        tags = ", ".join(f"character from ref {i}" for i in range(1, n_all + 1))
+                        gen_prompt = (
+                            gen_prompt.rstrip(".")
+                            + f". Use {tags} for identity/likeness as ordered stills."
+                        )
                 result = await to_thread_with_job(
                     self.state,
                     generate,
-                    prompt=prompt,
+                    prompt=gen_prompt,
                     model_choice=model,
                     image_file=img,
                     video_file=vid,
@@ -1832,6 +2268,7 @@ class StudioVideoView:
                     parameters_json=params_json,
                     on_progress=on_progress,
                     scenario=scenario_key,
+                    extra_image_files=extras or None,
                 )
             if result.ok and result.video_path:
                 vp = result.video_path

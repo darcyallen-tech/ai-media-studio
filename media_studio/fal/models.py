@@ -1252,11 +1252,10 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
         resolution_param="resolution",
         allowed_resolutions=("720p", "1080p"),
         default_resolution="720p",
-        aspect_ratio_param="aspect_ratio",
-        allowed_aspect_ratios=(
-            "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
-        ),
-        default_aspect_ratio="auto",
+        # API rejects aspect_ratio (even "auto") — frame follows the still
+        aspect_ratio_param=None,
+        allowed_aspect_ratios=(),
+        default_aspect_ratio=None,
         cost_per_second=0.17,
         cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
         extra_defaults={"safety_tolerance": 2},
@@ -1265,6 +1264,8 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
         cost_per_second_draft=0.06,
         notes=(
             "FLUX 3 I2V (BFL on fal) — animate a still with native audio. "
+            "Aspect follows the still (do not send aspect_ratio). "
+            "Start frame = layout lock; Character = identity ref (freer framing). "
             "5–20s or auto · 720p/1080p · generate_audio default on. "
             "Optional Draft first → Enhance to full. "
             "Est. ~$0.17/s @720p · ~$0.29/s @1080p · draft ~$0.06/s (ballpark)."
@@ -2298,34 +2299,83 @@ def build_i2v_arguments(
                 res = "2K"
             args[spec.resolution_param] = res
 
-    if spec.aspect_ratio_param:
+    # Never send aspect_ratio when the model has no param (e.g. FLUX 3 I2V)
+    # or when the endpoint is known to reject it (even "auto").
+    ep_low = (spec.endpoint or "").lower()
+    flux3_i2v_ep = (
+        "blackforestlabs/flux-3/image-to-video" in ep_low
+        and "first-last" not in ep_low
+    )
+    omit_aspect = (not spec.aspect_ratio_param) or flux3_i2v_ep
+    if omit_aspect:
+        args.pop("aspect_ratio", None)
+        if params.get("aspect_ratio") or other.get("aspect_ratio") or flux3_i2v_ep:
+            notes.append(
+                "aspect_ratio omitted — FLUX 3 I2V follows the still "
+                "(do not send aspect_ratio, not even auto)."
+                if flux3_i2v_ep
+                else "aspect_ratio omitted (follows still)."
+            )
+    elif spec.aspect_ratio_param:
         ar_req = params.get("aspect_ratio")
         if ar_req is None:
             ar_req = other.get("aspect_ratio")
         if ar_req is None:
             ar_req = spec.default_aspect_ratio
         ar_low = str(ar_req or "").strip().lower()
-        allowed_low = {a.lower() for a in (spec.allowed_aspect_ratios or ())}
-        # Seedance "auto" / H3 "adaptive"
-        if ar_low in ("auto", "adaptive") and ar_low in allowed_low:
-            # Preserve API casing from allowed list
-            for a in spec.allowed_aspect_ratios or ():
-                if a.lower() == ar_low:
-                    args[spec.aspect_ratio_param] = a
-                    break
-            else:
-                args[spec.aspect_ratio_param] = ar_req
+        # UI sentinels that mean "do not send"
+        if ar_low in (
+            "follows still",
+            "auto (from start still)",
+            "auto (from ref still)",
+            "—",
+            "none",
+            "",
+        ):
+            notes.append("aspect_ratio omitted (follows still).")
         else:
-            _apply_aspect_ratio_arg(
-                args,
-                notes,
-                param_name=spec.aspect_ratio_param,
-                requested=ar_req,
-                allowed=spec.allowed_aspect_ratios,
-                default=spec.default_aspect_ratio or "1:1",
-                source_image=None,
-                resolution_hint=None,
+            allowed_low = {a.lower() for a in (spec.allowed_aspect_ratios or ())}
+            # Seedance "auto" / H3 "adaptive"
+            if ar_low in ("auto", "adaptive") and ar_low in allowed_low:
+                for a in spec.allowed_aspect_ratios or ():
+                    if a.lower() == ar_low:
+                        args[spec.aspect_ratio_param] = a
+                        break
+                else:
+                    args[spec.aspect_ratio_param] = ar_req
+            else:
+                _apply_aspect_ratio_arg(
+                    args,
+                    notes,
+                    param_name=spec.aspect_ratio_param,
+                    requested=ar_req,
+                    allowed=spec.allowed_aspect_ratios,
+                    default=spec.default_aspect_ratio or "1:1",
+                    source_image=None,
+                    resolution_hint=None,
+                )
+
+    # Image role: start_frame (layout lock) vs identity_ref (likeness only)
+    image_role = (
+        params.get("image_role")
+        or other.get("image_role")
+        or params.get("i2v_image_role")
+        or other.get("i2v_image_role")
+        or "start_frame"
+    )
+    role_low = str(image_role or "start_frame").strip().lower()
+    if role_low in ("identity", "identity_ref", "character", "character_ref"):
+        notes.append("I2V image role: character / identity ref (freer framing).")
+        p = (args.get("prompt") or "").strip()
+        if p and "identity" not in p.lower() and "likeness" not in p.lower():
+            args["prompt"] = (
+                p.rstrip(".")
+                + ". Use the reference image for character likeness / identity only; "
+                "freer framing and action — do not treat the plate as a locked "
+                "opening frame or preserve exact composition."
             )
+    elif role_low in ("start", "start_frame", "first_frame", "layout"):
+        notes.append("I2V image role: start frame (layout lock).")
 
     end = params.get("end_image_url") or other.get("end_image_url")
     end_ok = bool(

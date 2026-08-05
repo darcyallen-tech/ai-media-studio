@@ -259,17 +259,18 @@ _BEST_FOR: dict[str, BestFor] = {
         "Est. ~$0.17/s @720p · ~$0.29/s @1080p.",
     ),
     "flux 3 i2v": BestFor(
-        "animate a still, full quality + optional audio",
-        "FLUX 3 image-to-video from a start still. 5–20s · 720p/1080p · "
-        "generate_audio toggle. Est. ~$0.17/s @720p · ~$0.29/s @1080p.",
+        "Start frame locks layout; single identity ref (no multi-char API)",
+        "FLUX 3 I2V — Start/source frame = layout lock; Character = single identity "
+        "ref (freer action). No multi character-element — use Keyframe Take or composite. "
+        "Aspect follows still (never send aspect_ratio, draft too). 5–20s · 720p/1080p.",
     ),
     "video · flux 3 – image-to-video": BestFor(
-        "animate a still, full quality + optional audio",
-        "FLUX 3 image-to-video from a start still. 5–20s · 720p/1080p.",
+        "Start frame locks layout; single identity ref (no multi-char API)",
+        "FLUX 3 I2V — Start vs Character slots; aspect follows still; draft omits aspect.",
     ),
     "flux 3 · image→video": BestFor(
-        "animate a still, full quality + optional audio",
-        "FLUX 3 image-to-video from a start still. 5–20s · 720p/1080p.",
+        "Start frame locks layout; single identity ref (no multi-char API)",
+        "FLUX 3 I2V — Start vs Character slots; aspect follows still; draft omits aspect.",
     ),
     "flux 3 first last": BestFor(
         "day→night / porch→interior first→last bridge",

@@ -336,13 +336,19 @@ Secondary workspaces: Received, Blank Canvas, Camera Lock (map → I2V / V2V)
 - Grok Imagine 1.5: 1–15s · 480p–1080p; native audio; ~$0.08–0.25/s + $0.01/ref
 - FLUX 3 (BFL on fal): 5–20s (or auto) · 720p/1080p · optional native audio ·
   ~$0.17/s @720p · ~$0.29/s @1080p; First→Last requires start + end stills
+- FLUX 3 I2V **aspect hard-omit** (full + draft): never posts aspect_ratio — UI
+  **Follows still** (disabled)
+- Creative Vision **Character-first multi-ref** (H3 Omni + multi I2V): Character 1
+  library → Image 1 identity; **Add character** → 2…n; counter Characters n/max;
+  optional Start frame + props; Advanced Omni (video/audio/style) collapsed by
+  default; Character never silent Start; FLUX 3 single identity only
 - FLUX 3 **Draft first** → cheaper `/draft` preview + **Enhance to full** via
   `draft-enhance` (draft_cache); cost labels show draft vs full; est. draft ~$0.06/s
 - Video results (Studio / Vision / Director): **Send to ▾ → Video Upscale** (plus
   Resolve / folder / Tools flyout)
 - **Enhance (Grok)** for FLUX 3 Video: format-first continuous-take brief (layout lock
-  for I2V, audio first-class, setup→turn→payoff, constraints as positives) — not Kling
-  multi_prompt; locked model stays FLUX 3
+  only for Start-frame I2V; identity-ref skips exact framing; audio first-class,
+  setup→turn→payoff) — not Kling multi_prompt; locked model stays FLUX 3
 - Grok Enhance on video prompts (modality-aware citations for R2V / first–last I2V)
 - Duration / resolution guidance, cost estimate (job total)
 - Export: Show in folder, Send to Resolve, Library

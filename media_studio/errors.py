@@ -365,11 +365,17 @@ def friendly_error(
             if prefix and not raw.startswith(prefix.rstrip(": ")):
                 return f"{prefix}{raw}"
             return raw or f"{prefix}Aspect ratio not accepted by this model."
+        if "flux" in low or "flux-3" in low or "blackforest" in low:
+            return (
+                f"{prefix}Aspect ratio not accepted. FLUX 3 I2V follows the still — "
+                "do not send aspect_ratio (not even auto). Hide Aspect / use "
+                "“Follows still”, then retry."
+            )
         return (
             f"{prefix}Aspect ratio not accepted by this model. "
-            "For Kling multi-shot with a start still, aspect follows the still "
-            "(do not send aspect_ratio). For pure text multi-shot use exactly "
-            "16:9, 9:16, or 1:1. Pick a listed ratio or Auto, then retry."
+            "For Kling multi-shot or FLUX 3 I2V with a start still, aspect follows "
+            "the still (do not send aspect_ratio). For pure text multi-shot use "
+            "exactly 16:9, 9:16, or 1:1. Pick a listed ratio or Auto, then retry."
         )
     if any(x in low for x in ("invalid resolution", "resolution", "unsupported size")) and (
         "422" in low or "enum" in low or "allowed" in low or "must be" in low

@@ -215,12 +215,10 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         max_duration_s=20,
         allowed_durations=tuple(range(5, 21)),
         default_duration_s=8,
-        aspect_choices=(
-            "auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16",
-        ),
-        default_aspect="auto",
-        aspect_param="aspect_ratio",
-        i2v_accepts_aspect=True,
+        aspect_choices=(ASPECT_AUTO_FROM_STILL,),
+        default_aspect=ASPECT_AUTO_FROM_STILL,
+        aspect_param=None,  # FLUX 3 I2V rejects aspect_ratio (even auto)
+        i2v_accepts_aspect=False,
         i2v_image_param="image_url",
         cost_per_second=0.17,
         cost_per_second_audio=None,  # audio included in base ballpark (toggle only)
@@ -239,8 +237,9 @@ DIRECTOR_MODELS: dict[str, DirectorModelSpec] = {
         shot_max_s=20,
         notes=(
             "FLUX 3 continuous I2V — one take from a character/start still + brief. "
-            "Not multi_prompt cuts (use Kling for that). 5–20s · 720p/1080p · "
-            "optional native audio. Est. ~$0.17/s @720p · ~$0.29/s @1080p."
+            "Aspect follows the still (no aspect_ratio). Not multi_prompt cuts "
+            "(use Kling for that). 5–20s · 720p/1080p · optional native audio. "
+            "Est. ~$0.17/s @720p · ~$0.29/s @1080p."
         ),
     ),
     "flux 3 first last director": DirectorModelSpec(
@@ -1709,14 +1708,27 @@ def build_flux3_director_arguments(
         }
 
     has_start = bool(start)
-    ar, ar_note = resolve_director_aspect_for_api(
-        spec, aspect_ratio, has_start_image=has_start
+    # FLUX 3 pure I2V never accepts aspect_ratio (even auto)
+    ep_check = (endpoint or "").lower()
+    flux3_i2v_no_ar = (
+        "blackforestlabs/flux-3/image-to-video" in ep_check
+        and "first-last" not in ep_check
     )
-    if ar and (spec.aspect_param or "aspect_ratio"):
-        # FLUX accepts "auto" and colon ratios
-        args[spec.aspect_param or "aspect_ratio"] = ar
-    if ar_note:
-        args["_aspect_note"] = ar_note
+    if flux3_i2v_no_ar or not getattr(spec, "aspect_param", None):
+        args.pop("aspect_ratio", None)
+        if flux3_i2v_no_ar:
+            args["_aspect_note"] = (
+                "aspect_ratio omitted — FLUX 3 I2V follows the still "
+                "(do not send aspect_ratio, not even auto)."
+            )
+    else:
+        ar, ar_note = resolve_director_aspect_for_api(
+            spec, aspect_ratio, has_start_image=has_start
+        )
+        if ar and (spec.aspect_param or "aspect_ratio"):
+            args[spec.aspect_param or "aspect_ratio"] = ar
+        if ar_note:
+            args["_aspect_note"] = ar_note
     return endpoint, args
 
 

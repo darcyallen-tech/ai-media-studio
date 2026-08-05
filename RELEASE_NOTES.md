@@ -12,6 +12,21 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### Creative Vision — Character-first multi-ref (H3 Omni + multi I2V)
+- **Default**: Character 1 dropdown → identity (Image 1); **Add character** → Character 2… with **Characters n / max**
+- Optional **Start / source frame** (layout lock) separate; optional **Add prop / object**
+- Character picker never silent-fills Start unless **Use Character 1 as start frame**
+- **Advanced refs (video / audio / style)** collapsed by default (no 0/9 omni noise)
+- Enhance rewrites Character 1/2 → Image 1/2 (model citation style)
+- FLUX 3: single character only; multi Add on H3 Omni / Seedance / multi-ref models
+
+### FLUX 3 I2V — aspect hard-omit + Start vs Character slots
+- **Aspect hard-omit**: `image-to-video` + `/draft` never post `aspect_ratio` (not auto); UI **Follows still** disabled; draft strip matches full
+- **Slots**: **Start / source frame** (layout lock) vs **Character / identity ref(s)** — Character picker never silent-starts as start frame
+- **Add character reference** on multi-ref models (Seedance reference, Grok R2V, …) with `n / max` counter; FLUX 3 stays single identity (tooltip → Keyframe Take / composite)
+- Enhance: multi-ref names “character from ref 1…”, layout lock only when Start frame present
+- Regression: Seedance/other models that need aspect still receive it
+
 ### Scene Placer (Character into Scene + pose)
 - Focused workspace under **Characters** (not a new top-level tab): **Scene Placer** button + card **Place in scene**
 - **Scenes** handoff: top **Scene Placer** + card **Place character** (prefill plate)

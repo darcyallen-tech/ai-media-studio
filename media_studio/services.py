@@ -186,6 +186,11 @@ def _build_enhance_user_message(
                 or extra.get("vision_notes")
                 or extra.get("creative_direction_for_enhance")
             )
+            image_role = (
+                extra.get("image_role")
+                or extra.get("i2v_image_role")
+                or extra.get("still_role")
+            )
             # Replace generic guidance with FLUX 3 brief (keep other extra keys)
             extra["guidance"] = flux3_video_enhance_guidance(
                 modality=modality,
@@ -195,12 +200,22 @@ def _build_enhance_user_message(
                 draft_mode=draft_mode,
                 creative_direction=str(creative) if creative else None,
                 lean=lean,
+                image_role=str(image_role) if image_role else None,
             )
             extra["model_prompt_brief"] = "flux3_video"
+            role_bit = ""
+            if image_role:
+                role_bit = (
+                    " Identity-ref I2V: no layout lock / exact framing. "
+                    if str(image_role).lower()
+                    in ("identity", "identity_ref", "character", "character_ref")
+                    else " Start-frame I2V: layout lock then action. "
+                )
             instructions += (
                 " CRITICAL: Target is FLUX 3 Video. Apply the FLUX 3 Video crash course "
-                "in guidance fully. Format first; continuous take; layout lock for I2V; "
-                "audio first-class; setup→turn→payoff for longer clips. "
+                "in guidance fully. Format first; continuous take;"
+                + role_bit
+                + "audio first-class; setup→turn→payoff for longer clips. "
                 "Do NOT use Kling multi_prompt / multi-shot cut syntax. "
                 "Do NOT switch away from the locked FLUX 3 model."
             )

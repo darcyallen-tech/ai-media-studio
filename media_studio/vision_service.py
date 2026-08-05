@@ -349,16 +349,24 @@ def run_vision(
             )
             endpoint_for_run = spec.endpoint
             model_key_for_result = spec.key
-            # FLUX 3 draft: switch endpoint + drop resolution
+            # FLUX 3 draft: switch endpoint + drop resolution (+ aspect on I2V draft)
             if draft and getattr(spec, "draft_endpoint", None):
                 from media_studio.flux3_draft import (
                     estimate_draft_cost_usd,
+                    strip_omitted_aspect,
                     strip_resolution_for_draft,
                 )
                 from media_studio.vision_registry import duration_seconds
 
                 endpoint_for_run = str(spec.draft_endpoint)
                 arguments = strip_resolution_for_draft(arguments)
+                arguments = strip_omitted_aspect(
+                    arguments, endpoint=endpoint_for_run
+                )
+                # Also strip if full endpoint omits (spec-level) even if draft URL differs
+                arguments = strip_omitted_aspect(
+                    arguments, endpoint=getattr(spec, "endpoint", None)
+                )
                 dur_s = duration_seconds(duration or spec.default_duration)
                 draft_est = estimate_draft_cost_usd(spec, duration_s=dur_s)
                 if draft_est is not None:
@@ -367,6 +375,16 @@ def run_vision(
                 progress(f"Draft cost · {est_lbl}")
             elif draft:
                 progress("Draft not available for this model — full quality.")
+            else:
+                # Full quality: still hard-omit aspect for FLUX 3 I2V
+                try:
+                    from media_studio.flux3_draft import strip_omitted_aspect
+
+                    arguments = strip_omitted_aspect(
+                        arguments, endpoint=endpoint_for_run
+                    )
+                except Exception:
+                    pass
     except ValueError as exc:
         return VisionResult(
             ok=False,

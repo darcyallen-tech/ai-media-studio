@@ -26,11 +26,14 @@ to Kling multi-shot, Grok Imagine, Seedance, Flux 2 image edit, or other familie
    - action sounds (cape whoosh, footsteps, mic handling, fabric, impacts)
    If generate_audio / native audio is on or implied, make the bed and hits concrete.
 
-5. **I2V / still-locked** (when a start still or first frame is present):
-   - Explicit **layout lock**: preserve frame, architecture, character positions, scale,
-     and camera angle from the source still
-   - Then **action only** — what changes over time (gesture, wind, walk, fly, light)
-   - Never re-describe the whole scene as if inventing a new still from scratch
+5. **I2V still roles** (when an image is attached):
+   - **Start frame** (default for composition plates): explicit **layout lock** —
+     preserve frame, architecture, character positions, scale, and camera angle;
+     then **action only** over time. Never re-describe the whole scene from scratch.
+   - **Character / identity ref** (Character picker / likeness-only path): match face,
+     body, wardrobe identity only; **freer framing and action**. Do **not** write
+     layout lock, “preserve exact framing,” or treat the plate as a locked opening
+     frame unless the user also attached a separate Start frame still.
 
 6. **Constraints as positives** — Prefer “police tape is a hard barrier; vehicles do
    not cross it” over only “no cars through the tape”. State physical limits as world

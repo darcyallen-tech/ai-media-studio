@@ -154,6 +154,25 @@ class CreativeVisionView:
             on_select=self._refresh_cost,
             expand=True,
         )
+        # FLUX 3 I2V: Start frame vs Character / identity ref
+        self._i2v_image_role = "start_frame"
+        self._still_from_character = False
+        self._start_is_composition = False
+        self.i2v_role_dd = styled_dropdown(
+            label_text="Still role (FLUX 3 I2V)",
+            options=["Start frame", "Character / identity ref"],
+            value="Start frame",
+            on_select=self._on_i2v_role_change,
+            expand=True,
+        )
+        self.i2v_role_dd.visible = False
+        self.i2v_role_hint = ft.Text(
+            "",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=2,
+            visible=False,
+        )
         self.res_dd = styled_dropdown(
             label_text="Resolution",
             options=list(spec0.resolution_choices) or ["720p"],
@@ -346,11 +365,70 @@ class CreativeVisionView:
             border_radius=6,
         )
         self.btn_start = ft.OutlinedButton(
-            content="Start frame",
+            content="Start / source frame",
             icon=ft.Icons.IMAGE,
             on_click=self._pick_start,
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            tooltip="Composition opening frame — layout lock when present",
         )
+        self.start_slot_hint = ft.Text(
+            "Optional composition opening frame (layout lock) — not a character slot",
+            size=11,
+            color=TEXT_MUTED,
+            max_lines=2,
+        )
+        # Character-first multi-ref (default simple UX)
+        # Each slot: {path, label, char_id}
+        self._char_slots: list[dict[str, Any]] = []
+        self._prop_refs: list[str] = []
+        self._char_pickers: list[CharacterPicker] = []
+        self._identity_refs_vision: list[str] = []  # alias for generate (paths only)
+        self.char_panel_title = ft.Text(
+            "Characters (identity)",
+            size=FONT_SM,
+            color=TEXT,
+            weight=ft.FontWeight.W_700,
+        )
+        self.char_panel_hint = ft.Text(
+            "Character library → locked as identity refs (Image 1, Image 2…). "
+            "Never becomes Start frame unless you check “use as start frame”.",
+            size=11,
+            color=TEXT_MUTED,
+            max_lines=3,
+        )
+        self.char_slots_host = ft.Column(spacing=8, tight=True)
+        self.char_count_label = ft.Text(
+            "Characters 0 / 1", size=FONT_SM, color=TEXT_MUTED
+        )
+        self.btn_add_character = ft.OutlinedButton(
+            content="Add character",
+            icon=ft.Icons.PERSON_ADD_ALT_1,
+            on_click=self._on_add_character_slot,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=36,
+            tooltip="Add Character 2, 3… as next identity refs (up to model max)",
+        )
+        self.chk_char_as_start = ft.Checkbox(
+            label="Use Character 1 as start frame (layout lock)",
+            value=False,
+            on_change=self._on_char_as_start_toggle,
+        )
+        self.btn_add_prop = ft.OutlinedButton(
+            content="Add prop / object",
+            icon=ft.Icons.CATEGORY_OUTLINED,
+            on_click=self._on_add_prop_ref,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=34,
+            tooltip="Extra still with role prop / object (not a character)",
+        )
+        self.props_host = ft.Column(spacing=4, tight=True)
+        self.props_label = ft.Text(
+            "Props / objects: none", size=FONT_SM, color=TEXT_MUTED
+        )
+        # Legacy aliases used by older sync paths
+        self.identity_slot_hint = self.char_panel_hint
+        self.btn_add_identity_vision = self.btn_add_character
+        self.identity_count_vision = self.char_count_label
         self.btn_end = ft.OutlinedButton(
             content="End frame",
             icon=ft.Icons.IMAGE_OUTLINED,
@@ -372,11 +450,37 @@ class CreativeVisionView:
             tight=True,
             visible=False,
         )
+        # Character 1 picker (always slot 0 when panel shown)
         self.char_picker = CharacterPicker(
             page,
-            on_select=self._on_character_picked,
-            on_clear=self._on_character_picker_clear,
-            label_text="Saved character",
+            on_select=self._make_char_slot_select(0),
+            on_clear=self._make_char_slot_clear(0),
+            label_text="Character 1",
+        )
+        self._char_pickers = [self.char_picker]
+        self.char_slots_host.controls = [self.char_picker.root]
+        self.character_panel = ft.Column(
+            [
+                self.char_panel_title,
+                self.char_panel_hint,
+                self.char_slots_host,
+                ft.Row(
+                    [
+                        self.btn_add_character,
+                        self.char_count_label,
+                    ],
+                    spacing=10,
+                    wrap=True,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                self.chk_char_as_start,
+                self.props_label,
+                self.props_host,
+                self.btn_add_prop,
+            ],
+            spacing=6,
+            tight=True,
+            visible=False,
         )
         # Strength for Image→Image when model supports it
         self.strength_label = ft.Text(
@@ -535,9 +639,9 @@ class CreativeVisionView:
                     style=ft.ButtonStyle(color=ACCENT_BRIGHT),
                 )
             )
-        self.omni_panel = ft.Column(
+        # Advanced (collapsed): H3 video/audio/style extras — not the default path
+        self.omni_advanced_body = ft.Column(
             [
-                label("Omni reference (MiniMax H3)", muted=True),
                 self.omni_helper,
                 ft.Row(
                     [self.btn_omni_img, self.btn_omni_vid, self.btn_omni_aud, self.btn_omni_clear],
@@ -550,10 +654,36 @@ class CreativeVisionView:
                 self.omni_videos_chips,
                 self.omni_audio_label,
                 self.omni_audio_chips,
-                ft.Text("Intent chips (insert citation language)", size=FONT_SM, color=TEXT_MUTED),
+                ft.Text(
+                    "Intent chips (insert citation language)",
+                    size=FONT_SM,
+                    color=TEXT_MUTED,
+                ),
                 self.omni_intent_row,
             ],
             spacing=6,
+            tight=True,
+        )
+        self.omni_advanced_tile = ft.ExpansionTile(
+            title=ft.Text(
+                "Advanced refs (video / audio / style)",
+                size=FONT_SM,
+                color=TEXT,
+                weight=ft.FontWeight.W_600,
+            ),
+            subtitle=ft.Text(
+                "Optional Omni pack — collapsed by default. Characters are above.",
+                size=11,
+                color=TEXT_MUTED,
+            ),
+            controls=[self.omni_advanced_body],
+            expanded=False,  # collapsed by default
+            dense=True,
+            visible=False,
+        )
+        self.omni_panel = ft.Column(
+            [self.omni_advanced_tile],
+            spacing=4,
             tight=True,
             visible=False,
         )
@@ -738,7 +868,10 @@ class CreativeVisionView:
             self.job_progress.control,
             self.status,
             ft.Divider(height=1, color=BORDER),
-            label("Frames & reference pack", muted=True),
+            label("Characters & frames", muted=True),
+            self.character_panel,
+            label("Start / source frame (optional)", muted=True),
+            self.start_slot_hint,
             ft.Row(
                 [
                     ft.Column(
@@ -758,7 +891,8 @@ class CreativeVisionView:
                 tight=True,
             ),
             self.extend_col,
-            self.char_picker.root,
+            self.i2v_role_dd,
+            self.i2v_role_hint,
             self.refs_hint,
             self.refs_actions_row,
             self.refs_chips,
@@ -1266,10 +1400,29 @@ class CreativeVisionView:
                 pref = spec.default_duration or choices[-1]
                 self.dur_dd.value = pref if pref in choices else choices[0]
         # Aspect (still size presets or video aspect)
-        self.aspect_dd.options = dropdown_options(list(spec.aspect_choices))
-        if _dd(self.aspect_dd) not in spec.aspect_choices:
-            self.aspect_dd.value = spec.default_aspect
-        self.aspect_dd.label = "Size / aspect" if still else "Aspect"
+        omit_ar = bool(getattr(spec, "omit_aspect_ratio", False))
+        ar_choices = list(spec.aspect_choices) if spec.aspect_choices else []
+        if omit_ar:
+            from media_studio.vision_registry import ASPECT_FOLLOWS_STILL
+
+            ar_choices = [ASPECT_FOLLOWS_STILL]
+            self.aspect_dd.options = dropdown_options(ar_choices)
+            self.aspect_dd.value = ASPECT_FOLLOWS_STILL
+            self.aspect_dd.label = "Aspect (follows still)"
+            try:
+                self.aspect_dd.disabled = True
+            except Exception:
+                pass
+        else:
+            self.aspect_dd.options = dropdown_options(ar_choices)
+            if _dd(self.aspect_dd) not in ar_choices and ar_choices:
+                self.aspect_dd.value = spec.default_aspect
+            self.aspect_dd.label = "Size / aspect" if still else "Aspect"
+            try:
+                self.aspect_dd.disabled = False
+            except Exception:
+                pass
+        self._sync_i2v_role_ui()
         if spec.resolution_choices:
             self.res_dd.options = dropdown_options(list(spec.resolution_choices))
             self.res_dd.visible = True
@@ -1469,10 +1622,12 @@ class CreativeVisionView:
         return _click
 
     def _sync_omni_panel(self) -> None:
-        """Show/hide MiniMax H3 omni multi-modal ref UI."""
+        """Advanced Omni pack (video/audio/style) — collapsed; characters are primary."""
         show = self._is_omni_model()
         try:
             self.omni_panel.visible = show
+            self.omni_advanced_tile.visible = show
+            # Advanced body controls
             self.omni_helper.visible = show
             self.omni_images_label.visible = show
             self.omni_videos_label.visible = show
@@ -1491,15 +1646,22 @@ class CreativeVisionView:
             return
         self._trim_omni_refs()
         mi, mv, ma, _mt = self._omni_caps()
-        ni, nv, na = (
-            len(self.ref_paths),
-            len(self.ref_video_paths),
-            len(self.ref_audio_paths),
+        # Advanced "extra images" only — characters live in Character panel
+        n_char = len(self._character_paths())
+        n_prop = len(self._prop_refs)
+        ni = len(self.ref_paths)
+        nv, na = len(self.ref_video_paths), len(self.ref_audio_paths)
+        self.omni_helper.value = (
+            "Advanced only: style stills, motion clips, audio beds. "
+            "Characters are set above (Character 1… → Image 1…). "
+            f"Cite Image/Video/Audio in the prompt. "
+            f"Stills bag {n_char + n_prop + ni}/{mi} · videos {nv}/{mv} · audio {na}/{ma}."
         )
-        self.omni_images_label.value = f"Images {ni}/{mi}"
+        self.omni_images_label.value = f"Extra style images {ni}/{max(0, mi - n_char - n_prop)}"
         self.omni_videos_label.value = f"Videos {nv}/{mv}"
         self.omni_audio_label.value = f"Audio {na}/{ma}"
-        self.btn_omni_img.disabled = ni >= mi
+        room = max(0, mi - n_char - n_prop)
+        self.btn_omni_img.disabled = ni >= room
         self.btn_omni_vid.disabled = nv >= mv
         self.btn_omni_aud.disabled = na >= ma
 
@@ -1736,14 +1898,19 @@ class CreativeVisionView:
                     "Source still", size=FONT_SM, color=TEXT_MUTED
                 )
             else:
-                self.btn_start.content = "Start frame"
+                self.btn_start.content = "Start / source frame"
                 self.start_ph.content = ft.Text(
-                    "Start still", size=FONT_SM, color=TEXT_MUTED
+                    "Start frame", size=FONT_SM, color=TEXT_MUTED
                 )
         except Exception:
             pass
         self.start_ph.visible = show_start and not self.start_path
         self.end_ph.visible = show_end and not self.end_path
+        # Character-first (default) + optional Start frame
+        try:
+            self._sync_character_panel()
+        except Exception:
+            pass
         # Refs / I2I multi-ref panel (tight; no voids)
         try:
             self._sync_i2i_refs_panel()
@@ -1753,9 +1920,14 @@ class CreativeVisionView:
             self._sync_omni_panel()
         except Exception:
             pass
-        # Hide generic video ref pack row when omni panel owns refs
+        # Hide generic video ref pack row when Character panel / Omni owns refs
         try:
             if is_omni or is_extend:
+                self.refs_actions_row.visible = False
+                self.refs_hint.visible = False
+                self.refs_chips.visible = False
+            elif is_i2v:
+                # I2V uses Character + Start — hide old generic ref pack
                 self.refs_actions_row.visible = False
                 self.refs_hint.visible = False
                 self.refs_chips.visible = False
@@ -1959,7 +2131,9 @@ class CreativeVisionView:
                     snap["modality"] = self._mode
                     snap["vision_mode"] = self._mode
                     snap["has_start_still"] = bool(
-                        self.start_path and Path(self.start_path).is_file()
+                        getattr(self, "_start_is_composition", False)
+                        and self.start_path
+                        and Path(self.start_path).is_file()
                     )
                     snap["has_end_still"] = bool(
                         self.end_path and Path(self.end_path).is_file()
@@ -1973,6 +2147,17 @@ class CreativeVisionView:
                         and self.draft_first.visible
                         and self.draft_first.value
                     )
+                    if self._flux3_i2v_active():
+                        snap["image_role"] = self._i2v_image_role or "start_frame"
+                        snap["i2v_image_role"] = snap["image_role"]
+                    chars = self._character_paths()
+                    if chars:
+                        snap["character_count"] = len(chars)
+                        snap["image_role"] = (
+                            "start_frame"
+                            if snap.get("has_start_still")
+                            else "identity_ref"
+                        )
                     # Skip H3/Veo generic guidance — services inject FLUX 3 brief
                     if direction:
                         snap["creative_direction"] = direction
@@ -1983,28 +2168,69 @@ class CreativeVisionView:
             except Exception:
                 pass
             is_omni = bool(spec and getattr(spec, "omni_reference", False))
-            n_img = len([p for p in self.ref_paths if p and Path(p).is_file()])
+            chars = self._character_paths()
+            props = [p for p in self._prop_refs if p and Path(p).is_file()]
+            n_char = len(chars)
+            n_prop = len(props)
+            n_img = n_char + n_prop + len(
+                [p for p in self.ref_paths if p and Path(p).is_file()]
+            )
             n_vid = len(
                 [p for p in self.ref_video_paths if p and Path(p).is_file()]
             )
             n_aud = len(
                 [p for p in self.ref_audio_paths if p and Path(p).is_file()]
             )
-            if is_omni and (n_img or n_vid or n_aud):
-                snap["guidance"] = (
-                    "Rewrite for MiniMax H3 omni reference-to-video. "
-                    "Attached assets must be cited by modality and order: "
-                    "Image 1, Image 2, … Video 1, … Audio 1, … "
-                    f"(currently {n_img} image(s), {n_vid} video(s), {n_aud} audio). "
-                    "Describe how each plate should guide the shot "
-                    "(e.g. 'Image 1 = subject lock', 'Video 1 = camera path only', "
-                    "'Audio 1 = timed bed'). Do NOT invent API parameters or unsupported "
-                    "flags. Use only helper dimensions that are set. "
-                    "Native stereo is always on — do not add generate_audio toggles."
-                )
+            if n_char or is_omni:
+                style = (
+                    getattr(spec, "prompt_citation_style", None) or "plain"
+                ).lower()
+                if style == "at":
+                    cite = ", ".join(f"@Image{i}" for i in range(1, n_char + 1)) or "@Image1"
+                    cite_rule = f"Use {cite} for character identity in order."
+                else:
+                    cite = ", ".join(f"Image {i}" for i in range(1, n_char + 1)) or "Image 1"
+                    cite_rule = (
+                        f"Rewrite “Character 1 / Character 2 …” to model citations "
+                        f"({cite} = character identity in that order)."
+                    )
+                if is_omni and (n_img or n_vid or n_aud or n_char):
+                    snap["guidance"] = (
+                        "Rewrite for MiniMax H3 omni (Character-first). "
+                        f"{cite_rule} "
+                        f"Props follow characters as later Images. "
+                        f"Video 1 / Audio 1 only if attached. "
+                        f"Currently {n_char} character(s), {n_prop} prop(s), "
+                        f"{n_vid} video(s), {n_aud} audio. "
+                        "Describe how each plate should guide the shot "
+                        "(e.g. 'Image 1 = subject lock', 'Video 1 = camera path only', "
+                        "'Audio 1 = timed bed'). Do NOT invent API parameters or unsupported "
+                        "flags. Use only helper dimensions that are set. "
+                        "Native stereo is always on — do not add generate_audio toggles."
+                    )
+                elif n_char >= 1:
+                    has_comp = bool(
+                        getattr(self, "_start_is_composition", False)
+                        and self.start_path
+                        and Path(self.start_path).is_file()
+                    )
+                    snap["guidance"] = (
+                        "Rewrite for multi-character video (Character-first). "
+                        f"{cite_rule} "
+                        + (
+                            "Start/source frame is present → layout lock that plate; "
+                            "characters are identity only. "
+                            if has_comp
+                            else "Identity-only (no start frame) → freer framing, no layout lock. "
+                        )
+                        + f"{n_char} character identity ref(s)"
+                        + (f", {n_prop} prop(s). " if n_prop else ". ")
+                        + "Fold Character 1 / Character 2 language into model image citations."
+                    )
                 snap["reference_image_count"] = n_img
                 snap["reference_video_count"] = n_vid
                 snap["reference_audio_count"] = n_aud
+                snap["character_count"] = n_char
                 snap["citation_style"] = "Image N / Video N / Audio N"
             elif (
                 self._mode == "image_to_video"
@@ -2520,26 +2746,455 @@ class CreativeVisionView:
         if self._mode == "image_to_image":
             self.receive_i2i_source(files[0].path)
         else:
+            # Composition still → Start / source frame (layout lock)
+            self._still_from_character = False
+            self._start_is_composition = True
+            self._i2v_image_role = "start_frame"
+            self._sync_i2v_role_ui()
             self.receive_start_frame(files[0].path)
         self.page.update()
 
-    def _on_character_picked(self, path: str, choice) -> None:
-        """Character picker → fill source / start still (Front preferred)."""
-        label = getattr(choice, "label", None) or Path(path).name
-        status = f"Character: {label}"
+    # ----- Character-first multi-ref -----
+
+    def _flux3_i2v_active(self) -> bool:
+        try:
+            from media_studio.flux3_draft import is_flux3_i2v_model_choice
+
+            return self._mode == "image_to_video" and is_flux3_i2v_model_choice(
+                _dd(self.model_dd)
+            )
+        except Exception:
+            return False
+
+    def _character_panel_active(self) -> bool:
+        """Show Character-first panel for multi-ref video / I2V / omni / I2I."""
         if self._mode == "image_to_image":
-            ok = self.receive_i2i_source(path, status=status)
+            return True
+        if self._mode == "image_to_video":
+            return True
+        if self._mode == "text_to_video":
+            return self._is_omni_model() or self._vision_character_cap() > 1
+        if self._mode == "bridge":
+            return True
+        return False
+
+    def _vision_character_cap(self) -> int:
+        """Max parallel character identity refs for the current model."""
+        from media_studio.flux3_draft import i2v_max_identity_refs
+        from media_studio.fal.models import resolve_video_model
+
+        if self._flux3_i2v_active():
+            return 1
+        try:
+            spec = self._current_spec()
+            if getattr(spec, "omni_reference", False):
+                # Leave room for optional props; still allow most of the image bag
+                mi = max(1, int(getattr(spec, "max_refs", 9) or 9))
+                return max(1, mi)
+            mr = int(getattr(spec, "max_refs", 0) or 0)
+            if mr > 1:
+                return mr
+        except Exception:
+            pass
+        try:
+            v = resolve_video_model(_dd(self.model_dd))
+            if v:
+                return i2v_max_identity_refs(v)
+        except Exception:
+            pass
+        return 1
+
+    def _vision_identity_cap(self) -> int:
+        return self._vision_character_cap()
+
+    def _character_paths(self) -> list[str]:
+        out: list[str] = []
+        for s in self._char_slots:
+            p = (s.get("path") or "").strip()
+            if p and Path(p).is_file() and p not in out:
+                out.append(p)
+        # Keep legacy list in sync for generate paths that still read it
+        self._identity_refs_vision = list(out)
+        return out
+
+    def _make_char_slot_select(self, index: int):
+        def _on_select(path: str, choice: Any) -> None:
+            self._set_char_slot(index, path, choice)
+
+        return _on_select
+
+    def _make_char_slot_clear(self, index: int):
+        def _on_clear() -> None:
+            self._clear_char_slot(index)
+
+        return _on_clear
+
+    def _set_char_slot(self, index: int, path: str, choice: Any) -> None:
+        """Set Character N — always identity; never silent start frame."""
+        label = getattr(choice, "label", None) or Path(path).name
+        char_id = getattr(choice, "id", None)
+        p = str(Path(path).resolve()) if path else ""
+        if self._mode == "image_to_image" and index == 0:
+            self.receive_i2i_source(path, status=f"Character: {label}")
+            # Still record as character slot for clarity
+        while len(self._char_slots) <= index:
+            self._char_slots.append({"path": "", "label": "", "char_id": None})
+        self._char_slots[index] = {
+            "path": p,
+            "label": label,
+            "char_id": char_id,
+        }
+        self._still_from_character = True
+        self._i2v_image_role = "identity_ref"
+        # Explicit start only via checkbox
+        if (
+            index == 0
+            and getattr(self, "chk_char_as_start", None) is not None
+            and self.chk_char_as_start.value
+        ):
+            self._apply_char1_as_start()
+        self._sync_character_panel()
+        self.status.value = f"Character {index + 1}: {label} (identity)"
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _clear_char_slot(self, index: int) -> None:
+        if 0 <= index < len(self._char_slots):
+            self._char_slots[index] = {"path": "", "label": "", "char_id": None}
+        if index == 0:
+            self._still_from_character = False
+            if self.chk_char_as_start.value:
+                # Don't wipe composition start if user set it separately
+                if not getattr(self, "_start_is_composition", False):
+                    pass
+        self._sync_character_panel()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _ensure_char_pickers(self, n_slots: int) -> None:
+        """Ensure pickers 0..n_slots-1 exist (Character 1 always)."""
+        n_slots = max(1, n_slots)
+        while len(self._char_pickers) < n_slots:
+            idx = len(self._char_pickers)
+            picker = CharacterPicker(
+                self.page,
+                on_select=self._make_char_slot_select(idx),
+                on_clear=self._make_char_slot_clear(idx),
+                label_text=f"Character {idx + 1}",
+            )
+            self._char_pickers.append(picker)
+        # Rebuild host
+        self.char_slots_host.controls = [
+            p.root for p in self._char_pickers[:n_slots]
+        ]
+        # Hide extra pickers beyond n_slots
+        for i, p in enumerate(self._char_pickers):
+            try:
+                p.root.visible = i < n_slots
+            except Exception:
+                pass
+
+    async def _on_add_character_slot(self, e: ft.ControlEvent | None = None) -> None:
+        cap = self._vision_character_cap()
+        filled = len([s for s in self._char_slots if (s.get("path") or "").strip()])
+        n_pickers = max(1, len(self._char_pickers))
+        # Count open slots (pickers shown)
+        shown = max(1, len(self.char_slots_host.controls) if self.char_slots_host.controls else 1)
+        if shown >= cap or filled >= cap:
+            self.status.value = (
+                f"Max {cap} character(s) for this model"
+                + (
+                    " (FLUX 3: single identity — use Keyframe Take for multi-pose)."
+                    if self._flux3_i2v_active()
+                    else "."
+                )
+            )
+            try:
+                self.page.update()
+            except Exception:
+                pass
+            return
+        next_i = shown
+        self._ensure_char_pickers(next_i + 1)
+        while len(self._char_slots) <= next_i:
+            self._char_slots.append({"path": "", "label": "", "char_id": None})
+        try:
+            self._char_pickers[next_i].refresh()
+        except Exception:
+            pass
+        self._sync_character_panel()
+        self.status.value = f"Character {next_i + 1} slot ready — pick from library."
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _on_char_as_start_toggle(self, e: ft.ControlEvent | None = None) -> None:
+        if self.chk_char_as_start.value:
+            self._apply_char1_as_start()
+            self.status.value = "Character 1 → Start frame (layout lock)."
         else:
-            ok = self.receive_start_frame(path, status=status)
-        if ok:
+            # Only clear start if it came from Character 1
+            c1 = self._char_slots[0]["path"] if self._char_slots else ""
+            if (
+                self.start_path
+                and c1
+                and Path(str(self.start_path)).resolve() == Path(c1).resolve()
+            ):
+                self.start_path = None
+                self.start_preview.src = ""
+                self.start_preview.visible = False
+                self.start_ph.visible = True
+                self._start_is_composition = False
+            self.status.value = "Start frame unlinked from Character 1."
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _apply_char1_as_start(self) -> None:
+        paths = self._character_paths()
+        if not paths:
+            return
+        p = paths[0]
+        self.start_path = p
+        self.start_preview.src = p
+        self.start_preview.visible = True
+        self.start_ph.visible = False
+        self._start_is_composition = True
+        self._i2v_image_role = "start_frame"
+
+    async def _on_add_prop_ref(self, e: ft.ControlEvent | None = None) -> None:
+        try:
+            files = await pick_image(
+                self.page, dialog_title="Prop / object still (not character)"
+            )
+        except Exception as exc:
+            self.status.value = f"Picker error: {exc}"
+            self.page.update()
+            return
+        if not files or not files[0].path:
+            return
+        p = str(Path(files[0].path).resolve())
+        if p not in self._prop_refs:
+            # Cap props so characters + props fit image bag
+            cap_img = self._vision_character_cap()
+            try:
+                if self._is_omni_model():
+                    mi, _, _, _ = self._omni_caps()
+                    room = max(0, mi - len(self._character_paths()))
+                    if len(self._prop_refs) >= max(1, room):
+                        self.status.value = f"Image bag full ({mi} max stills)."
+                        self.page.update()
+                        return
+            except Exception:
+                if len(self._prop_refs) >= 3:
+                    self.status.value = "Max prop refs."
+                    self.page.update()
+                    return
+            self._prop_refs.append(p)
+        self._sync_character_panel()
+        self.status.value = f"Prop / object: {Path(p).name}"
+        self.page.update()
+
+    def _make_remove_prop(self, index: int):
+        async def _click(_e: ft.ControlEvent) -> None:
+            if 0 <= index < len(self._prop_refs):
+                self._prop_refs.pop(index)
+            self._sync_character_panel()
             try:
                 self.page.update()
             except Exception:
                 pass
 
+        return _click
+
+    def _sync_character_panel(self) -> None:
+        """Default Character-first UI; multi Add when model allows."""
+        show = self._character_panel_active()
+        flux3 = self._flux3_i2v_active()
+        cap = self._vision_character_cap() if show else 1
+        paths = self._character_paths()
+        n = len(paths)
+        # How many pickers to show: at least 1, up to max(n+empty slots already open, 1)
+        open_slots = max(1, len(self.char_slots_host.controls) or 1)
+        open_slots = min(cap, max(open_slots, n if n else 1, 1))
+        if flux3:
+            open_slots = 1
+        self._ensure_char_pickers(open_slots)
+        try:
+            self.character_panel.visible = show
+            self.char_picker.root.visible = show
+            for i, pck in enumerate(self._char_pickers):
+                pck.root.visible = show and i < open_slots
+                if show and i < open_slots:
+                    try:
+                        pck.refresh()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        multi = show and cap > 1 and not flux3
+        self.btn_add_character.visible = multi and open_slots < cap
+        self.btn_add_character.disabled = open_slots >= cap or n >= cap
+        if flux3:
+            self.btn_add_character.visible = False
+            self.btn_add_character.tooltip = (
+                "FLUX 3: single identity only — use Keyframe Take or a composite still"
+            )
+            self.char_panel_hint.value = (
+                "Character 1 = identity (likeness). Optional Start frame for layout lock. "
+                "No multi-character pack on FLUX 3 I2V."
+            )
+        else:
+            self.btn_add_character.tooltip = (
+                f"Add Character {open_slots + 1}… up to {cap}"
+            )
+            self.char_panel_hint.value = (
+                "Character library → identity refs (Image 1, Image 2…). "
+                "Never Start frame unless “use as start frame” is checked."
+            )
+        self.char_count_label.visible = show
+        self.char_count_label.value = f"Characters {n} / {cap}"
+        self.chk_char_as_start.visible = show and self._mode in (
+            "image_to_video",
+            "bridge",
+        )
+        self.btn_add_prop.visible = show and (
+            self._is_omni_model() or cap > 1 or self._mode == "image_to_video"
+        )
+        # Props list
+        self.props_host.controls.clear()
+        for i, pp in enumerate(self._prop_refs):
+            self.props_host.controls.append(
+                ft.Row(
+                    [
+                        ft.Text(
+                            f"Prop {i + 1}: {Path(pp).name}",
+                            size=FONT_SM,
+                            color=TEXT,
+                            expand=True,
+                            max_lines=1,
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.CLOSE,
+                            icon_size=16,
+                            on_click=self._make_remove_prop(i),
+                            tooltip="Remove prop",
+                        ),
+                    ],
+                    spacing=4,
+                )
+            )
+        self.props_label.value = (
+            f"Props / objects: {len(self._prop_refs)}"
+            if self._prop_refs
+            else "Props / objects: none"
+        )
+        self.props_label.visible = show
+        # Role hint
+        has_start = bool(
+            getattr(self, "_start_is_composition", False)
+            and self.start_path
+            and Path(self.start_path).is_file()
+        )
+        if has_start:
+            self._i2v_image_role = "start_frame"
+        elif n > 0:
+            self._i2v_image_role = "identity_ref"
+        self.i2v_role_dd.visible = False
+        self.i2v_role_hint.visible = show and (n > 0 or has_start)
+        self.i2v_role_hint.value = (
+            "Start frame set → layout lock + character identity refs."
+            if has_start and n
+            else (
+                "Start frame set → layout lock."
+                if has_start
+                else (
+                    "Character identity only → freer framing (no layout lock)."
+                    if n
+                    else ""
+                )
+            )
+        )
+        # Start slot visibility handled in _apply_mode_visibility
+        try:
+            self.start_slot_hint.visible = show or self._mode in (
+                "image_to_video",
+                "bridge",
+            )
+        except Exception:
+            pass
+
+    def _sync_i2v_role_ui(self) -> None:
+        """Back-compat name — now Character-first panel sync."""
+        self._sync_character_panel()
+
+    def _on_character_picked(self, path: str, choice) -> None:
+        """Legacy entry — Character 1."""
+        self._set_char_slot(0, path, choice)
+
     def _on_character_picker_clear(self) -> None:
-        # Unlink picker only — keep manual / strip stills
-        pass
+        self._clear_char_slot(0)
+
+    async def _add_identity_ref_vision(self, e: ft.ControlEvent | None = None) -> None:
+        """Legacy → Add character slot."""
+        await self._on_add_character_slot(e)
+
+    async def _on_i2v_role_change(self, e: ft.ControlEvent | None = None) -> None:
+        val = (_dd(self.i2v_role_dd) or "Start frame").strip().lower()
+        if "character" in val or "identity" in val:
+            self._i2v_image_role = "identity_ref"
+            self.chk_char_as_start.value = False
+        else:
+            self._i2v_image_role = "start_frame"
+            self._still_from_character = False
+            self._start_is_composition = True
+        self._sync_character_panel()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _assemble_character_first_refs(self) -> tuple[str | None, list[str]]:
+        """
+        Returns (primary_still_or_None, ordered_image_refs).
+
+        Image order for multi-ref / Omni: Character 1..N, props, then advanced stills.
+        Start frame is primary for I2V when composition is set.
+        """
+        chars = self._character_paths()
+        props = [p for p in self._prop_refs if p and Path(p).is_file()]
+        advanced = [
+            p
+            for p in self.ref_paths
+            if p
+            and Path(p).is_file()
+            and p not in chars
+            and p not in props
+        ]
+        ordered = chars + props + advanced
+        primary = None
+        if (
+            getattr(self, "_start_is_composition", False)
+            and self.start_path
+            and Path(self.start_path).is_file()
+        ):
+            primary = self.start_path
+        elif self._mode == "image_to_image" and self.start_path:
+            primary = self.start_path
+        elif chars:
+            primary = chars[0]
+        elif ordered:
+            primary = ordered[0]
+        # Extras exclude primary for I2V single-field models
+        extras = [p for p in ordered if p != primary]
+        return primary, ordered if self._is_omni_model() else extras
 
     def refresh_character_picker(self) -> None:
         try:
@@ -2846,12 +3501,29 @@ class CreativeVisionView:
             self.status.value = "Image→Image needs a source still."
             self.page.update()
             return
-        if self._mode == "image_to_video" and not (
-            self.start_path and Path(self.start_path).is_file()
-        ):
-            self.status.value = "Image→Video needs a start still."
-            self.page.update()
-            return
+        if self._mode == "image_to_video":
+            has_start = bool(self.start_path and Path(self.start_path).is_file())
+            has_id = bool(self._character_paths())
+            if not has_start and not has_id:
+                self.status.value = (
+                    "Image→Video needs Character 1 and/or a Start / source frame."
+                )
+                self.page.update()
+                return
+        if self._is_omni_model():
+            has_char = bool(self._character_paths())
+            has_omni = bool(
+                has_char
+                or self.ref_paths
+                or self.ref_video_paths
+                or self._prop_refs
+            )
+            if not has_omni:
+                self.status.value = (
+                    "Omni needs at least Character 1 (or an advanced ref still/video)."
+                )
+                self.page.update()
+                return
         if self._mode == "bridge":
             if not (
                 self.start_path
@@ -2882,21 +3554,32 @@ class CreativeVisionView:
                         if p not in refs:
                             refs.append(p)
 
-        # Reference-to-video / omni models need refs
+        # Reference-to-video / omni models need refs (characters count as Image 1…)
         spec = self._current_spec()
         is_omni = bool(getattr(spec, "omni_reference", False))
         if is_omni:
-            has_omni = bool(refs or self.ref_video_paths)
+            char_n = self._character_paths()
+            has_omni = bool(
+                char_n
+                or refs
+                or self.ref_video_paths
+                or self._prop_refs
+            )
             if not has_omni:
                 self.status.value = (
-                    f"{spec.label} needs at least one still or motion clip "
-                    "(Audio alone is not enough)."
+                    f"{spec.label} needs Character 1 (or a still/motion ref)."
                 )
                 self.page.update()
                 return
-            if self.ref_audio_paths and not refs and not self.ref_video_paths:
+            if (
+                self.ref_audio_paths
+                and not char_n
+                and not refs
+                and not self.ref_video_paths
+                and not self._prop_refs
+            ):
                 self.status.value = (
-                    "Reference audio must accompany an image or video reference."
+                    "Reference audio must accompany Character 1 or another image/video."
                 )
                 self.page.update()
                 return
@@ -2987,14 +3670,78 @@ class CreativeVisionView:
                     pass
             from media_studio.job_context import to_thread_with_job
 
+            gen_prompt = prompt
+            gen_aspect = _dd(self.aspect_dd)
+            # FLUX 3 I2V: omit aspect; fold identity-ref note into prompt when needed
+            if self._flux3_i2v_active():
+                gen_aspect = None
+                try:
+                    from media_studio.flux3_draft import (
+                        I2V_ROLE_IDENTITY,
+                        flux3_i2v_role_prompt_note,
+                        normalize_i2v_image_role,
+                    )
+
+                    role = normalize_i2v_image_role(self._i2v_image_role)
+                    note = flux3_i2v_role_prompt_note(role)
+                    low = gen_prompt.lower()
+                    if role == I2V_ROLE_IDENTITY:
+                        if "identity" not in low and "likeness" not in low:
+                            gen_prompt = gen_prompt.rstrip(".") + ". " + note
+                except Exception:
+                    pass
+            primary_still, assembled = self._assemble_character_first_refs()
+            char_paths = self._character_paths()
+            # Citation language for multi-character
+            if char_paths and "image 1" not in gen_prompt.lower():
+                try:
+                    style = (
+                        getattr(spec, "prompt_citation_style", None) or "plain"
+                    ).lower()
+                except Exception:
+                    style = "plain"
+                if style == "at":
+                    tags = ", ".join(
+                        f"@Image{i}" for i in range(1, len(char_paths) + 1)
+                    )
+                else:
+                    tags = ", ".join(
+                        f"Image {i}" for i in range(1, len(char_paths) + 1)
+                    )
+                names = []
+                for i, s in enumerate(self._char_slots):
+                    if (s.get("path") or "").strip() and Path(
+                        s.get("path") or ""
+                    ).is_file():
+                        names.append(
+                            f"Character {i + 1} ({s.get('label') or 'identity'})"
+                        )
+                if names:
+                    gen_prompt = (
+                        gen_prompt.rstrip(".")
+                        + f". {'; '.join(names)} map to {tags} for identity/likeness."
+                    )
+            # Omni / multi-ref image bag = full ordered list
+            if self._is_omni_model():
+                vision_refs = list(assembled)
+                primary_still = None  # omni uses ref bag only
+            else:
+                vision_refs = list(refs or [])
+                for p in assembled:
+                    if p != primary_still and p not in vision_refs:
+                        vision_refs.append(p)
+                if self._mode in ("image_to_video", "image_to_image"):
+                    if not primary_still and char_paths:
+                        primary_still = char_paths[0]
+
             result = await to_thread_with_job(
                 self.state,
                 run_vision,
                 mode=self._mode,
-                prompt=prompt,
+                prompt=gen_prompt,
                 model_label=_dd(self.model_dd),
                 image_path=(
-                    self.start_path
+                    primary_still
                     if self._mode in ("image_to_video", "image_to_image")
                     else None
                 ),
@@ -3008,9 +3755,11 @@ class CreativeVisionView:
                     self.extend_path if self._mode == "extend" else None
                 ),
                 ref_paths=(
-                    (refs or None)
+                    (vision_refs or None)
                     if (
                         self._mode == "image_to_image"
+                        or self._mode == "image_to_video"
+                        or self._is_omni_model()
                         or (not still_job and self._mode != "extend")
                     )
                     else None
@@ -3026,7 +3775,7 @@ class CreativeVisionView:
                     else None
                 ),
                 duration=None if still_job else _dd(self.dur_dd),
-                aspect_ratio=_dd(self.aspect_dd),
+                aspect_ratio=gen_aspect,
                 resolution=(
                     _dd(self.res_dd)
                     if still_job and getattr(self.res_dd, "visible", False)
