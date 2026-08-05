@@ -40,6 +40,7 @@ from media_studio.scene_store import (
     PLATE_TIMES,
     PLATE_TYPES,
     PLATE_WEATHER,
+    SCENE_ANGLE_LABELS,
     VARIATION_CHIPS,
     SavedScene,
     SceneHasChildrenError,
@@ -49,17 +50,20 @@ from media_studio.scene_store import (
     delete_scene,
     detect_still_aspect,
     estimate_scene_t2i_cost,
+    find_scene,
     list_base_scenes,
     list_scene_variations,
     load_scenes,
     normalize_scene_aspect,
     preferred_scene_edit_model,
     resolve_scene_t2i_args,
+    scene_angle_prompt,
     scene_aspect_ui_options,
     scene_edit_model_labels,
     scene_quality_options,
     scene_t2i_prompt,
     scene_variation_prompt,
+    set_scene_angle,
     set_scene_locked,
     t2i_scene_model_labels,
     update_scene,
@@ -565,6 +569,286 @@ class ScenesView:
         # Built fresh each open via _assemble_variation_panel() — not empty toggles
         self._var_panel_shell: ft.Container | None = None
 
+        # --- Multi-angle pack (Hero / B / C) + one-click Generate angle ---
+        self._angle_gen_target: str | None = None  # left | right | reverse
+        self._angle_gen_slot: str | None = None  # angle_b | angle_c
+        self._angle_pending_path: str | None = None
+        self._angle_pack_scene_id: str | None = None
+        _ANG = 64
+        self.angle_hero_img = ft.Image(
+            src="", width=_ANG, height=_ANG, fit=ft.BoxFit.COVER, border_radius=6
+        )
+        self.angle_b_img = ft.Image(
+            src="", width=_ANG, height=_ANG, fit=ft.BoxFit.COVER, border_radius=6
+        )
+        self.angle_c_img = ft.Image(
+            src="", width=_ANG, height=_ANG, fit=ft.BoxFit.COVER, border_radius=6
+        )
+        self.angle_hero_empty = ft.Container(
+            width=_ANG,
+            height=_ANG,
+            bgcolor=PANEL,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+            alignment=ft.Alignment.CENTER,
+            content=ft.Text("Hero", size=10, color=TEXT_MUTED),
+        )
+        self.angle_b_empty = ft.Container(
+            width=_ANG,
+            height=_ANG,
+            bgcolor=PANEL,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+            alignment=ft.Alignment.CENTER,
+            content=ft.Text("B", size=10, color=TEXT_MUTED),
+        )
+        self.angle_c_empty = ft.Container(
+            width=_ANG,
+            height=_ANG,
+            bgcolor=PANEL,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+            alignment=ft.Alignment.CENTER,
+            content=ft.Text("C", size=10, color=TEXT_MUTED),
+        )
+        self.angle_hero_host = ft.Container(width=_ANG, height=_ANG, content=self.angle_hero_empty)
+        self.angle_b_host = ft.Container(width=_ANG, height=_ANG, content=self.angle_b_empty)
+        self.angle_c_host = ft.Container(width=_ANG, height=_ANG, content=self.angle_c_empty)
+        self.btn_gen_left = ft.OutlinedButton(
+            content="Generate Left",
+            on_click=self._make_gen_angle("left"),
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=32,
+        )
+        self.btn_gen_right = ft.OutlinedButton(
+            content="Generate Right",
+            on_click=self._make_gen_angle("right"),
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=32,
+        )
+        self.btn_gen_reverse = ft.OutlinedButton(
+            content="Generate Reverse",
+            on_click=self._make_gen_angle("reverse"),
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=32,
+        )
+        # Angle I2I model + quality (cost tracks these like Create variation)
+        _ang_labs = scene_edit_model_labels()
+        _ang_pref = preferred_scene_edit_model()
+        _ang_def = _ang_labs[0] if _ang_labs else _ang_pref
+        for lab in _ang_labs or []:
+            if _ang_pref.lower() in lab.lower() or lab.lower() in _ang_pref.lower():
+                _ang_def = lab
+                break
+        self.angle_model_dd = styled_dropdown(
+            label_text="Angle model",
+            options=_ang_labs or [_ang_pref],
+            value=_ang_def,
+            on_select=self._on_angle_model_or_quality,
+            expand=True,
+        )
+        try:
+            from media_studio.character_store import (
+                default_practical_resolution,
+                edit_resolution_options,
+            )
+
+            _ares = edit_resolution_options(_ang_def) or ["1K", "2K"]
+            _adef = default_practical_resolution(_ares) if _ares else "1K"
+        except Exception:
+            _ares, _adef = ["1K", "2K"], "1K"
+        self.angle_quality_dd = styled_dropdown(
+            label_text="Quality",
+            options=list(_ares),
+            value=_adef,
+            on_select=self._on_angle_model_or_quality,
+            expand=True,
+        )
+        self.angle_cost_text, self.angle_cost_box = make_estimated_cost_box(
+            initial="Est. cost: —"
+        )
+        self.angle_note = ft.TextField(
+            label="Optional note (appended to angle prompt)",
+            hint_text="e.g. show the windows on the left wall",
+            dense=True,
+            filled=True,
+            fill_color=PANEL_ELEVATED,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+        )
+        self.angle_pending_img = ft.Image(
+            src="",
+            width=120,
+            height=90,
+            fit=ft.BoxFit.COVER,
+            border_radius=6,
+            visible=False,
+        )
+        self.angle_pending_empty = ft.Container(
+            width=120,
+            height=90,
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, BORDER),
+            border_radius=6,
+            alignment=ft.Alignment.CENTER,
+            content=ft.Text("Preview", size=11, color=TEXT_MUTED),
+            visible=True,
+        )
+        self.angle_pending_host = ft.Container(
+            width=120,
+            height=90,
+            content=self.angle_pending_empty,
+            tooltip="Click to enlarge",
+        )
+        self.angle_pack_hint = ft.Text(
+            "Hero stays locked. Left → B, Right → C, Reverse → first empty. "
+            "Lateral moves force a real camera shift (not a crop). Click preview to enlarge.",
+            size=11,
+            color=TEXT_MUTED,
+            max_lines=3,
+        )
+        self.angle_slot_hero_lab = ft.Text("Hero", size=10, color=TEXT_MUTED)
+        self.angle_slot_b_lab = ft.Text("Left (B)", size=10, color=TEXT_MUTED)
+        self.angle_slot_c_lab = ft.Text("Right (C)", size=10, color=TEXT_MUTED)
+        self.btn_clear_b = ft.TextButton(
+            content="Clear B",
+            on_click=self._make_clear_angle("angle_b"),
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+            height=28,
+            visible=False,
+        )
+        self.btn_clear_c = ft.TextButton(
+            content="Clear C",
+            on_click=self._make_clear_angle("angle_c"),
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+            height=28,
+            visible=False,
+        )
+        self.angle_pending_label = ft.Text(
+            "",
+            size=FONT_SM,
+            color=ACCENT,
+            weight=ft.FontWeight.W_600,
+            visible=False,
+            max_lines=2,
+        )
+        self.angle_pending_tap = ft.GestureDetector(
+            content=self.angle_pending_host,
+            on_tap=self._on_tap_angle_pending,
+        )
+        self.btn_angle_confirm = ft.FilledButton(
+            content="Confirm angle",
+            on_click=self._confirm_angle,
+            style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+            height=36,
+            visible=False,
+        )
+        self.btn_angle_regen = ft.OutlinedButton(
+            content="Regenerate",
+            on_click=self._regen_angle,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=36,
+            visible=False,
+        )
+        self.btn_angle_dismiss = ft.TextButton(
+            content="Dismiss",
+            on_click=self._dismiss_angle_preview,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+            visible=False,
+        )
+        self.angle_pack_box = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(
+                        "Angle pack",
+                        size=FONT_SM,
+                        color=TEXT,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    self.angle_pack_hint,
+                    ft.Row(
+                        [
+                            ft.Column(
+                                [
+                                    ft.GestureDetector(
+                                        content=self.angle_hero_host,
+                                        on_tap=self._make_angle_preview("hero"),
+                                    ),
+                                    self.angle_slot_hero_lab,
+                                ],
+                                spacing=2,
+                                tight=True,
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            ft.Column(
+                                [
+                                    ft.GestureDetector(
+                                        content=self.angle_b_host,
+                                        on_tap=self._make_angle_preview("angle_b"),
+                                    ),
+                                    self.angle_slot_b_lab,
+                                    self.btn_clear_b,
+                                ],
+                                spacing=2,
+                                tight=True,
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            ft.Column(
+                                [
+                                    ft.GestureDetector(
+                                        content=self.angle_c_host,
+                                        on_tap=self._make_angle_preview("angle_c"),
+                                    ),
+                                    self.angle_slot_c_lab,
+                                    self.btn_clear_c,
+                                ],
+                                spacing=2,
+                                tight=True,
+                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                        ],
+                        spacing=12,
+                    ),
+                    ft.Row(
+                        [self.angle_model_dd, self.angle_quality_dd],
+                        spacing=8,
+                    ),
+                    self.angle_note,
+                    ft.Row(
+                        [self.btn_gen_left, self.btn_gen_right, self.btn_gen_reverse],
+                        spacing=6,
+                        wrap=True,
+                    ),
+                    self.angle_cost_box,
+                    self.angle_pending_label,
+                    ft.Text(
+                        "Click preview to enlarge before Confirm",
+                        size=11,
+                        color=TEXT_MUTED,
+                    ),
+                    ft.Row(
+                        [
+                            self.angle_pending_tap,
+                            self.btn_angle_confirm,
+                            self.btn_angle_regen,
+                            self.btn_angle_dismiss,
+                        ],
+                        spacing=8,
+                        wrap=True,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                ],
+                spacing=6,
+                tight=True,
+            ),
+            bgcolor=PANEL,
+            border=ft.Border.all(1, BORDER),
+            border_radius=8,
+            padding=8,
+            visible=False,
+        )
+
         # Dynamic left workspace — form OR variation (swap .controls; never blank)
         self.work_host = ft.Column(spacing=8, tight=True)
 
@@ -631,6 +915,7 @@ class ScenesView:
             self.name_field,
             self.notes_field,
             ft.Row([self.btn_save, self.btn_cancel_edit], spacing=8),
+            self.angle_pack_box,
             ft.Divider(height=1, color=BORDER),
             self.t2i_box,
         ]
@@ -888,6 +1173,25 @@ class ScenesView:
         self.t2i_aspect_badge.visible = False
         self.btn_t2i_use.visible = False
         self.t2i_box.visible = True
+        self.angle_pack_box.visible = False
+        self._angle_pack_scene_id = None
+        self._angle_pending_path = None
+        self.btn_angle_confirm.visible = False
+        try:
+            self.btn_angle_regen.visible = False
+        except Exception:
+            pass
+        self.btn_angle_dismiss.visible = False
+        self.angle_pending_img.visible = False
+        try:
+            self.angle_pending_host.content = self.angle_pending_empty
+            self.angle_pending_label.visible = False
+            self.btn_clear_b.visible = False
+            self.btn_clear_c.visible = False
+            if hasattr(self, "angle_note"):
+                self.angle_note.value = ""
+        except Exception:
+            pass
 
     async def _open_new_scene(self, e: ft.ControlEvent | None = None) -> None:
         """Primary entry: fully clear form, focus name + still/generate."""
@@ -981,6 +1285,7 @@ class ScenesView:
                     return
                 badge = f" · {updated.aspect}" if updated.aspect else ""
                 self._set_status(f"Updated: {updated.name}{badge}")
+                entry = updated
             else:
                 entry = add_scene(
                     name=name,
@@ -990,7 +1295,13 @@ class ScenesView:
                 )
                 badge = f" · {entry.aspect}" if entry.aspect else ""
                 self._set_status(f"Saved scene: {entry.name}{badge}")
-            self._reset_form()
+            # Stay in edit so user can Generate Left/Right angles
+            self._edit_id = entry.id
+            self._selected_scene_id = entry.id
+            self.btn_save.content = "Save changes"
+            self.btn_cancel_edit.visible = True
+            self.form_heading.value = f"Edit · {entry.display_name()}"
+            self._sync_angle_pack_ui(entry)
             self._mount_form_workspace()
             self.refresh()
         except Exception as exc:
@@ -1413,9 +1724,15 @@ class ScenesView:
             )
         lock_icon = " 🔒" if s.locked else ""
         notes = s.display_notes()
-        # Primary = user Name (display_name); secondary = short notes only
+        # Primary = user Name; angle pack badge when B/C filled
+        n_angles = 1 if still_ok else 0
+        if still_ok:
+            n_angles += len(s.angle_extra_paths())
+        pack_badge = ""
+        if n_angles >= 2:
+            pack_badge = f" · {n_angles} angles"
         name_txt = ft.Text(
-            f"{title}{lock_icon}",
+            f"{title}{lock_icon}{pack_badge}",
             size=FONT_SM,
             color=TEXT,
             weight=ft.FontWeight.W_700,
@@ -1423,6 +1740,12 @@ class ScenesView:
             overflow=ft.TextOverflow.ELLIPSIS,
         )
         secondary = notes if notes else ("Variation" if nested else "No notes")
+        if n_angles >= 2 and notes:
+            secondary = f"{secondary} · pack: hero" + (
+                "+left" if s.resolved_angle_path("angle_b") else ""
+            ) + (
+                "+right" if s.resolved_angle_path("angle_c") else ""
+            )
         notes_txt = ft.Text(
             secondary,
             size=FONT_SM,
@@ -1560,6 +1883,401 @@ class ScenesView:
 
         return _click
 
+    # ----- multi-angle pack -----
+
+    def _make_gen_angle(self, target: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            await self._run_generate_angle(target)
+
+        return _click
+
+    def _make_angle_preview(self, slot: str):
+        async def _tap(_e: ft.ControlEvent) -> None:
+            sid = self._angle_pack_scene_id or self._edit_id
+            if not sid:
+                return
+            s = find_scene(sid)
+            if not s:
+                return
+            path = s.resolved_angle_path(slot)
+            if path:
+                self._open_preview(
+                    path,
+                    title=f"{s.display_name()} · {SCENE_ANGLE_LABELS.get(slot, slot)}",
+                )
+
+        return _tap
+
+    def _sync_angle_pack_ui(self, scene: SavedScene | None = None) -> None:
+        """Show Hero / Left(B) / Right(C) thumbs when editing a saved scene with hero."""
+        s = scene
+        if s is None and self._edit_id:
+            s = find_scene(self._edit_id)
+        if s is None and self._angle_pack_scene_id:
+            s = find_scene(self._angle_pack_scene_id)
+        show = bool(s and s.resolved_still_path())
+        self.angle_pack_box.visible = show
+        if not show or s is None:
+            self._angle_pack_scene_id = None
+            return
+        self._angle_pack_scene_id = s.id
+        hero = s.resolved_still_path()
+        b = s.resolved_angle_path("angle_b")
+        c = s.resolved_angle_path("angle_c")
+        if hero:
+            try:
+                self.angle_hero_img.src = str(Path(hero).resolve())
+            except Exception:
+                self.angle_hero_img.src = hero
+            self.angle_hero_host.content = self.angle_hero_img
+            self.angle_slot_hero_lab.value = "Hero · set"
+            self.angle_slot_hero_lab.color = TEXT
+        else:
+            self.angle_hero_host.content = self.angle_hero_empty
+            self.angle_slot_hero_lab.value = "Hero · empty"
+            self.angle_slot_hero_lab.color = TEXT_MUTED
+        if b:
+            try:
+                self.angle_b_img.src = str(Path(b).resolve())
+            except Exception:
+                self.angle_b_img.src = b
+            self.angle_b_host.content = self.angle_b_img
+            self.angle_slot_b_lab.value = "Left (B) · set"
+            self.angle_slot_b_lab.color = TEXT
+            self.btn_clear_b.visible = True
+            self.btn_gen_left.content = "Replace Left"
+        else:
+            self.angle_b_host.content = self.angle_b_empty
+            self.angle_slot_b_lab.value = "Left (B) · empty"
+            self.angle_slot_b_lab.color = TEXT_MUTED
+            self.btn_clear_b.visible = False
+            self.btn_gen_left.content = "Generate Left"
+        if c:
+            try:
+                self.angle_c_img.src = str(Path(c).resolve())
+            except Exception:
+                self.angle_c_img.src = c
+            self.angle_c_host.content = self.angle_c_img
+            self.angle_slot_c_lab.value = "Right (C) · set"
+            self.angle_slot_c_lab.color = TEXT
+            self.btn_clear_c.visible = True
+            self.btn_gen_right.content = "Replace Right"
+        else:
+            self.angle_c_host.content = self.angle_c_empty
+            self.angle_slot_c_lab.value = "Right (C) · empty"
+            self.angle_slot_c_lab.color = TEXT_MUTED
+            self.btn_clear_c.visible = False
+            self.btn_gen_right.content = "Generate Right"
+        # Reverse label: show destination slot
+        if not b:
+            self.btn_gen_reverse.content = "Generate Reverse → B"
+        elif not c:
+            self.btn_gen_reverse.content = "Generate Reverse → C"
+        else:
+            self.btn_gen_reverse.content = "Replace Reverse → B"
+        has_hero = bool(hero)
+        self.btn_gen_left.disabled = not has_hero
+        self.btn_gen_right.disabled = not has_hero
+        self.btn_gen_reverse.disabled = not has_hero
+        self._refresh_angle_cost_sync()
+
+    def _refresh_angle_cost_sync(self) -> None:
+        """Est. cost under Generate Left/Right/Reverse — tracks model + quality."""
+        try:
+            from media_studio.pricing import format_job_cost
+            from media_studio.fal.models import resolve_image_edit_model
+
+            lab = self._dd_val(self.angle_model_dd) or preferred_scene_edit_model()
+            es = resolve_image_edit_model(lab)
+            per = float(getattr(es, "cost_estimate_usd", 0) or 0.04) if es else 0.04
+            model = es.label if es else lab
+            q = self._dd_val(self.angle_quality_dd)
+            unit = f"1 angle · {q}" if q else "1 angle I2I"
+            self.angle_cost_text.value = format_job_cost(per, unit=unit, model=model)
+        except Exception:
+            try:
+                self.angle_cost_text.value = "Est. cost: ~$0.04 / angle"
+            except Exception:
+                pass
+
+    async def _on_angle_model_or_quality(
+        self, e: ft.ControlEvent | None = None
+    ) -> None:
+        try:
+            from media_studio.character_store import (
+                default_practical_resolution,
+                edit_resolution_options,
+            )
+            from media_studio.flet_theme import dropdown_options
+
+            labs = edit_resolution_options(self.angle_model_dd.value) or ["1K", "2K"]
+            self.angle_quality_dd.options = dropdown_options(labs)
+            if self.angle_quality_dd.value not in labs:
+                self.angle_quality_dd.value = (
+                    default_practical_resolution(labs) or labs[0]
+                )
+        except Exception:
+            pass
+        self._refresh_angle_cost_sync()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _target_slot(self, target: str, scene: SavedScene) -> str:
+        t = (target or "left").lower()
+        if t == "right":
+            return "angle_c"
+        if t == "reverse":
+            if not scene.resolved_angle_path("angle_b"):
+                return "angle_b"
+            if not scene.resolved_angle_path("angle_c"):
+                return "angle_c"
+            return "angle_b"  # both filled → replace B
+        return "angle_b"  # left
+
+    def _make_clear_angle(self, slot: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            sid = self._angle_pack_scene_id or self._edit_id
+            if not sid:
+                return
+            try:
+                updated = set_scene_angle(sid, slot, None)
+                if updated:
+                    self._sync_angle_pack_ui(updated)
+                    self.refresh()
+                    self._set_status(
+                        f"Cleared {SCENE_ANGLE_LABELS.get(slot, slot)} "
+                        f"on “{updated.display_name()}”."
+                    )
+                    try:
+                        self.page.update()
+                    except Exception:
+                        pass
+            except Exception as exc:
+                self._set_status(str(exc), error=True)
+
+        return _click
+
+    async def _on_tap_angle_pending(self, e: ft.ControlEvent) -> None:
+        """Lightbox enlarge of generated angle before Confirm (same as other stills)."""
+        if self._angle_pending_path and Path(self._angle_pending_path).is_file():
+            lab = SCENE_ANGLE_LABELS.get(self._angle_gen_slot or "", "Angle preview")
+            tgt = (self._angle_gen_target or "").title() or "Angle"
+            self._open_preview(
+                self._angle_pending_path,
+                title=f"{tgt} preview · {lab} (click Confirm to save)",
+            )
+        else:
+            self._set_status("Generate an angle first, then click preview to enlarge.")
+
+    async def _regen_angle(self, e: ft.ControlEvent) -> None:
+        """Regenerate with same target (Left/Right/Reverse)."""
+        tgt = self._angle_gen_target
+        if not tgt:
+            self._set_status("No previous angle target — use Generate Left/Right/Reverse.")
+            return
+        await self._run_generate_angle(tgt)
+
+    async def _run_generate_angle(self, target: str) -> None:
+        from media_studio.secrets_store import has_fal_key
+
+        sid = self._angle_pack_scene_id or self._edit_id
+        if not sid:
+            self._set_status("Save the scene first, then generate angles.", error=True)
+            return
+        scene = find_scene(sid)
+        if scene is None:
+            self._set_status("Scene not found.", error=True)
+            return
+        hero = scene.resolved_still_path()
+        if not hero:
+            self._set_status("Hero still missing — cannot generate angle.", error=True)
+            return
+        if not has_fal_key():
+            self._set_status("FAL API key required — open Settings.", error=True)
+            return
+        if not self.state.try_busy("scenes"):
+            return
+        slot = self._target_slot(target, scene)
+        existing = scene.resolved_angle_path(slot)
+        self._angle_gen_target = target
+        self._angle_gen_slot = slot
+        self._angle_pending_path = None
+        self.btn_angle_confirm.visible = False
+        self.btn_angle_regen.visible = False
+        self.btn_angle_dismiss.visible = False
+        self.angle_pending_img.visible = False
+        self.angle_pending_host.content = self.angle_pending_empty
+        self.angle_pending_label.visible = False
+        label = {"left": "Left", "right": "Right", "reverse": "Reverse"}.get(
+            target, target
+        )
+        slot_lab = SCENE_ANGLE_LABELS.get(slot, slot)
+        overwrite = " (will replace existing)" if existing else ""
+        self.job_progress.start(f"Generating {label} angle…", self.page)
+        self._set_status(
+            f"I2I {label} → {slot_lab}{overwrite}. Strong viewpoint change; hero locked."
+        )
+        for b in (self.btn_gen_left, self.btn_gen_right, self.btn_gen_reverse):
+            b.disabled = True
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+        def on_progress(msg: str) -> None:
+            self.job_progress.set_message(classify_progress(msg), self.page)
+
+        try:
+            from media_studio.character_store import (
+                default_practical_resolution,
+                edit_params_json_for_resolution,
+                edit_resolution_options,
+            )
+            from media_studio.job_context import to_thread_with_job
+            from media_studio.services import generate
+
+            try:
+                note = (self.angle_note.value or "").strip()
+            except Exception:
+                note = ""
+            prompt = scene_angle_prompt(
+                target,
+                base_name=scene.display_name(),
+                notes=note,
+            )
+            model_choice = (
+                self._dd_val(self.angle_model_dd) or preferred_scene_edit_model()
+            )
+            res_opts = edit_resolution_options(model_choice)
+            ui_q = self._dd_val(self.angle_quality_dd)
+            if ui_q and res_opts and ui_q in res_opts:
+                edit_res = ui_q
+            else:
+                edit_res = default_practical_resolution(res_opts) if res_opts else None
+            params_json = edit_params_json_for_resolution(edit_res)
+            result = await to_thread_with_job(
+                self.state,
+                generate,
+                prompt,
+                model_choice=model_choice,
+                image_file=hero,
+                extra_image_files=None,
+                output_dir=self.state.output_dir,
+                on_progress=on_progress,
+                scenario="scene-angle",
+                parameters_json=params_json,
+            )
+            path = None
+            err = None
+            if result.ok:
+                path = getattr(result, "primary_image", None) or (
+                    result.image_paths[0]
+                    if getattr(result, "image_paths", None)
+                    else None
+                )
+                if not path and getattr(result, "path", None):
+                    path = result.path
+            else:
+                err = result.status or "Angle generate failed"
+
+            if path and Path(path).is_file():
+                self._angle_pending_path = str(Path(path).resolve())
+                self.angle_pending_img.src = self._angle_pending_path
+                self.angle_pending_img.visible = True
+                self.angle_pending_host.content = self.angle_pending_img
+                self.btn_angle_confirm.visible = True
+                self.btn_angle_regen.visible = True
+                self.btn_angle_dismiss.visible = True
+                self.angle_pending_label.visible = True
+                self.angle_pending_label.value = (
+                    f"Preview (click to enlarge) → Confirm → {slot_lab}"
+                    + (" (replaces current)" if existing else "")
+                )
+                self.btn_angle_confirm.content = f"Confirm → {slot_lab}"
+                self.job_progress.finish_ok(
+                    f"{label} ready — enlarge preview or Confirm → {slot_lab}",
+                    self.page,
+                )
+                self._set_status(
+                    f"{label} ready — click preview to enlarge, Confirm → {slot_lab}, "
+                    f"Regenerate, or Dismiss (hero unchanged)."
+                )
+            else:
+                msg = err or "Angle generate failed"
+                self.job_progress.finish_error(msg, self.page)
+                self._set_status(msg, error=True)
+        except Exception as exc:
+            msg = f"Angle error: {exc}"
+            self.job_progress.finish_error(msg, self.page)
+            self._set_status(msg, error=True)
+            try:
+                print(traceback.format_exc())
+            except Exception:
+                pass
+        finally:
+            try:
+                self._sync_angle_pack_ui(find_scene(sid))
+            except Exception:
+                for b in (self.btn_gen_left, self.btn_gen_right, self.btn_gen_reverse):
+                    b.disabled = False
+            try:
+                self.state.clear_busy("scenes")
+            except Exception:
+                pass
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+    async def _confirm_angle(self, e: ft.ControlEvent) -> None:
+        sid = self._angle_pack_scene_id or self._edit_id
+        slot = self._angle_gen_slot
+        path = self._angle_pending_path
+        if not sid or not slot or not path or not Path(path).is_file():
+            self._set_status("Generate an angle first.", error=True)
+            return
+        try:
+            updated = set_scene_angle(sid, slot, path)
+            if not updated:
+                self._set_status("Could not save angle.", error=True)
+                return
+            self._angle_pending_path = None
+            self.angle_pending_img.visible = False
+            self.angle_pending_host.content = self.angle_pending_empty
+            self.btn_angle_confirm.visible = False
+            self.btn_angle_regen.visible = False
+            self.btn_angle_dismiss.visible = False
+            self.angle_pending_label.visible = False
+            self._sync_angle_pack_ui(updated)
+            self.refresh()
+            self._set_status(
+                f"Saved {SCENE_ANGLE_LABELS.get(slot, slot)} on "
+                f"“{updated.display_name()}”. Hero unchanged."
+            )
+            try:
+                self.page.update()
+            except Exception:
+                pass
+        except Exception as exc:
+            self._set_status(str(exc), error=True)
+
+    async def _dismiss_angle_preview(self, e: ft.ControlEvent) -> None:
+        self._angle_pending_path = None
+        self._angle_gen_target = None
+        self._angle_gen_slot = None
+        self.angle_pending_img.visible = False
+        self.angle_pending_host.content = self.angle_pending_empty
+        self.btn_angle_confirm.visible = False
+        self.btn_angle_regen.visible = False
+        self.btn_angle_dismiss.visible = False
+        self.angle_pending_label.visible = False
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
     def _make_var_chip(self, chip: str):
         """Append a quick transform chip to the variation prompt."""
 
@@ -1628,6 +2346,7 @@ class ScenesView:
             self.btn_cancel_edit.visible = True
             self.form_heading.value = f"Edit · {s.display_name()}"
             self.t2i_box.visible = True
+            self._sync_angle_pack_ui(s)
             ar = s.aspect_badge()
             self.refresh()
             self._set_status(

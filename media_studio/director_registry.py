@@ -358,6 +358,8 @@ class DirectorShot:
     scene_path: str | None = None
     scene_label: str | None = None
     scene_id: str | None = None
+    # Extra scene angles (Angle B / C) when full scene pack is on
+    scene_extra_paths: tuple[str, ...] = ()
     # Text location when model cannot take scene as image ref (e.g. Kling O3).
     # Keep separate from action (character action only).
     location_text: str = ""
@@ -1773,13 +1775,14 @@ def resolve_angle_mode(
     requested: str | None = None,
 ) -> str:
     """
-    Imagine bag-of-images angle mode.
+    Imagine bag-of-images / multi-ref angle mode (characters + optional scene pack).
 
     ``front_only`` | ``full_pack``. Default: Front only if any scene is bound,
-    else Full pack.
+    else Full pack. ``front_only`` = character primary + scene hero only;
+    ``full_pack`` = character identity extras + scene Angle B/C.
     """
     req = (requested or "auto").strip().lower()
-    if req in ("front_only", "front", "primary"):
+    if req in ("front_only", "front", "primary", "hero_only", "hero"):
         return "front_only"
     if req in ("full_pack", "full", "all", "pack"):
         return "full_pack"
@@ -1820,8 +1823,9 @@ def count_director_ref_budget(
         if key and key not in char_keys:
             char_keys[key] = sh
 
-    # Unique location plates
+    # Unique location plates (hero). Full pack adds angle extras as unique stills.
     scene_keys: set[str] = set()
+    scene_extra_keys: set[str] = set()
     for sh in shots:
         loc = sh.location_still_path()
         if not loc:
@@ -1835,6 +1839,14 @@ def count_director_ref_budget(
             continue
         if Path(key).is_file():
             scene_keys.add(key)
+        if ang == "full_pack":
+            for ex in sh.scene_extra_paths or ():
+                try:
+                    ep = str(Path(ex).resolve())
+                except OSError:
+                    ep = (ex or "").strip()
+                if ep and ep not in char_keys and Path(ep).is_file():
+                    scene_extra_keys.add(ep)
 
     n_chars = len(char_keys)
     n_scenes = len(scene_keys)
@@ -1856,6 +1868,8 @@ def count_director_ref_budget(
                 files.add(key)
         if supports_scene_img:
             files |= scene_keys
+            if ang == "full_pack":
+                files |= scene_extra_keys
         used = len(files)
         n_images = used
         detail_bits = []
@@ -1889,22 +1903,27 @@ def count_director_ref_budget(
             reason_over=reason,
         )
 
-    # kling_element: elements (unique chars) + unique image_urls (scenes/start)
+    # kling_element: elements (unique chars as 1 each) + unique scene image urls
+    # Full pack: each extra scene angle still counts as an image_url (not elements API)
     n_elements = n_chars
-    # O3: no elements API — still count unique characters as 1 identity unit each
-    # Scene image urls only when model can send them
-    n_img = n_scenes if supports_scene_img else 0
-    # Manual refs that aren't character/scene already counted
-    # (location_still_path covers library scene + distinct manual)
+    n_img = 0
+    if supports_scene_img:
+        n_img = n_scenes
+        if ang == "full_pack":
+            n_img += len(scene_extra_keys)
     used = n_elements + n_img
-    # Pure T2V with no stills → 0
     detail_bits = []
     if n_elements:
         detail_bits.append(
             f"{n_elements} character{'s' if n_elements != 1 else ''} (pack = 1 each)"
         )
     if n_img:
-        detail_bits.append(f"{n_img} scene{'s' if n_img != 1 else ''}")
+        pack_note = ""
+        if ang == "full_pack" and scene_extra_keys:
+            pack_note = f" incl. {len(scene_extra_keys)} angle still(s)"
+        detail_bits.append(
+            f"{n_img} scene image{'s' if n_img != 1 else ''}{pack_note}"
+        )
     elif n_scenes and not supports_scene_img:
         detail_bits.append(
             f"{n_scenes} scene{'s' if n_scenes != 1 else ''} (text only)"
@@ -2053,6 +2072,20 @@ def collect_director_image_plan(
                         "id": sh.scene_id,
                     }
                 )
+            # Full pack: attach Angle B/C as additional refs (multi-ref models)
+            if ang != "front_only":
+                for ex in sh.scene_extra_paths or ():
+                    if not ex:
+                        continue
+                    try:
+                        exr = str(Path(ex).resolve())
+                    except OSError:
+                        exr = ex
+                    if loc_p and exr == loc_p:
+                        continue
+                    if char_p and exr == char_p:
+                        continue
+                    _add(exr)
 
         per_shot.append(char_p or loc_p)
         per_shot_pairs.append((char_p, loc_p))

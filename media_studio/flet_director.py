@@ -339,13 +339,13 @@ class DirectorView:
             color=TEXT_MUTED,
             max_lines=2,
         )
-        # Imagine bag-of-images: Front only vs Full identity pack
+        # Multi-ref: character Front only / Full pack; scene Hero only / Full pack
         self._angle_mode_user: str = "auto"  # auto | front_only | full_pack
         self.angle_mode_row = ft.Row(
             [
-                ft.Text("Identity angles:", size=FONT_SM, color=TEXT_MUTED),
+                ft.Text("Ref pack:", size=FONT_SM, color=TEXT_MUTED),
                 ft.TextButton(
-                    content="Front only",
+                    content="Hero / Front only",
                     on_click=lambda _e: self._set_angle_mode("front_only"),
                     style=ft.ButtonStyle(color=ACCENT),
                 ),
@@ -363,7 +363,7 @@ class DirectorView:
             "",
             size=11,
             color=TEXT_MUTED,
-            max_lines=2,
+            max_lines=3,
             visible=False,
         )
 
@@ -840,6 +840,9 @@ class DirectorView:
             extras = row.get("character_extra_paths") or ()
             if isinstance(extras, list):
                 extras = tuple(extras)
+            scene_extras = row.get("scene_extra_paths") or ()
+            if isinstance(scene_extras, list):
+                scene_extras = tuple(scene_extras)
             loc_tf = row.get("location")
             loc_val = ""
             if loc_tf is not None:
@@ -861,6 +864,7 @@ class DirectorView:
                     scene_path=row.get("scene_path"),
                     scene_label=row.get("scene_label"),
                     scene_id=row.get("scene_id"),
+                    scene_extra_paths=tuple(scene_extras) if scene_extras else (),
                     location_text=loc_val,
                 )
             )
@@ -902,11 +906,14 @@ class DirectorView:
         try:
             spec = self._current_spec()
             shots = self._collect_shots()
+            # Show pack toggle for bag models always; for kling multi-ref when scene extras exist
             is_bag = (getattr(spec, "ref_budget_mode", "") or "") == "image_bag"
-            self.angle_mode_row.visible = is_bag
-            self.angle_mode_hint.visible = is_bag
-            ang = self._current_angle_mode() if is_bag else "n/a"
-            if is_bag:
+            multi_scene = bool(getattr(spec, "supports_scene_image_ref", False))
+            show_pack = is_bag or multi_scene
+            self.angle_mode_row.visible = show_pack
+            self.angle_mode_hint.visible = show_pack
+            ang = self._current_angle_mode() if show_pack else "n/a"
+            if show_pack:
                 # Highlight active mode button
                 for i, btn in enumerate(self.angle_mode_row.controls):
                     if not isinstance(btn, ft.TextButton):
@@ -924,12 +931,13 @@ class DirectorView:
                         pass
                 auto = self._angle_mode_user == "auto"
                 self.angle_mode_hint.value = (
-                    f"Using {('Front only' if ang == 'front_only' else 'Full pack')}"
+                    f"Using {('Hero/Front only' if ang == 'front_only' else 'Full pack')}"
                     + (" (auto)" if auto else "")
-                    + ". Front only if a scene is bound; Full pack otherwise."
+                    + ". Hero/Front only = primary stills; Full pack = character "
+                    "angles + scene Angle B/C. Auto: Front only when a scene is bound."
                 )
             budget = count_director_ref_budget(
-                spec, shots, angle_mode=ang if is_bag else None
+                spec, shots, angle_mode=ang if show_pack else None
             )
             self.ref_budget_label.value = (
                 f"Refs {budget.used} / {budget.max_refs}  ·  "
@@ -1186,6 +1194,7 @@ class DirectorView:
             "scene_path": None,
             "scene_label": None,
             "scene_id": None,
+            "scene_extra_paths": (),
             "title": title,
             "btn_ref": btn_ref,
             "btn_clear_ref": btn_clear_ref,
@@ -1719,6 +1728,19 @@ class DirectorView:
             row["scene_path"] = resolved
             row["scene_label"] = label or Path(resolved).name
             row["scene_id"] = scene_id
+            # Load multi-angle extras (B/C); hero stays scene_path for single-ref
+            try:
+                from media_studio.scene_store import preferred_scene_still_bundle
+
+                bundle = preferred_scene_still_bundle(
+                    scene_id, still_path=resolved
+                )
+                extras = bundle.get("extras") or []
+                row["scene_extra_paths"] = tuple(extras)
+                if bundle.get("label") and not label:
+                    row["scene_label"] = bundle["label"]
+            except Exception:
+                row["scene_extra_paths"] = ()
             try:
                 self.prev_strip.record_and_refresh(resolved)
             except Exception:
@@ -1748,17 +1770,19 @@ class DirectorView:
                         resolved
                     )
                     dir_ar = normalize_scene_aspect(_dd(self.aspect_dd) or "")
+                    n_ex = len(row.get("scene_extra_paths") or ())
+                    pack = f" · +{n_ex} angle(s)" if n_ex else ""
                     if scene_ar and dir_ar and scene_ar != dir_ar and not str(
                         _dd(self.aspect_dd) or ""
                     ).lower().startswith("auto"):
                         self.status.value = (
                             f"Shot {index + 1} · scene: {row['scene_label']} "
-                            f"({scene_ar}) — Director aspect is {dir_ar} "
+                            f"({scene_ar}){pack} — Director aspect is {dir_ar} "
                             f"(soft warning; plate still bound)."
                         )
                     else:
                         self.status.value = (
-                            f"Shot {index + 1} · scene: {row['scene_label']}"
+                            f"Shot {index + 1} · scene: {row['scene_label']}{pack}"
                         )
                 except Exception:
                     self.status.value = (
@@ -1768,6 +1792,7 @@ class DirectorView:
             row["scene_path"] = None
             row["scene_label"] = None
             row["scene_id"] = None
+            row["scene_extra_paths"] = ()
         self._refresh_shot_still_ui(row)
         if sync_picker:
             self._sync_row_scene_picker(row)
@@ -2478,7 +2503,10 @@ class DirectorView:
                 on_progress=on_progress,
                 angle_mode=(
                     self._current_angle_mode()
-                    if (getattr(spec, "ref_budget_mode", "") or "") == "image_bag"
+                    if (
+                        (getattr(spec, "ref_budget_mode", "") or "") == "image_bag"
+                        or bool(getattr(spec, "supports_scene_image_ref", False))
+                    )
                     else None
                 ),
             )

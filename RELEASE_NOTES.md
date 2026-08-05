@@ -41,6 +41,7 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - **Aspect + Quality**: separate Aspect (16:9 Horizontal / 9:16 Vertical / 1:1 / 4:3 / 3:4) and Quality (1K·2K or Standard·HD); framing language in prompt; list **aspect badge** on thumbs
 - **Scenes polish**: **New scene** button; enlarge still from generate/form/list; **Name** primary in list (not long prompt); broken/missing thumbs show placeholder + repair path from `scene_stills/`; taller description field; **Create variation** I2I panel (parent ref → Generate → Confirm/Regenerate/Dismiss → child under Variations)
 - **Scenes plate helpers**: Setting / Type / Time / Weather / Activity (+ notes) rebuild location description; variation quick chips (Winter, Night, Rain, Golden hour, Overcast)
+- **Scenes multi-angle pack**: Hero + Left(B)/Right(C); Generate / Replace / Clear; cost line; list “N angles” badge; Director Hero only vs Full pack
 
 ### Characters tab
 - New main tab **Characters** — save reusable character stills (local store only)

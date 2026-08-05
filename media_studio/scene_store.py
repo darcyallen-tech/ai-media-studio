@@ -190,6 +190,27 @@ SCENE_FRAMING_HINT: dict[str, str] = {
 }
 
 
+# Multi-angle pack (parallel to character Front / Side / Close-up)
+# still_path = Hero / wide (required). Angle B/C are optional extra views.
+SCENE_ANGLE_SLOTS: tuple[str, ...] = ("hero", "angle_b", "angle_c")
+SCENE_ANGLE_LABELS: dict[str, str] = {
+    "hero": "Hero (wide)",
+    "angle_b": "Left (B)",
+    "angle_c": "Right (C)",
+}
+# One-click generate targets → fill angle_b or angle_c
+SCENE_ANGLE_TARGETS: dict[str, str] = {
+    "left": "angle_b",
+    "right": "angle_c",
+    "reverse": "angle_b",  # reverse prefers B; if B filled, UI can send to C
+}
+SCENE_ANGLE_TARGET_LABELS: dict[str, str] = {
+    "left": "Generate Left",
+    "right": "Generate Right",
+    "reverse": "Generate Reverse",
+}
+
+
 @dataclass
 class SavedScene:
     id: str
@@ -203,6 +224,9 @@ class SavedScene:
     aspect: str = ""
     # Variation child: points at base scene id (None = top-level base)
     parent_id: str | None = None
+    # Optional multi-angle pack (each variation keeps its own)
+    angle_b_path: str = ""
+    angle_c_path: str = ""
 
     def display_notes(self) -> str:
         """Secondary list line — short notes only, never a full T2I dump."""
@@ -270,24 +294,64 @@ class SavedScene:
         return bool(p)
 
     def resolved_still_path(self) -> str | None:
+        """Hero / wide still path (required)."""
+        return self._resolve_path(self.still_path)
+
+    def _resolve_path(self, raw: str | None) -> str | None:
         """Return a readable still path, repairing basename under scene_stills/."""
-        raw = (self.still_path or "").strip()
-        if not raw:
+        s = (raw or "").strip()
+        if not s:
             return None
         try:
-            p = Path(raw)
+            p = Path(s)
             if p.is_file():
                 return str(p.resolve())
         except OSError:
             pass
-        # Repair: same filename in local store dir
         try:
-            cand = STILLS_DIR / Path(raw).name
+            cand = STILLS_DIR / Path(s).name
             if cand.is_file():
                 return str(cand.resolve())
         except OSError:
             pass
         return None
+
+    def resolved_angle_path(self, slot: str) -> str | None:
+        """hero | angle_b | angle_c → absolute path or None."""
+        key = (slot or "hero").strip().lower()
+        if key in ("hero", "wide", "main", "primary"):
+            return self.resolved_still_path()
+        if key in ("angle_b", "b", "left"):
+            return self._resolve_path(self.angle_b_path)
+        if key in ("angle_c", "c", "right"):
+            return self._resolve_path(self.angle_c_path)
+        return None
+
+    def angle_pack(self) -> dict[str, str]:
+        """Slot → path for all filled angles (hero required for pack)."""
+        out: dict[str, str] = {}
+        h = self.resolved_still_path()
+        if h:
+            out["hero"] = h
+        b = self.resolved_angle_path("angle_b")
+        if b:
+            out["angle_b"] = b
+        c = self.resolved_angle_path("angle_c")
+        if c:
+            out["angle_c"] = c
+        return out
+
+    def angle_extra_paths(self) -> list[str]:
+        """Non-hero angles for multi-ref Director binding (order B, C)."""
+        out: list[str] = []
+        for slot in ("angle_b", "angle_c"):
+            p = self.resolved_angle_path(slot)
+            if p:
+                out.append(p)
+        return out
+
+    def has_angle_pack(self) -> bool:
+        return bool(self.angle_extra_paths())
 
     def is_variation(self) -> bool:
         return bool((self.parent_id or "").strip())
@@ -401,11 +465,13 @@ def _from_dict(item: dict[str, Any]) -> SavedScene | None:
         locked=bool(item.get("locked") or False),
         aspect=aspect,
         parent_id=parent_id,
+        angle_b_path=str(item.get("angle_b_path") or "").strip(),
+        angle_c_path=str(item.get("angle_c_path") or "").strip(),
     )
 
 
 def _to_dict(s: SavedScene) -> dict[str, Any]:
-    return {
+    d: dict[str, Any] = {
         "id": s.id,
         "name": s.name,
         "still_path": s.still_path,
@@ -416,6 +482,11 @@ def _to_dict(s: SavedScene) -> dict[str, Any]:
         "aspect": normalize_scene_aspect(s.aspect) or s.aspect or "",
         "parent_id": s.parent_id or None,
     }
+    if (s.angle_b_path or "").strip():
+        d["angle_b_path"] = s.angle_b_path
+    if (s.angle_c_path or "").strip():
+        d["angle_c_path"] = s.angle_c_path
+    return d
 
 
 def load_scenes() -> list[SavedScene]:
@@ -439,6 +510,14 @@ def load_scenes() -> list[SavedScene]:
         fixed = entry.resolved_still_path()
         if fixed and fixed != (entry.still_path or ""):
             entry.still_path = fixed
+            repaired = True
+        fb = entry.resolved_angle_path("angle_b")
+        if fb and fb != (entry.angle_b_path or ""):
+            entry.angle_b_path = fb
+            repaired = True
+        fc = entry.resolved_angle_path("angle_c")
+        if fc and fc != (entry.angle_c_path or ""):
+            entry.angle_c_path = fc
             repaired = True
         out.append(entry)
     if repaired:
@@ -553,6 +632,8 @@ def add_scene(
         locked=bool(locked),
         aspect=ar,
         parent_id=pid,
+        angle_b_path="",
+        angle_c_path="",
     )
     scenes = load_scenes()
     scenes.append(entry)
@@ -621,6 +702,8 @@ def update_scene(
         locked=bool(new_locked),
         aspect=new_aspect or "",
         parent_id=found.parent_id,
+        angle_b_path=found.angle_b_path,
+        angle_c_path=found.angle_c_path,
     )
     scenes[idx] = updated
     save_scenes(scenes)
@@ -630,16 +713,215 @@ def update_scene(
     return updated
 
 
+def set_scene_angle(
+    scene_id: str,
+    slot: str,
+    still_path: str | Path | None,
+) -> SavedScene | None:
+    """
+    Set or clear Angle B / Angle C. Does not overwrite hero (still_path).
+
+    ``slot``: angle_b | angle_c (or left→b, right→c).
+    ``still_path`` None clears the slot.
+    """
+    key = (slot or "").strip().lower()
+    if key in ("left", "b", "angle_b"):
+        key = "angle_b"
+    elif key in ("right", "c", "angle_c"):
+        key = "angle_c"
+    elif key in ("reverse", "180"):
+        # Prefer empty B, else C (caller usually picks explicitly)
+        key = "angle_b"
+    if key not in ("angle_b", "angle_c"):
+        raise ValueError(f"Invalid angle slot: {slot!r} (use angle_b or angle_c)")
+
+    scenes = load_scenes()
+    found: SavedScene | None = None
+    idx = -1
+    for i, s in enumerate(scenes):
+        if s.id == scene_id:
+            found = s
+            idx = i
+            break
+    if found is None or idx < 0:
+        return None
+
+    # Reverse helper: if B filled and slot was reverse, fill C instead
+    if (slot or "").strip().lower() in ("reverse", "180"):
+        if found.resolved_angle_path("angle_b") and not found.resolved_angle_path(
+            "angle_c"
+        ):
+            key = "angle_c"
+        else:
+            key = "angle_b"
+
+    old = found.angle_b_path if key == "angle_b" else found.angle_c_path
+    new_path = ""
+    if still_path is not None:
+        src = Path(still_path)
+        if not src.is_file():
+            raise FileNotFoundError(f"Still missing: {src}")
+        new_path = _store_path(
+            src, scene_id=found.id, name=f"{found.name}-{key.replace('_', '-')}"
+        )
+
+    ab = found.angle_b_path
+    ac = found.angle_c_path
+    if key == "angle_b":
+        ab = new_path
+    else:
+        ac = new_path
+
+    updated = SavedScene(
+        id=found.id,
+        name=found.name,
+        still_path=found.still_path,
+        notes=found.notes,
+        created_at=found.created_at,
+        updated_at=_now_iso(),
+        locked=found.locked,
+        aspect=found.aspect,
+        parent_id=found.parent_id,
+        angle_b_path=ab or "",
+        angle_c_path=ac or "",
+    )
+    scenes[idx] = updated
+    save_scenes(scenes)
+    if old and old != new_path:
+        _delete_owned(old)
+    return updated
+
+
+def scene_angle_prompt(
+    target: str,
+    *,
+    base_name: str = "",
+    notes: str = "",
+) -> str:
+    """
+    I2I prompt: same place/lighting, **clearly different camera position**.
+
+    Left/Right force a lateral move of several meters and a different composition
+    (not a crop of the reference). Reverse uses 180° opposite direction.
+    """
+    t = (target or "left").strip().lower()
+    if t in ("left", "l", "angle_b_left"):
+        cam = (
+            "Same location as the reference still, but the camera has moved several "
+            "meters to the LEFT of the original viewpoint. Look back into the space "
+            "from the left side — show the left side of the room, path, street, or "
+            "landscape that was only partly visible (or off-frame) in the reference. "
+            "Different framing and composition than the reference: new foreground "
+            "elements on the left, shifted perspective lines, not a slight pan or crop "
+            "of the same plate. Same lighting, time of day, weather, architecture, and "
+            "materials. Establishing / wide view."
+        )
+    elif t in ("right", "r", "angle_c_right"):
+        cam = (
+            "Same location as the reference still, but the camera has moved several "
+            "meters to the RIGHT of the original viewpoint. Look back into the space "
+            "from the right side — show the right side of the room, path, street, or "
+            "landscape that was only partly visible (or off-frame) in the reference. "
+            "Different framing and composition than the reference: new foreground "
+            "elements on the right, shifted perspective lines, not a slight pan or crop "
+            "of the same plate. Same lighting, time of day, weather, architecture, and "
+            "materials. Establishing / wide view."
+        )
+    elif t in ("reverse", "180", "opposite"):
+        cam = (
+            "Turn the camera 180 degrees for a reverse establishing view looking "
+            "back through the same location from the opposite direction — clearly "
+            "opposite facing, not a small turn. Same lighting, time of day, and architecture."
+        )
+    else:
+        cam = (
+            f"Move the camera for a clearly different establishing angle ({t}) of the "
+            "same location — not a crop of the reference"
+        )
+
+    bits = [
+        "Image-to-image edit of this establishing / location plate only.",
+        "CRITICAL: change the camera viewpoint substantially. Do NOT return a near-duplicate "
+        "or slight crop of the reference — the result must read as a different camera position.",
+        cam,
+        "Preserve identity of the place: same architecture, layout, season, time of day, "
+        "and lighting continuity with the reference.",
+        "Empty or lightly populated — no new hero talent or portrait subject.",
+        "Photoreal, no text, no logo, no watermark.",
+    ]
+    if base_name:
+        bits.append(f"Location name: {base_name}.")
+    note = (notes or "").strip()
+    if note:
+        bits.append(f"User note (soft): {note}")
+    return " ".join(bits)
+
+
+def preferred_scene_still_bundle(
+    scene_id: str | None = None,
+    *,
+    still_path: str | None = None,
+) -> dict[str, Any]:
+    """
+    Resolve hero still + optional angle extras for Director binding.
+
+    Returns: path (hero), label, id, extras [angle_b, angle_c], has_pack.
+    """
+    out: dict[str, Any] = {
+        "path": None,
+        "label": None,
+        "id": scene_id,
+        "extras": [],
+        "has_pack": False,
+    }
+    s: SavedScene | None = None
+    if scene_id:
+        s = find_scene(scene_id)
+    if s is None and still_path:
+        # Match by resolved path
+        try:
+            want = str(Path(still_path).resolve())
+        except OSError:
+            want = (still_path or "").strip()
+        for cand in load_scenes():
+            hp = cand.resolved_still_path()
+            if hp and hp == want:
+                s = cand
+                break
+    if s is None:
+        if still_path and Path(still_path).is_file():
+            out["path"] = str(Path(still_path).resolve())
+        return out
+    hero = s.resolved_still_path()
+    out["path"] = hero
+    out["label"] = s.display_name()
+    out["id"] = s.id
+    extras = s.angle_extra_paths()
+    out["extras"] = extras
+    out["has_pack"] = bool(extras)
+    return out
+
+
 def set_scene_locked(scene_id: str, locked: bool) -> SavedScene | None:
     scenes = load_scenes()
     for i, s in enumerate(scenes):
         if s.id != scene_id:
             continue
-        s.locked = bool(locked)
-        s.updated_at = _now_iso()
-        scenes[i] = s
+        scenes[i] = SavedScene(
+            id=s.id,
+            name=s.name,
+            still_path=s.still_path,
+            notes=s.notes,
+            created_at=s.created_at,
+            updated_at=_now_iso(),
+            locked=bool(locked),
+            aspect=s.aspect,
+            parent_id=s.parent_id,
+            angle_b_path=s.angle_b_path,
+            angle_c_path=s.angle_c_path,
+        )
         save_scenes(scenes)
-        return s
+        return scenes[i]
     return None
 
 
@@ -703,18 +985,20 @@ def delete_scene(
     save_scenes(keep)
     keep_paths: set[str] = set()
     for s in keep:
-        try:
-            if s.still_path:
-                keep_paths.add(str(Path(s.still_path).resolve()))
-        except OSError:
-            pass
+        for raw in (s.still_path, s.angle_b_path, s.angle_c_path):
+            try:
+                if raw:
+                    keep_paths.add(str(Path(raw).resolve()))
+            except OSError:
+                pass
     for s in to_wipe:
-        try:
-            p = str(Path(s.still_path).resolve()) if s.still_path else ""
-            if p and p not in keep_paths:
-                _delete_owned(s.still_path)
-        except OSError:
-            _delete_owned(s.still_path)
+        for raw in (s.still_path, s.angle_b_path, s.angle_c_path):
+            try:
+                p = str(Path(raw).resolve()) if raw else ""
+                if p and p not in keep_paths:
+                    _delete_owned(raw)
+            except OSError:
+                _delete_owned(raw)
     return True
 
 

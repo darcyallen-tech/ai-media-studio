@@ -89,6 +89,9 @@ Local only (data/scenes.json + data/scene_stills/). Not a Library replacement.
 - **Create variation** (I2I): parent still as ref; name + transform prompt + model +
   quality + Enhance + cost; Generate → preview → Confirm / Regenerate / Dismiss;
   saves child under parent’s Variations; clear error if parent still missing
+- **Angle pack** (per scene/variation): Hero / wide (required) + Angle B + Angle C.
+  One-click Generate Left / Right / Reverse (I2I from hero, same place/lighting;
+  does not overwrite hero). Director: hero by default; Full pack adds B/C on multi-ref
 - Lock protects from retention auto-delete (same idea as Characters)
 - Empty state points to **New scene**
 - Local only: data/scenes.json + scene_stills/ (gitignored like Characters)
