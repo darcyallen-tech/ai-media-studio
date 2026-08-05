@@ -339,21 +339,26 @@ class DirectorView:
             color=TEXT_MUTED,
             max_lines=2,
         )
-        # Multi-ref: character Front only / Full pack; scene Hero only / Full pack
+        # Multi-ref packs: character Front + scene Hero only vs full angle packs
         self._angle_mode_user: str = "auto"  # auto | front_only | full_pack
+        self.angle_mode_label = ft.Text(
+            "Ref pack:", size=FONT_SM, color=TEXT_MUTED
+        )
+        self.btn_pack_hero = ft.TextButton(
+            content="Hero only",
+            on_click=lambda _e: self._set_angle_mode("front_only"),
+            style=ft.ButtonStyle(color=ACCENT),
+        )
+        self.btn_pack_full = ft.TextButton(
+            content="Full pack",
+            on_click=lambda _e: self._set_angle_mode("full_pack"),
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+        )
         self.angle_mode_row = ft.Row(
             [
-                ft.Text("Ref pack:", size=FONT_SM, color=TEXT_MUTED),
-                ft.TextButton(
-                    content="Hero / Front only",
-                    on_click=lambda _e: self._set_angle_mode("front_only"),
-                    style=ft.ButtonStyle(color=ACCENT),
-                ),
-                ft.TextButton(
-                    content="Full pack",
-                    on_click=lambda _e: self._set_angle_mode("full_pack"),
-                    style=ft.ButtonStyle(color=TEXT_MUTED),
-                ),
+                self.angle_mode_label,
+                self.btn_pack_hero,
+                self.btn_pack_full,
             ],
             spacing=4,
             wrap=True,
@@ -449,11 +454,14 @@ class DirectorView:
                     ),
                     ft.Text(
                         "1. Set total duration and pick a multi-shot model.\n"
-                        "2. Add shots; use Auto-balance shot times (or edit start/end).\n"
-                        "3. Per shot: Character = who, Scene = where, Action = what happens.\n"
-                        "4. Multi-ref (V3 / Imagine): both stills. Single-ref (O3): "
-                        "Scene fills Location (text); action stays character-only.\n"
-                        "5. Master brief + Enhance optional, then Generate.",
+                        "2. Add shots; Auto-balance times (or set start/end manually).\n"
+                        "3. Per shot: Character (who) + Scene (where) + action (what).\n"
+                        "4. Multi-ref models bind character still + scene still; "
+                        "single-ref uses character image and describes location in text.\n"
+                        "5. Optional: Front/Hero only vs Full pack when the model counts "
+                        "each angle (character identity + scene Angle B/C).\n"
+                        "6. Watch Ref / Shot budget (blue / amber / red).\n"
+                        "7. Enhance assembled brief if needed, then Generate.",
                         size=FONT_SM,
                         color=TEXT_MUTED,
                     ),
@@ -901,43 +909,84 @@ class DirectorView:
         except Exception:
             pass
 
+    def _any_scene_angle_pack(self, shots: list | None = None) -> bool:
+        """True if any shot has scene Angle B/C extras loaded."""
+        for row in self._shots:
+            ex = row.get("scene_extra_paths") or ()
+            if ex:
+                return True
+        if shots:
+            for sh in shots:
+                if getattr(sh, "scene_extra_paths", None):
+                    return True
+        return False
+
+    def _any_character_pack(self) -> bool:
+        for row in self._shots:
+            ex = row.get("character_extra_paths") or ()
+            if ex:
+                return True
+        return False
+
     def _sync_ref_budget(self) -> None:
         """Unique-asset ref budget + Generate gate (blue / amber / red)."""
         try:
             spec = self._current_spec()
             shots = self._collect_shots()
-            # Show pack toggle for bag models always; for kling multi-ref when scene extras exist
-            is_bag = (getattr(spec, "ref_budget_mode", "") or "") == "image_bag"
-            multi_scene = bool(getattr(spec, "supports_scene_image_ref", False))
-            show_pack = is_bag or multi_scene
+            # Multi-ref only: single-ref (O3) always Hero only — no pack toggle
+            multi_ref = bool(getattr(spec, "supports_scene_image_ref", False)) or (
+                (getattr(spec, "ref_budget_mode", "") or "") == "image_bag"
+            )
+            has_scene_pack = self._any_scene_angle_pack(shots)
+            has_char_pack = self._any_character_pack()
+            # Multi-ref only (discover pack before extras bound); single-ref = Hero only
+            show_pack = multi_ref
             self.angle_mode_row.visible = show_pack
             self.angle_mode_hint.visible = show_pack
-            ang = self._current_angle_mode() if show_pack else "n/a"
+            ang = self._current_angle_mode() if show_pack else "front_only"
             if show_pack:
-                # Highlight active mode button
-                for i, btn in enumerate(self.angle_mode_row.controls):
-                    if not isinstance(btn, ft.TextButton):
-                        continue
-                    label = str(getattr(btn, "content", "") or "")
-                    active = (
-                        (ang == "front_only" and "Front" in label)
-                        or (ang == "full_pack" and "Full" in label)
-                    )
+                # Dynamic label when scene angles are available
+                if has_scene_pack and not has_char_pack:
+                    self.angle_mode_label.value = "Scene pack:"
+                    self.btn_pack_hero.content = "Hero only"
+                elif has_char_pack and not has_scene_pack:
+                    self.angle_mode_label.value = "Identity pack:"
+                    self.btn_pack_hero.content = "Front only"
+                else:
+                    self.angle_mode_label.value = "Ref pack:"
+                    self.btn_pack_hero.content = "Hero / Front only"
+                # Highlight active mode
+                for btn, mode in (
+                    (self.btn_pack_hero, "front_only"),
+                    (self.btn_pack_full, "full_pack"),
+                ):
                     try:
                         btn.style = ft.ButtonStyle(
-                            color=ACCENT if active else TEXT_MUTED
+                            color=ACCENT if ang == mode else TEXT_MUTED
                         )
                     except Exception:
                         pass
                 auto = self._angle_mode_user == "auto"
-                self.angle_mode_hint.value = (
-                    f"Using {('Hero/Front only' if ang == 'front_only' else 'Full pack')}"
-                    + (" (auto)" if auto else "")
-                    + ". Hero/Front only = primary stills; Full pack = character "
-                    "angles + scene Angle B/C. Auto: Front only when a scene is bound."
-                )
+                mode_name = "Hero only" if ang == "front_only" else "Full pack"
+                bits = [f"Using {mode_name}" + (" (auto)" if auto else "")]
+                if has_scene_pack:
+                    bits.append(
+                        "Full pack includes scene Angle B/C; Hero only = main plate."
+                    )
+                if has_char_pack:
+                    bits.append(
+                        "Full pack includes character Side/Close-up; Front only = primary."
+                    )
+                if auto:
+                    bits.append(
+                        "Auto defaults to Hero/Front only when a scene is bound "
+                        "(and character is also bound)."
+                    )
+                self.angle_mode_hint.value = " ".join(bits)
             budget = count_director_ref_budget(
-                spec, shots, angle_mode=ang if show_pack else None
+                spec,
+                shots,
+                angle_mode=ang if multi_ref else "front_only",
             )
             self.ref_budget_label.value = (
                 f"Refs {budget.used} / {budget.max_refs}  ·  "

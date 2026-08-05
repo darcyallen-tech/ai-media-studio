@@ -42,6 +42,7 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - **Scenes polish**: **New scene** button; enlarge still from generate/form/list; **Name** primary in list (not long prompt); broken/missing thumbs show placeholder + repair path from `scene_stills/`; taller description field; **Create variation** I2I panel (parent ref → Generate → Confirm/Regenerate/Dismiss → child under Variations)
 - **Scenes plate helpers**: Setting / Type / Time / Weather / Activity (+ notes) rebuild location description; variation quick chips (Winter, Night, Rain, Golden hour, Overcast)
 - **Scenes multi-angle pack**: Hero + Left(B)/Right(C); Generate / Replace / Clear; cost line; list “N angles” badge; Director Hero only vs Full pack
+- **Director how-to** updated (duration → balance → Character/Scene → multi-ref packs → budget → Generate); scene pack toggle when multi-ref
 
 ### Characters tab
 - New main tab **Characters** — save reusable character stills (local store only)
