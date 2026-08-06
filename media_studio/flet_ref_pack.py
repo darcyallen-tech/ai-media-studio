@@ -286,7 +286,8 @@ class RefPackPanel:
             tag = style.tag(i)
             if it.role == "character":
                 lab = it.label or ""
-                if lab.lower().startswith("character sheet"):
+                low = lab.lower()
+                if low.startswith("character sheet") or low.endswith(" sheet"):
                     lines.append(
                         f"{tag} = {lab} — multi-angle identity/outfit pack as one ref "
                         "(do not invent extra angles; match person + wardrobe from the sheet)."
@@ -397,9 +398,49 @@ class RefPackPanel:
                 pass
 
     def _set_char(self, index: int, path: str, choice: Any) -> None:
-        label = getattr(choice, "label", None) or Path(path).name
+        """
+        Store a single character identity image for R2V/R2I.
+
+        Prefer path from CharacterPicker (sheet composite when selected).
+        Citation label: ``Camera Man sheet`` or picker label (Front only).
+        Never expands to all individual angle stills.
+        """
         cid = getattr(choice, "id", None)
-        p = str(Path(path).resolve()) if path else ""
+        use_sheet = True
+        # Prefer picker path (already sheet-or-front resolved) when valid
+        p = (path or "").strip()
+        label = ""
+        try:
+            if hasattr(choice, "ref_path") and hasattr(choice, "ref_label"):
+                # Read toggle from matching picker when available
+                if 0 <= index < len(self._char_pickers):
+                    pick = self._char_pickers[index]
+                    use_sheet = bool(getattr(pick, "use_sheet", True))
+                p = choice.ref_path(use_sheet=use_sheet) or p
+                label = choice.ref_label(use_sheet=use_sheet)
+        except Exception:
+            pass
+        if not label:
+            label = getattr(choice, "label", None) or (
+                Path(p).name if p else "Character"
+            )
+            # If path is the composite sheet file, force sheet citation
+            try:
+                sp = getattr(choice, "sheet_path", "") or ""
+                if (
+                    p
+                    and sp
+                    and Path(p).resolve() == Path(sp).resolve()
+                ):
+                    base = getattr(choice, "label", None) or "Character"
+                    label = f"{base} sheet"
+            except OSError:
+                pass
+        if p:
+            try:
+                p = str(Path(p).resolve())
+            except OSError:
+                pass
         while len(self._chars) <= index:
             self._chars.append(RefItem("character", "", "", None))
         self._chars[index] = RefItem("character", p, label, cid)

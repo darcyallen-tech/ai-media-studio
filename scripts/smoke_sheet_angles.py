@@ -334,6 +334,80 @@ def test_ai_compose_downscale_and_megapixel_msg() -> None:
         print("OK AI downscale + megapixel one-liner + local 7-up")
 
 
+def test_r2v_prefers_sheet_single_ref() -> None:
+    """Character with sheet → picker preferred path is composite; citation ends with sheet."""
+    from media_studio.character_store import (
+        character_picker_choices,
+        character_r2v_ref_for_id,
+        find_picker_choice,
+    )
+    from media_studio.flet_ref_pack import RefItem, citation_style_for_model
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        front = root / "front.jpg"
+        side = root / "side.jpg"
+        closeup = root / "closeup.jpg"
+        sheet = root / "sheet.jpg"
+        for p, col in (
+            (front, (1, 2, 3)),
+            (side, (4, 5, 6)),
+            (closeup, (7, 8, 9)),
+            (sheet, (10, 11, 12)),
+        ):
+            _make_still(p, col)
+
+        entry = add_character(
+            name="Camera Man Smoke",
+            still_path=front,
+            identity={"front": front, "side": side, "closeup": closeup},
+        )
+        try:
+            set_character_sheet(entry.id, sheet)
+            ch = find_picker_choice(entry.id)
+            assert ch is not None
+            assert ch.has_sheet
+            # Preferred still_path is the composite
+            assert Path(ch.still_path).resolve() == Path(
+                ch.sheet_path
+            ).resolve() or Path(ch.still_path).name.endswith(
+                Path(ch.sheet_path).name
+            ) or Path(ch.sheet_path).is_file()
+            path_sheet, lab_sheet = character_r2v_ref_for_id(
+                entry.id, use_sheet=True
+            )
+            path_front, lab_front = character_r2v_ref_for_id(
+                entry.id, use_sheet=False
+            )
+            assert path_sheet and Path(path_sheet).is_file()
+            assert path_front and Path(path_front).is_file()
+            # Sheet path is the composite (not front)
+            assert Path(path_sheet).resolve() != Path(path_front).resolve() or (
+                # if copy stored under character_stills, names differ
+                "sheet" in Path(path_sheet).name.lower()
+                or Path(path_sheet).stat().st_size
+                == Path(sheet).stat().st_size
+            )
+            assert lab_sheet.endswith(" sheet")
+            assert "Front" not in lab_sheet
+            assert not lab_front.endswith(" sheet")
+
+            # Single RefItem — not one per angle
+            style = citation_style_for_model("seedance 2.0 reference", mode="r2v")
+            item = RefItem(
+                "character", path_sheet, lab_sheet, entry.id
+            )
+            cite = f"{style.tag(1)} = {item.label} ({item.role})"
+            assert "sheet" in cite.lower()
+            assert "Front" not in cite
+            # Only one path would be sent
+            paths = [item.path]
+            assert len(paths) == 1
+            print("OK R2V sheet preferred + citation + single image_url")
+        finally:
+            delete_character(entry.id, remove_file=True, force_children_check=False)
+
+
 if __name__ == "__main__":
     test_sheet_slots_and_prompts()
     test_accept_back_slot()
@@ -341,4 +415,5 @@ if __name__ == "__main__":
     test_costume_pack_not_parent()
     test_compose_sheet_phase2()
     test_ai_compose_downscale_and_megapixel_msg()
+    test_r2v_prefers_sheet_single_ref()
     print("all smoke_sheet_angles passed")

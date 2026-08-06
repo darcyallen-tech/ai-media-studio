@@ -65,6 +65,10 @@ Voice Clone stays under Audio.
   One Library history asset per accept. AI path auto-downscales refs (≤1024 edge);
   megapixel / “area too large” → one clear tip (Local layout / fewer angles);
   Flux 2* + many angles shows Local layout hint.
+- R2V character ref (Creative Vision + Studio): when a **Character Sheet** exists,
+  default identity ref is the **composite sheet** (one image_url; citation
+  ``Name sheet`` / ``Parent / Costume sheet``). Toggle under character row:
+  **Sheet (recommended)** | **Front only**. Never sends all angle stills when sheet selected.
 - Generate missing Front/Side/Close-up from existing identity stills (multi-ref I2I;
   pure black clean plate by default; preview + Confirm; base + costume variants)
 - Remove background (Bria RMBG, manual): per slot + all-angles batch; cost shown;

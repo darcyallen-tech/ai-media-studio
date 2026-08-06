@@ -23,6 +23,9 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - AI compose: auto-downscale each ref (longest edge ≤1024, no upscale); clear
   one-liner on fal “area too large” / megapixel (prefer Local layout / fewer angles);
   Flux 2* + ≥6 angles shows Local layout hint. Local layout unchanged.
+- R2V refs: prefer saved **Character Sheet** as single identity image (citation
+  ``Camera Man sheet``); toggle **Sheet (recommended)** | **Front only** under
+  character row (Creative Vision + Studio R2V). No multi-angle dump when sheet on.
 - Smoke: `python scripts/smoke_sheet_angles.py`
 
 ### Costume Swap redesign (sequential angles)

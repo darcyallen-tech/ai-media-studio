@@ -545,17 +545,75 @@ class CharacterPickerChoice:
 
     id: str
     label: str
-    still_path: str
+    still_path: str  # preferred path (sheet when present, else Front)
     is_costume: bool = False
     parent_id: str | None = None
     parent_name: str | None = None
+    # Explicit Front / composite sheet for R2V ref mode toggle
+    front_path: str = ""
+    sheet_path: str = ""
 
     @property
     def has_still(self) -> bool:
         try:
-            return bool(self.still_path) and Path(self.still_path).is_file()
+            p = self.ref_path(use_sheet=True) or self.still_path
+            return bool(p) and Path(p).is_file()
         except OSError:
             return False
+
+    @property
+    def has_sheet(self) -> bool:
+        p = (self.sheet_path or "").strip()
+        try:
+            return bool(p) and Path(p).is_file()
+        except OSError:
+            return False
+
+    def ref_path(self, *, use_sheet: bool = True) -> str | None:
+        """
+        Single identity image for R2V/R2I.
+
+        When ``use_sheet`` and a composite sheet exists, return that only —
+        never expand to all individual angle stills.
+        """
+        if use_sheet and self.has_sheet:
+            try:
+                return str(Path(self.sheet_path).resolve())
+            except OSError:
+                return self.sheet_path
+        for cand in (self.front_path, self.still_path):
+            p = (cand or "").strip()
+            if p:
+                try:
+                    if Path(p).is_file():
+                        return str(Path(p).resolve())
+                except OSError:
+                    return p
+        return None
+
+    def ref_label(self, *, use_sheet: bool = True) -> str:
+        """Citation map label: ``Camera Man sheet`` or base picker label."""
+        base = (self.label or "").strip() or "Character"
+        if use_sheet and self.has_sheet:
+            return f"{base} sheet"
+        return base
+
+
+def character_r2v_ref_for_id(
+    char_id: str | None,
+    *,
+    use_sheet: bool = True,
+) -> tuple[str | None, str]:
+    """
+    Resolve a single R2V identity path + citation label for a character id.
+
+    Returns ``(path, label)``. Path is the composite sheet when preferred and
+    available; never a list of angle stills.
+    """
+    ch = find_picker_choice(char_id) if char_id else None
+    if ch is None:
+        return None, ""
+    return ch.ref_path(use_sheet=use_sheet), ch.ref_label(use_sheet=use_sheet)
 
 
 def _costume_display_name(costume_name: str, parent_name: str | None) -> str:
@@ -589,38 +647,48 @@ def character_picker_choices() -> list[CharacterPickerChoice]:
     by_id = {c.id: c for c in all_chars}
     bases = [c for c in all_chars if c.is_base()]
     out: list[CharacterPickerChoice] = []
+    def _choice_for(
+        c: SavedCharacter,
+        *,
+        label: str,
+        is_costume: bool,
+        parent_id: str | None = None,
+        parent_name: str | None = None,
+    ) -> CharacterPickerChoice | None:
+        front = c.primary_still()
+        if not front or not Path(front).is_file():
+            return None
+        sheet = c.sheet_file() or ""
+        preferred = sheet if sheet and Path(sheet).is_file() else front
+        return CharacterPickerChoice(
+            id=c.id,
+            label=label,
+            still_path=preferred,
+            is_costume=is_costume,
+            parent_id=parent_id,
+            parent_name=parent_name,
+            front_path=front,
+            sheet_path=sheet if sheet and Path(sheet).is_file() else "",
+        )
+
     for base in bases:
-        still = base.primary_still()
-        if still and Path(still).is_file():
-            out.append(
-                CharacterPickerChoice(
-                    id=base.id,
-                    label=base.name,
-                    still_path=still,
-                    is_costume=False,
-                )
-            )
+        ch = _choice_for(base, label=base.name, is_costume=False)
+        if ch:
+            out.append(ch)
         for kid in list_costume_children(base.id):
-            kstill = kid.primary_still()
-            if not kstill or not Path(kstill).is_file():
-                continue
             outfit = _costume_display_name(kid.name, base.name)
-            out.append(
-                CharacterPickerChoice(
-                    id=kid.id,
-                    label=f"{base.name} / {outfit}",
-                    still_path=kstill,
-                    is_costume=True,
-                    parent_id=base.id,
-                    parent_name=base.name,
-                )
+            kch = _choice_for(
+                kid,
+                label=f"{base.name} / {outfit}",
+                is_costume=True,
+                parent_id=base.id,
+                parent_name=base.name,
             )
+            if kch:
+                out.append(kch)
     # Orphan costumes (parent missing) still appear
     for c in all_chars:
         if c.is_base() or c.id in {x.id for x in out}:
-            continue
-        still = c.primary_still()
-        if not still or not Path(still).is_file():
             continue
         parent = by_id.get(c.parent_id or "")
         if parent:
@@ -630,16 +698,15 @@ def character_picker_choices() -> list[CharacterPickerChoice]:
         else:
             label = c.name
             parent_name = None
-        out.append(
-            CharacterPickerChoice(
-                id=c.id,
-                label=label,
-                still_path=still,
-                is_costume=True,
-                parent_id=c.parent_id,
-                parent_name=parent_name,
-            )
+        kch = _choice_for(
+            c,
+            label=label,
+            is_costume=True,
+            parent_id=c.parent_id,
+            parent_name=parent_name,
         )
+        if kch:
+            out.append(kch)
     return out
 
 
