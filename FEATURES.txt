@@ -48,8 +48,15 @@ Voice Clone stays under Audio.
   with confirm each; full-body Front/Side; pure black clean plate)
 - Upload still, or pick from Previously used / From Resolve; optional Open Library
 - Name (required) + optional notes / tags → Save
-- Identity pack (up to 3): Front (primary) · Side (profile) · Close-up (face);
-  list thumb = Front (or first available); Edit manages slots; click thumb → large preview
+- Identity pack: Front (primary) · Side (profile) · Close-up (face); list thumb =
+  Front (or first available); Edit manages core slots; click thumb → large preview
+- Optional **sheet angles** (Phase 1): Back · ¾ front · ¾ back · Top — not required
+  to save. **Generate sheet angles** on base cards **and each costume row** (needs
+  Front): checklist of missing angles, multi-ref I2I (Seedream 5 Pro / Flux 2 Pro/Max
+  edit, …), Est. cost, Generate selected; preview + Accept / Regenerate / Discard per
+  angle. Identity lock = **that pack’s** Front→Side→Close-up only (costume never
+  pulls parent base stills). Accept stores on the costume/base pack, not the parent.
+  No full sheet composite yet (Phase 2)
 - Generate missing Front/Side/Close-up from existing identity stills (multi-ref I2I;
   pure black clean plate by default; preview + Confirm; base + costume variants)
 - Remove background (Bria RMBG, manual): per slot + all-angles batch; cost shown;

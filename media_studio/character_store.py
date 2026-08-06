@@ -1,8 +1,9 @@
 """
 Local Characters store — reusable character stills for Motion Sync, Director, etc.
 
-Identity pack: Front / Side / Close-up (up to 3 slots).
-Saved under data/characters.json; stills in data/character_stills/. No cloud.
+Identity pack: Front / Side / Close-up (core) plus optional sheet angles
+(Back, ¾ front, ¾ back, Top). Saved under data/characters.json; stills in
+data/character_stills/. No cloud.
 """
 
 from __future__ import annotations
@@ -22,22 +23,46 @@ DATA_DIR = PROJECT_ROOT / "data"
 CHARACTERS_FILE = DATA_DIR / "characters.json"
 STILLS_DIR = DATA_DIR / "character_stills"
 
-# Identity pack slots (order matters for primary preference)
+# Core identity pack (costume sequential, create form, Generate profile)
 IDENTITY_SLOTS: tuple[str, ...] = ("front", "side", "closeup")
+CORE_IDENTITY_SLOTS: tuple[str, ...] = IDENTITY_SLOTS
+
+# Phase 1 character sheet extras (optional; not required to save)
+SHEET_ANGLE_SLOTS: tuple[str, ...] = (
+    "back",
+    "threequarter_front",
+    "threequarter_back",
+    "top",
+)
+# Full ordered pack for persistence / refs / list summary
+ALL_IDENTITY_SLOTS: tuple[str, ...] = CORE_IDENTITY_SLOTS + SHEET_ANGLE_SLOTS
+
 SLOT_LABELS: dict[str, str] = {
     "front": "Front (full or ¾ body)",
     "side": "Side (profile)",
     "closeup": "Close-up (face)",
+    "back": "Back (full body)",
+    "threequarter_front": "¾ front",
+    "threequarter_back": "¾ back",
+    "top": "Top / high angle",
 }
 SLOT_SHORT: dict[str, str] = {
     "front": "Front",
     "side": "Side",
     "closeup": "Close-up",
+    "back": "Back",
+    "threequarter_front": "¾ front",
+    "threequarter_back": "¾ back",
+    "top": "Top",
 }
 SLOT_VIEW_HINT: dict[str, str] = {
     "front": "front view, full or three-quarter body, head fully visible",
     "side": "side profile view of the same person",
     "closeup": "face close-up portrait of the same person",
+    "back": "full-body back view of the same person, head to toe",
+    "threequarter_front": "three-quarter front view of the same person",
+    "threequarter_back": "three-quarter back view of the same person",
+    "top": "high angle / top-down view of the same person",
 }
 
 # Shared clean-plate language for generated identity / costume angles
@@ -48,7 +73,9 @@ CLEAN_PLATE_BG = (
     "and fully visible for the target angle. Ready for composite / Motion Sync."
 )
 
+# Core pack max for auto-fill empty slots; sheet angles are explicit only
 MAX_STILLS_PER_CHARACTER = 3
+MAX_IDENTITY_STILLS = len(ALL_IDENTITY_SLOTS)
 
 # Default I2I prompt for Generate variation (face-lock style)
 VARIATION_PROMPT = (
@@ -92,19 +119,19 @@ class SavedCharacter:
         """Keep still_path / still_paths aligned with identity pack."""
         pack = self.normalized_identity()
         self.identity = pack
-        ordered = [pack[s] for s in IDENTITY_SLOTS if pack.get(s)]
+        ordered = [pack[s] for s in ALL_IDENTITY_SLOTS if pack.get(s)]
         self.still_paths = ordered
         self.still_path = ordered[0] if ordered else ""
 
     def normalized_identity(self) -> dict[str, str]:
         out: dict[str, str] = {}
-        for slot in IDENTITY_SLOTS:
+        for slot in ALL_IDENTITY_SLOTS:
             p = (self.identity.get(slot) or "").strip()
             if p:
                 out[slot] = p
         # Fallback from still_paths if identity empty
         if not out and self.still_paths:
-            for slot, p in zip(IDENTITY_SLOTS, self.still_paths):
+            for slot, p in zip(ALL_IDENTITY_SLOTS, self.still_paths):
                 s = (p or "").strip()
                 if s:
                     out[slot] = s
@@ -113,16 +140,21 @@ class SavedCharacter:
         return out
 
     def all_stills(self) -> list[str]:
-        """Filled stills in slot order (Front → Side → Close-up)."""
+        """Filled stills in slot order (core pack then sheet angles)."""
         pack = self.normalized_identity()
-        return [pack[s] for s in IDENTITY_SLOTS if pack.get(s)]
+        return [pack[s] for s in ALL_IDENTITY_SLOTS if pack.get(s)]
+
+    def core_stills(self) -> list[str]:
+        """Front / Side / Close-up only (costume + classic pack)."""
+        pack = self.normalized_identity()
+        return [pack[s] for s in CORE_IDENTITY_SLOTS if pack.get(s)]
 
     def primary_still(self) -> str | None:
-        """Front preferred, else first available slot."""
+        """Front preferred, else first available core, else any sheet angle."""
         pack = self.normalized_identity()
         if pack.get("front"):
             return pack["front"]
-        for s in IDENTITY_SLOTS:
+        for s in ALL_IDENTITY_SLOTS:
             if pack.get(s):
                 return pack[s]
         return None
@@ -132,7 +164,21 @@ class SavedCharacter:
 
     def filled_slots(self) -> list[tuple[str, str]]:
         pack = self.normalized_identity()
-        return [(s, pack[s]) for s in IDENTITY_SLOTS if pack.get(s)]
+        return [(s, pack[s]) for s in ALL_IDENTITY_SLOTS if pack.get(s)]
+
+    def has_front(self) -> bool:
+        p = self.get_slot("front")
+        return bool(p and Path(p).is_file())
+
+    def missing_sheet_angles(self) -> list[str]:
+        """Sheet slots not yet filled (or file missing)."""
+        pack = self.normalized_identity()
+        out: list[str] = []
+        for s in SHEET_ANGLE_SLOTS:
+            p = (pack.get(s) or "").strip()
+            if not p or not Path(p).is_file():
+                out.append(s)
+        return out
 
     def get_slot(self, slot: str) -> str | None:
         key = _norm_slot(slot)
@@ -142,7 +188,7 @@ class SavedCharacter:
 
     def slot_summary(self) -> str:
         pack = self.normalized_identity()
-        parts = [SLOT_SHORT[s] for s in IDENTITY_SLOTS if pack.get(s)]
+        parts = [SLOT_SHORT[s] for s in ALL_IDENTITY_SLOTS if pack.get(s)]
         if not parts:
             return "no stills"
         return " · ".join(parts)
@@ -161,6 +207,19 @@ def _norm_slot(slot: str | None) -> str | None:
         "closeup": "closeup",
         "close": "closeup",
         "face": "closeup",
+        "back": "back",
+        "rear": "back",
+        "threequarterfront": "threequarter_front",
+        "3/4front": "threequarter_front",
+        "34front": "threequarter_front",
+        "threequarter": "threequarter_front",
+        "threequarterback": "threequarter_back",
+        "3/4back": "threequarter_back",
+        "34back": "threequarter_back",
+        "top": "top",
+        "topdown": "top",
+        "highangle": "top",
+        "overhead": "top",
     }
     return aliases.get(s)
 
@@ -193,10 +252,17 @@ def _from_dict(item: dict[str, Any]) -> SavedCharacter | None:
     identity: dict[str, str] = {}
     raw_id = item.get("identity")
     if isinstance(raw_id, dict):
-        for slot in IDENTITY_SLOTS:
+        for slot in ALL_IDENTITY_SLOTS:
             p = str(raw_id.get(slot) or "").strip()
             if p:
                 identity[slot] = p
+        # Accept unknown keys that normalize to a known slot
+        for k, v in raw_id.items():
+            key = _norm_slot(str(k))
+            if key and key not in identity:
+                p = str(v or "").strip()
+                if p:
+                    identity[key] = p
 
     # Legacy still_paths / still_path → fill empty slots in order
     still = str(item.get("still_path") or "").strip()
@@ -211,7 +277,7 @@ def _from_dict(item: dict[str, Any]) -> SavedCharacter | None:
         paths.insert(0, still)
 
     if not identity and paths:
-        for slot, p in zip(IDENTITY_SLOTS, paths):
+        for slot, p in zip(ALL_IDENTITY_SLOTS, paths):
             identity[slot] = p
     elif identity and paths:
         # Ensure primary still appears as front if front empty
@@ -378,7 +444,7 @@ def add_character(
     char_id = uuid.uuid4().hex[:12]
 
     if identity:
-        for slot in IDENTITY_SLOTS:
+        for slot in ALL_IDENTITY_SLOTS:
             raw = identity.get(slot)
             if not raw:
                 continue
@@ -643,24 +709,39 @@ def update_character(
     pack = dict(found.normalized_identity())
 
     if identity is not None:
+        prev = found.normalized_identity()
         pack = {}
-        for slot in IDENTITY_SLOTS:
-            raw = identity.get(slot)
+        payload_keys: set[str] = set()
+        for k, raw in identity.items():
+            key = _norm_slot(str(k))
+            if not key or key not in ALL_IDENTITY_SLOTS:
+                continue
+            payload_keys.add(key)
             if raw is None or raw == "":
                 continue
             p = Path(str(raw))
             if p.is_file():
-                pack[slot] = _store_path(
-                    p, char_id=found.id, name=new_name, slot=slot
+                pack[key] = _store_path(
+                    p, char_id=found.id, name=new_name, slot=key
                 )
+        # Core pack is replaced by payload (missing core key = cleared).
+        # Sheet angles omitted from payload are preserved so Edit form / costume
+        # replace cannot wipe Back / ¾ / Top accidentally.
+        for slot in SHEET_ANGLE_SLOTS:
+            if slot not in payload_keys and prev.get(slot):
+                pack[slot] = prev[slot]
     elif still_paths is not None:
+        prev = found.normalized_identity()
         pack = {}
-        for slot, p in zip(IDENTITY_SLOTS, still_paths):
+        for slot, p in zip(CORE_IDENTITY_SLOTS, still_paths):
             src = Path(p)
             if src.is_file():
                 pack[slot] = _store_path(
                     src, char_id=found.id, name=new_name, slot=slot
                 )
+        for slot in SHEET_ANGLE_SLOTS:
+            if prev.get(slot):
+                pack[slot] = prev[slot]
     elif still_path is not None:
         src = Path(still_path)
         if not src.is_file():
@@ -1752,6 +1833,148 @@ def estimate_profile_cost(
         model_key=model_key or preferred_costume_model(),
         resolution=resolution,
     )
+
+
+# ---------------------------------------------------------------------------
+# Character sheet angles (Phase 1) — Back / ¾ front / ¾ back / Top
+# ---------------------------------------------------------------------------
+
+SHEET_ANGLE_VIEW_PROMPTS: dict[str, str] = {
+    "back": (
+        "full-body head-to-toe back view, entire figure visible including feet, "
+        "standing straight, neutral pose, arms relaxed, facing away from camera, "
+        "subject centered, no crop at head or feet"
+    ),
+    "threequarter_front": (
+        "full-body head-to-toe three-quarter front view (about 45°), entire figure "
+        "visible including feet, standing straight, neutral pose, subject centered, "
+        "no crop at head or feet"
+    ),
+    "threequarter_back": (
+        "full-body head-to-toe three-quarter back view (about 45° from behind), "
+        "entire figure visible including feet, standing straight, neutral pose, "
+        "subject centered, no crop at head or feet"
+    ),
+    "top": (
+        "high-angle / slight top-down view of the same person, full body or clear "
+        "upper-body framing appropriate to the angle, head fully visible, neutral pose"
+    ),
+}
+
+
+def is_sheet_angle_slot(slot: str | None) -> bool:
+    key = _norm_slot(slot)
+    return bool(key and key in SHEET_ANGLE_SLOTS)
+
+
+def sheet_angle_ref_order(
+    identity: dict[str, str] | None,
+    *,
+    core_only: bool = True,
+) -> list[str]:
+    """
+    Multi-ref order for sheet-angle generate.
+
+    Identity lock = Front → Side → Close-up from **this pack only**
+    (costume pack or base pack — never merge a parent base into a costume).
+
+    When ``core_only`` (default), do not use already-filled sheet angles as refs.
+    First path is primary (image_file); rest are extras.
+    """
+    pack = {
+        s: p
+        for s, p in (identity or {}).items()
+        if p and Path(str(p)).is_file()
+    }
+    ordered: list[str] = []
+
+    def _add(p: str | None) -> None:
+        if not p:
+            return
+        try:
+            rp = str(Path(p).resolve())
+        except OSError:
+            rp = str(p)
+        if not Path(rp).is_file():
+            return
+        if rp not in ordered:
+            ordered.append(rp)
+
+    for s in CORE_IDENTITY_SLOTS:
+        _add(pack.get(s))
+    if not core_only:
+        for s in SHEET_ANGLE_SLOTS:
+            _add(pack.get(s))
+    return ordered
+
+
+def sheet_angle_identity_for_character(character: SavedCharacter | None) -> dict[str, str]:
+    """
+    Pack used as sheet-angle identity lock for one character (base or costume).
+
+    Only that character’s own Front/Side/Close-up — never parent base stills.
+    """
+    if character is None:
+        return {}
+    pack = character.normalized_identity()
+    out: dict[str, str] = {}
+    for s in CORE_IDENTITY_SLOTS:
+        p = (pack.get(s) or "").strip()
+        if p and Path(p).is_file():
+            out[s] = p
+    return out
+
+
+def sheet_angle_prompt_for_slot(slot: str, *, note: str = "") -> str:
+    """
+    Identity-lock prompt for one missing sheet angle.
+
+    Same person + outfit, neutral seamless studio / clean plate, no new clothing.
+    """
+    key = _norm_slot(slot) or "back"
+    view = SHEET_ANGLE_VIEW_PROMPTS.get(key) or SLOT_VIEW_HINT.get(
+        key, "character reference still"
+    )
+    crop = (
+        "full body head-to-toe"
+        if key != "top"
+        else "full body or appropriate crop for a high angle"
+    )
+    base = (
+        "Same person and outfit as the reference image(s). "
+        "Keep identity, face, hair, age, skin tone, body proportions, and wardrobe "
+        "exactly — no new clothing, no costume change, no scene environment. "
+        f"Generate a photoreal character-reference still: {view}. "
+        f"Framing: {crop}. Neutral seamless studio look. "
+        "Do not invent a different person. Head unobstructed. "
+        + CLEAN_PLATE_BG
+    )
+    n = (note or "").strip()
+    if n:
+        base += f" Optional user note (secondary): {n}"
+    return base
+
+
+def estimate_sheet_angle_cost(
+    n_angles: int = 1,
+    *,
+    model_key: str | None = None,
+    resolution: str | None = None,
+) -> str:
+    """Est. cost for N sheet-angle images (one I2I call each)."""
+    return estimate_costume_swap_cost(
+        max(0, int(n_angles or 0)),
+        model_key=model_key or preferred_costume_model(),
+        resolution=resolution,
+    )
+
+
+def preferred_sheet_resolution(model_label: str | None = None) -> str | None:
+    """Default ~2K when the model allows; else first practical option."""
+    opts = edit_resolution_options(model_label or preferred_costume_model())
+    if not opts:
+        return None
+    return default_practical_resolution(opts)
 
 
 # ---------------------------------------------------------------------------

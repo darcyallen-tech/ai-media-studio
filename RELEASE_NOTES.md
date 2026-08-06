@@ -12,6 +12,16 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### Character sheet angles (Phase 1)
+- Optional pack slots beyond Front/Side/Close-up: **Back · ¾ front · ¾ back · Top**
+- **Generate sheet angles** on base cards **and each costume row** (needs Front):
+  checklist, multi-ref I2I (Seedream 5 Pro / Flux 2 Pro/Max, …), Est. cost, Generate
+- Per angle: preview + **Accept / Regenerate / Discard**
+- Identity lock = **that pack’s** Front→Side→Close-up only (costume never uses parent
+  base stills); Accept stores on the costume/base pack, not the parent
+- Edit form / costume replace preserve sheet angles when only core pack is updated
+- Smoke: `python scripts/smoke_sheet_angles.py`
+
 ### Costume Swap redesign (sequential angles)
 - **Front only first** → then Side → Close-up (one image each; no batch-all)
 - After Front succeeds, that costume still is **primary ref** for Side/Close-up

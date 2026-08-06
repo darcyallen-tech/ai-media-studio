@@ -1,7 +1,8 @@
 """
 Characters tab — local reusable character stills.
 
-Identity pack (Front / Side / Close-up), costume swap, variation, shortcuts.
+Identity pack (Front / Side / Close-up), optional sheet angles (Back / ¾ / Top),
+costume swap, variation, shortcuts.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from media_studio.character_store import (
     HELPER_NONE,
     IDENTITY_SLOTS,
     MAX_STILLS_PER_CHARACTER,
+    SHEET_ANGLE_SLOTS,
     SLOT_LABELS,
     SLOT_SHORT,
     T2I_SEQ_ORDER,
@@ -56,16 +58,21 @@ from media_studio.character_store import (
     estimate_bg_remove_cost,
     estimate_costume_swap_cost,
     estimate_profile_cost,
+    estimate_sheet_angle_cost,
     estimate_t2i_character_cost,
     list_base_characters,
     list_costume_children,
     load_characters,
     multi_ref_image_edit_labels,
     preferred_costume_model,
+    preferred_sheet_resolution,
     profile_prompt_for_slot,
     run_background_remove,
     set_character_locked,
     set_character_slot,
+    sheet_angle_identity_for_character,
+    sheet_angle_prompt_for_slot,
+    sheet_angle_ref_order,
     short_outfit_label,
     t2i_character_model_labels,
     t2i_resolution_options,
@@ -165,6 +172,18 @@ class CharactersView:
         self._profile_pending_path: str | None = None
         self._profile_pending_slot: str | None = None
         self._profile_char_id: str | None = None
+
+        # Character sheet angles (Phase 1) session
+        self._sheet_busy = False
+        self._sheet_char_id: str | None = None
+        self._sheet_char_name: str = ""
+        self._sheet_is_costume: bool = False
+        self._sheet_parent_name: str = ""
+        self._sheet_identity: dict[str, str] = {}  # this pack only (core F/S/C)
+        self._sheet_results: dict[str, str] = {}  # slot -> pending path (not yet accepted)
+        self._sheet_accepted: set[str] = set()
+        self._sheet_running_slot: str | None = None
+        self._sheet_checks: dict[str, ft.Checkbox] = {}
 
         # Lightbox
         self._lightbox_dialog: ft.AlertDialog | None = None
@@ -1469,6 +1488,146 @@ class CharactersView:
             visible=False,
         )
 
+        # ----- Character sheet angles (Phase 1) -----
+        _sheet_models = multi_ref_image_edit_labels()
+        _sheet_default = preferred_costume_model()
+        _sheet_spec = resolve_image_edit_model(_sheet_default)
+        _sheet_default_label = (
+            _sheet_spec.label
+            if _sheet_spec and _sheet_spec.label in _sheet_models
+            else (_sheet_models[0] if _sheet_models else "Image · Flux 2 Pro (edit)")
+        )
+        self.sheet_title = ft.Text(
+            "Generate sheet angles",
+            size=FONT_SM,
+            color=TEXT,
+            weight=ft.FontWeight.W_700,
+        )
+        self.sheet_char_label = ft.Text("", size=FONT_SM, color=TEXT_MUTED)
+        self.sheet_checks_col = ft.Column(spacing=2, tight=True)
+        self._sheet_checks = {}
+        for s in SHEET_ANGLE_SLOTS:
+            cb = ft.Checkbox(
+                label=SLOT_SHORT[s],
+                value=True,
+                fill_color=ACCENT,
+                on_change=self._on_sheet_controls_change,
+            )
+            self._sheet_checks[s] = cb
+            self.sheet_checks_col.controls.append(cb)
+        self.sheet_model_dd = styled_dropdown(
+            label_text="Model (multi-ref R2I)",
+            options=_sheet_models,
+            value=_sheet_default_label,
+            on_select=self._on_sheet_controls_change,
+            expand=True,
+        )
+        _sheet_res = edit_resolution_options(_sheet_default_label)
+        _sheet_pref = preferred_sheet_resolution(_sheet_default_label)
+        self.sheet_res_dd = styled_dropdown(
+            label_text="Resolution",
+            options=_sheet_res or ["auto"],
+            value=_sheet_pref
+            if _sheet_pref and _sheet_pref in (_sheet_res or [])
+            else (
+                default_practical_resolution(_sheet_res) if _sheet_res else "auto"
+            ),
+            on_select=self._on_sheet_controls_change,
+            expand=True,
+        )
+        self.sheet_res_dd.visible = bool(_sheet_res)
+        self.sheet_note = ft.TextField(
+            label="Optional angle note (Enhance ok)",
+            hint_text="Usually leave blank — identity lock is automatic",
+            value="",
+            dense=True,
+            filled=True,
+            fill_color=PANEL,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            max_lines=2,
+            multiline=True,
+        )
+        self.btn_sheet_enhance = make_enhance_button(
+            on_click=self._on_sheet_enhance,
+            tooltip="Rewrite optional note for multi-ref identity lock (Grok)",
+        )
+        self.sheet_cost = ft.Text(
+            estimate_sheet_angle_cost(1),
+            size=FONT_SM,
+            color=TEXT_MUTED,
+        )
+        self.btn_sheet_generate = ft.FilledButton(
+            content="Generate selected",
+            on_click=self._sheet_generate_selected,
+            style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+            height=40,
+        )
+        self.btn_sheet_close = ft.TextButton(
+            content="Close",
+            on_click=self._sheet_close,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+        )
+        self.sheet_progress_ring = ft.ProgressRing(
+            width=28, height=28, stroke_width=3, color=ACCENT, visible=False
+        )
+        self.sheet_busy_row = ft.Row(
+            [
+                self.sheet_progress_ring,
+                ft.Text(
+                    "Generating sheet angle…",
+                    size=FONT_SM,
+                    color=ACCENT,
+                    weight=ft.FontWeight.W_600,
+                ),
+            ],
+            spacing=10,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            visible=False,
+        )
+        self.sheet_results_row = ft.Row(spacing=12, wrap=True)
+        self.sheet_box = ft.Container(
+            content=ft.Column(
+                [
+                    self.sheet_title,
+                    self.sheet_char_label,
+                    ft.Text(
+                        "Missing angles (Back · ¾ front · ¾ back · Top). "
+                        "Identity lock = this pack’s Front → Side → Close-up only "
+                        "(costume rows never pull the parent base stills). "
+                        "Accept stores on this pack — not the parent.",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                    ),
+                    label("Angles to generate", muted=True),
+                    self.sheet_checks_col,
+                    ft.Row([self.sheet_model_dd], spacing=0),
+                    ft.Row([self.sheet_res_dd], spacing=0),
+                    self.sheet_note,
+                    ft.Row(
+                        [
+                            self.btn_sheet_enhance,
+                            self.btn_sheet_generate,
+                            self.btn_sheet_close,
+                        ],
+                        spacing=8,
+                        wrap=True,
+                    ),
+                    self.sheet_cost,
+                    self.sheet_busy_row,
+                    self.sheet_results_row,
+                ],
+                spacing=8,
+                tight=True,
+            ),
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, ACCENT),
+            border_radius=8,
+            padding=12,
+            visible=False,
+        )
+
         self.empty_state = ft.Column(
             [
                 ft.Text(
@@ -1585,9 +1744,10 @@ class CharactersView:
         left = [
             section_title("Characters"),
             ft.Text(
-                "Identity pack: Front / Side / Close-up. Costume swap changes wardrobe "
-                "across filled angles (multi-ref I2I). Scene Placer composites a "
-                "character into a scene with pose control. Local store only.",
+                "Identity pack: Front / Side / Close-up (+ optional sheet angles: "
+                "Back · ¾ · Top). Costume swap changes wardrobe across filled angles "
+                "(multi-ref I2I). Scene Placer composites a character into a scene "
+                "with pose control. Local store only.",
                 size=FONT_SM,
                 color=TEXT_MUTED,
             ),
@@ -1618,6 +1778,7 @@ class CharactersView:
             self.bg_cost_label,
             self.bg_preview_box,
             self.profile_box,
+            self.sheet_box,
             ft.Row([self.btn_save, self.btn_cancel_edit], spacing=8),
             self.costume_box,
             self.placer_box,
@@ -3252,6 +3413,509 @@ class CharactersView:
         except Exception:
             pass
 
+    # ----- character sheet angles (Phase 1) -----
+
+    def _sheet_model_choice(self) -> str:
+        return (self.sheet_model_dd.value or preferred_costume_model()).strip()
+
+    def _sheet_resolution(self) -> str | None:
+        if not getattr(self.sheet_res_dd, "visible", True):
+            return None
+        return (self.sheet_res_dd.value or "").strip() or None
+
+    def _sheet_sync_res_options(self) -> None:
+        opts = edit_resolution_options(self._sheet_model_choice())
+        from media_studio.flet_theme import dropdown_options
+        from media_studio.character_store import resolution_display_label
+
+        if not opts:
+            self.sheet_res_dd.visible = False
+            return
+        self.sheet_res_dd.visible = True
+        self.sheet_res_dd.options = dropdown_options(opts)
+        if self.sheet_res_dd.value not in opts:
+            pref = preferred_sheet_resolution(self._sheet_model_choice())
+            self.sheet_res_dd.value = (
+                pref if pref in opts else default_practical_resolution(opts)
+            )
+        if len(opts) == 1:
+            self.sheet_res_dd.label = (
+                f"Resolution · {resolution_display_label(opts[0])}"
+            )
+        else:
+            self.sheet_res_dd.label = "Resolution"
+
+    def _sheet_selected_slots(self) -> list[str]:
+        out: list[str] = []
+        for s in SHEET_ANGLE_SLOTS:
+            cb = self._sheet_checks.get(s)
+            if cb is not None and bool(getattr(cb, "value", False)):
+                out.append(s)
+        return out
+
+    def _refresh_sheet_cost(self) -> None:
+        n = max(1, len(self._sheet_selected_slots()) or 1)
+        self.sheet_cost.value = (
+            estimate_sheet_angle_cost(
+                n,
+                model_key=self._sheet_model_choice(),
+                resolution=self._sheet_resolution(),
+            )
+            + f" · {n} angle{'s' if n != 1 else ''}"
+        )
+
+    async def _on_sheet_controls_change(self, e: ft.ControlEvent | None = None) -> None:
+        self._sheet_sync_res_options()
+        self._refresh_sheet_cost()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _make_open_sheet(self, c: SavedCharacter):
+        async def _click(_e: ft.ControlEvent) -> None:
+            self._open_sheet(c)
+
+        return _click
+
+    def _open_sheet(self, c: SavedCharacter) -> None:
+        if self._sheet_busy or self._profile_busy or self._costume_busy:
+            return
+        if not c.has_front():
+            self._set_status(
+                "Need at least a Front still before generating sheet angles.",
+                error=True,
+            )
+            return
+        # Close competing panels
+        try:
+            self.profile_box.visible = False
+            self.costume_box.visible = False
+            self.placer_box.visible = False
+            self.variation_box.visible = False
+        except Exception:
+            pass
+        self._sheet_char_id = c.id
+        self._sheet_char_name = c.name
+        self._sheet_is_costume = bool(c.is_costume_variant())
+        self._sheet_parent_name = ""
+        if self._sheet_is_costume and c.parent_id:
+            parent = next(
+                (x for x in load_characters() if x.id == c.parent_id),
+                None,
+            )
+            if parent:
+                self._sheet_parent_name = parent.name
+        # Core F/S/C of THIS pack only — never parent base stills
+        self._sheet_identity = sheet_angle_identity_for_character(c)
+        self._sheet_results = {}
+        self._sheet_accepted = set()
+        self._sheet_running_slot = None
+        missing = c.missing_sheet_angles()
+        for s in SHEET_ANGLE_SLOTS:
+            cb = self._sheet_checks.get(s)
+            if cb is None:
+                continue
+            filled = bool(c.get_slot(s) and Path(c.get_slot(s) or "").is_file())
+            # Default-check missing; allow re-run of filled (unchecked by default)
+            cb.value = s in missing
+            cb.label = (
+                f"{SLOT_SHORT[s]} (have — re-run?)"
+                if filled
+                else f"{SLOT_SHORT[s]} (missing)"
+            )
+            cb.disabled = False
+        who = c.name
+        if self._sheet_is_costume and self._sheet_parent_name:
+            who = f"{self._sheet_parent_name} / {c.name}"
+        pack_kind = "costume pack" if self._sheet_is_costume else "identity pack"
+        n_lock = len(self._sheet_identity)
+        self.sheet_char_label.value = (
+            f"{who} · {pack_kind} lock ({n_lock} core stills: "
+            f"{c.slot_summary()}) · {len(missing)} missing sheet angle(s)"
+        )
+        self.sheet_title.value = (
+            "Generate sheet angles · costume"
+            if self._sheet_is_costume
+            else "Generate sheet angles"
+        )
+        self.sheet_results_row.controls.clear()
+        self._sheet_sync_res_options()
+        self._refresh_sheet_cost()
+        self.sheet_box.visible = True
+        if not missing:
+            self._set_status(
+                f"{who}: all sheet angles filled — check an angle to re-generate "
+                f"(stores on this {pack_kind})."
+            )
+        else:
+            self._set_status(
+                f"Sheet angles · {who}: lock = this pack’s Front/Side/Close-up only "
+                f"({n_lock} stills). Generate selected → Accept stores on costume/base pack."
+            )
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _sheet_close(self, e: ft.ControlEvent | None = None) -> None:
+        if self._sheet_busy:
+            return
+        self.sheet_box.visible = False
+        self._sheet_results = {}
+        self._sheet_accepted = set()
+        self.sheet_results_row.controls.clear()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _set_sheet_busy(self, busy: bool, *, message: str = "", slot: str | None = None) -> None:
+        self._sheet_busy = busy
+        self._sheet_running_slot = slot if busy else None
+        self.sheet_busy_row.visible = busy
+        self.sheet_progress_ring.visible = busy
+        try:
+            busy_txt = self.sheet_busy_row.controls[1]
+            if isinstance(busy_txt, ft.Text):
+                busy_txt.value = message or "Generating sheet angle…"
+        except Exception:
+            pass
+        self.btn_sheet_generate.disabled = busy
+        self.btn_sheet_enhance.disabled = busy
+        self.btn_sheet_close.disabled = busy
+        self.sheet_model_dd.disabled = busy
+        self.sheet_res_dd.disabled = busy
+        for cb in self._sheet_checks.values():
+            try:
+                cb.disabled = busy
+            except Exception:
+                pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _on_sheet_enhance(self, e: ft.ControlEvent) -> None:
+        def _extra() -> dict[str, Any]:
+            return {
+                "workspace": "characters",
+                "mode": "sheet_angles",
+                "selected": self._sheet_selected_slots(),
+                "guidance": (
+                    "Rewrite the optional note for identity-locked sheet angle "
+                    "generation (same person and outfit, neutral studio). "
+                    "Keep short. Do not invent a different person or new clothing."
+                ),
+            }
+
+        await run_prompt_enhance(
+            page=self.page,
+            state=self.state,
+            prompt_field=self.sheet_note,
+            get_model=self._sheet_model_choice,
+            get_extra_context=_extra,
+            status_ctrl=self.status,
+            job_progress=self.job_progress,
+            enhance_btn=self.btn_sheet_enhance,
+            busy_controls=[self.btn_sheet_generate],
+            context_label="sheet angle note",
+            allow_empty_with_context=True,
+            busy_scope="characters",
+        )
+
+    def _rebuild_sheet_results_ui(self) -> None:
+        self.sheet_results_row.controls.clear()
+        for slot in SHEET_ANGLE_SLOTS:
+            path = self._sheet_results.get(slot)
+            if not path or not Path(path).is_file():
+                continue
+            short = SLOT_SHORT[slot]
+            accepted = slot in self._sheet_accepted
+            img = ft.Image(
+                src=path,
+                width=_RESULT_THUMB,
+                height=_RESULT_THUMB,
+                fit=ft.BoxFit.CONTAIN,
+                border_radius=6,
+            )
+            tap = ft.GestureDetector(
+                content=img,
+                on_tap=self._make_preview_path(path, f"Sheet · {short}"),
+            )
+            status = ft.Text(
+                f"{short} · accepted" if accepted else f"{short} · pending",
+                size=FONT_SM,
+                color=ACCENT if accepted else TEXT_MUTED,
+                weight=ft.FontWeight.W_600,
+            )
+            btn_accept = ft.FilledButton(
+                content="Accept",
+                on_click=self._make_sheet_accept(slot),
+                style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+                height=32,
+                disabled=accepted or self._sheet_busy,
+                visible=not accepted,
+            )
+            btn_regen = ft.OutlinedButton(
+                content="Regenerate",
+                on_click=self._make_sheet_regen(slot),
+                style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+                height=32,
+                disabled=self._sheet_busy,
+                tooltip=f"Re-run only {short}",
+            )
+            btn_discard = ft.TextButton(
+                content="Discard",
+                on_click=self._make_sheet_discard(slot),
+                style=ft.ButtonStyle(color=TEXT_MUTED),
+                height=32,
+                disabled=self._sheet_busy,
+            )
+            card = ft.Container(
+                content=ft.Column(
+                    [
+                        status,
+                        tap,
+                        ft.Text(
+                            "Click preview to enlarge",
+                            size=11,
+                            color=TEXT_MUTED,
+                        ),
+                        ft.Row(
+                            [btn_accept, btn_regen, btn_discard],
+                            spacing=4,
+                            wrap=True,
+                        ),
+                    ],
+                    spacing=4,
+                    tight=True,
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                border=ft.Border.all(1, ACCENT if accepted else BORDER),
+                border_radius=8,
+                padding=8,
+                width=_RESULT_THUMB + 48,
+            )
+            self.sheet_results_row.controls.append(card)
+
+    def _make_sheet_accept(self, slot: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            await self._sheet_accept(slot)
+
+        return _click
+
+    def _make_sheet_regen(self, slot: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            await self._sheet_run_one(slot, regen=True)
+
+        return _click
+
+    def _make_sheet_discard(self, slot: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            self._sheet_results.pop(slot, None)
+            self._sheet_accepted.discard(slot)
+            self._rebuild_sheet_results_ui()
+            self._set_status(f"Discarded {SLOT_SHORT.get(slot, slot)} preview.")
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        return _click
+
+    async def _sheet_accept(self, slot: str) -> None:
+        if self._sheet_busy:
+            return
+        path = self._sheet_results.get(slot)
+        char_id = self._sheet_char_id
+        if not path or not Path(path).is_file():
+            self._set_status("No preview to accept.", error=True)
+            return
+        if not char_id:
+            self._set_status("No character selected.", error=True)
+            return
+        try:
+            updated = set_character_slot(char_id, slot, path)
+        except Exception as exc:
+            self._set_status(str(exc), error=True)
+            return
+        if not updated:
+            self._set_status("Accept failed — character not found.", error=True)
+            return
+        # Keep lock = this pack’s core only (not parent, not new sheet slots)
+        self._sheet_identity = sheet_angle_identity_for_character(updated)
+        self._sheet_accepted.add(slot)
+        short = SLOT_SHORT.get(slot, slot)
+        self._rebuild_sheet_results_ui()
+        # Refresh checklist labels
+        for s in SHEET_ANGLE_SLOTS:
+            cb = self._sheet_checks.get(s)
+            if cb is None:
+                continue
+            filled = bool(updated.get_slot(s) and Path(updated.get_slot(s) or "").is_file())
+            cb.label = (
+                f"{SLOT_SHORT[s]} (have — re-run?)"
+                if filled
+                else f"{SLOT_SHORT[s]} (missing)"
+            )
+            if filled and s == slot:
+                cb.value = False
+        who = updated.name
+        if updated.is_costume_variant() and self._sheet_parent_name:
+            who = f"{self._sheet_parent_name} / {updated.name}"
+        pack_kind = "costume pack" if updated.is_costume_variant() else "identity pack"
+        self.sheet_char_label.value = (
+            f"{who} · {pack_kind}: {updated.slot_summary()}"
+        )
+        self._set_status(
+            f"Accepted {short} on {who} ({pack_kind}) — not the parent base."
+            if updated.is_costume_variant()
+            else f"Accepted {short} on {updated.name} — available as ref elsewhere."
+        )
+        if self._editing_id == updated.id:
+            # Keep edit form in sync for core; sheet is store-only
+            pass
+        self.refresh()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _sheet_generate_selected(self, e: ft.ControlEvent | None = None) -> None:
+        slots = self._sheet_selected_slots()
+        if not slots:
+            self._set_status("Select at least one angle.", error=True)
+            return
+        for slot in slots:
+            if self._sheet_busy:
+                break
+            ok = await self._sheet_run_one(slot, regen=False)
+            if not ok:
+                break
+
+    async def _sheet_run_one(self, slot: str, *, regen: bool) -> bool:
+        if self._sheet_busy or self._profile_busy or self._bg_busy:
+            return False
+        if not self._sheet_char_id:
+            self._set_status("Open Generate sheet angles from a character first.", error=True)
+            return False
+        # Refresh identity from store (includes just-accepted angles)
+        ch = next(
+            (c for c in load_characters() if c.id == self._sheet_char_id),
+            None,
+        )
+        if ch is None:
+            self._set_status("Character not found.", error=True)
+            return False
+        if not ch.has_front():
+            self._set_status("Front still required.", error=True)
+            return False
+        # This character’s core F/S/C only — never parent base underwear/identity
+        self._sheet_identity = sheet_angle_identity_for_character(ch)
+        refs = sheet_angle_ref_order(self._sheet_identity, core_only=True)
+        if not refs:
+            self._set_status(
+                "Need this pack’s Front (and ideally Side/Close-up) as lock refs — "
+                "not the parent base.",
+                error=True,
+            )
+            return False
+        from media_studio.secrets_store import has_fal_key
+
+        if not has_fal_key():
+            self._set_status("FAL API key required — open Settings.", error=True)
+            return False
+        if self.state.is_busy("characters"):
+            return False
+        if not self.state.try_busy("characters"):
+            return False
+
+        short = SLOT_SHORT.get(slot, slot)
+        model = self._sheet_model_choice()
+        note = (self.sheet_note.value or "").strip()
+        prompt = sheet_angle_prompt_for_slot(slot, note=note)
+        self._refresh_sheet_cost()
+        self._set_sheet_busy(
+            True,
+            message=f"Generating {short}…",
+            slot=slot,
+        )
+        self.job_progress.start(f"Sheet · {short}…", self.page)
+        self._set_status(
+            f"Sheet · {short} from {len(refs)} ref(s)…"
+            + (" (regen)" if regen else "")
+        )
+
+        def on_progress(msg: str) -> None:
+            self.job_progress.set_message(classify_progress(msg), self.page)
+            try:
+                busy_txt = self.sheet_busy_row.controls[1]
+                if isinstance(busy_txt, ft.Text):
+                    busy_txt.value = msg or f"Generating {short}…"
+                self.page.update()
+            except Exception:
+                pass
+
+        try:
+            from media_studio.job_context import to_thread_with_job
+            from media_studio.services import generate
+
+            primary = refs[0]
+            extras = refs[1:]
+            params_json = edit_params_json_for_resolution(self._sheet_resolution())
+            result = await to_thread_with_job(
+                self.state,
+                generate,
+                prompt,
+                model_choice=model,
+                image_file=primary,
+                extra_image_files=extras,
+                output_dir=self.state.output_dir,
+                on_progress=on_progress,
+                scenario="character-sheet-angle",
+                parameters_json=params_json,
+            )
+            path = result.primary_image if result.ok else None
+            if not path and result.ok:
+                imgs = result.image_paths or []
+                path = imgs[0] if imgs else None
+            if result.ok and path and Path(path).is_file():
+                self._sheet_results[slot] = str(path)
+                self._sheet_accepted.discard(slot)
+                self._set_sheet_busy(False)
+                self._rebuild_sheet_results_ui()
+                self.job_progress.finish_ok(
+                    f"{short} ready — Accept to store slot", self.page
+                )
+                self._set_status(
+                    f"{short} ready — Accept · Regenerate · Discard"
+                    + (" (regenerated)" if regen else "")
+                    + "."
+                )
+                try:
+                    self.page.update()
+                except Exception:
+                    pass
+                return True
+            err = getattr(result, "status", None) or "Sheet angle generate failed."
+            self._set_sheet_busy(False)
+            self.job_progress.finish_error(err, self.page)
+            self._set_status(err, error=True)
+            return False
+        except Exception as exc:
+            self._set_sheet_busy(False)
+            self.job_progress.finish_error(str(exc), self.page)
+            self._set_status(str(exc), error=True)
+            traceback.print_exc()
+            return False
+        finally:
+            self.state.clear_busy("characters")
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
     # ----- costume swap -----
 
     def _costume_model_choice(self) -> str:
@@ -3357,6 +4021,11 @@ class CharactersView:
         self.costume_errors_text.visible = True
 
     def _open_costume(self, c: SavedCharacter) -> None:
+        try:
+            self.sheet_box.visible = False
+            self.profile_box.visible = False
+        except Exception:
+            pass
         self.placer_box.visible = False
         self._costume_char_id = c.id
         self._costume_char_name = c.name
@@ -4815,6 +5484,29 @@ class CharactersView:
             visible=not nested,
             tooltip="Change outfit — saves under this character as a costume",
         )
+        has_front = bool(c.has_front())
+        n_missing_sheet = len(c.missing_sheet_angles()) if has_front else 0
+        is_costume_row = bool(nested or c.is_costume_variant())
+        btn_sheet = ft.OutlinedButton(
+            content="Generate sheet angles",
+            on_click=self._make_open_sheet(c),
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=36,
+            # Base + costume rows; lock = this pack only (never parent base)
+            disabled=not has_front,
+            visible=True,
+            tooltip=(
+                (
+                    "Costume pack: fill Back / ¾ / Top from this outfit’s "
+                    f"Front/Side/Close-up only — not parent base ({n_missing_sheet} missing)"
+                    if is_costume_row
+                    else "Fill missing Back / ¾ front / ¾ back / Top from identity pack "
+                    f"({n_missing_sheet} missing)"
+                )
+                if has_front
+                else "Needs Front still first"
+            ),
+        )
         btn_placer = ft.OutlinedButton(
             content="Place in scene",
             on_click=self._make_open_placer(c),
@@ -4862,6 +5554,7 @@ class CharactersView:
         actions = [
             btn_use,
             btn_costume,
+            btn_sheet,
             btn_placer,
             btn_var,
             btn_edit,
@@ -5011,6 +5704,8 @@ class CharactersView:
             self._cancel_edit()
         if self._costume_char_id == c.id:
             self._costume_close()
+        if self._sheet_char_id == c.id:
+            self._sheet_close()
         if self._variation_source_id == c.id:
             self._dismiss_variation()
         self._set_status(f"Deleted: {c.name}")
