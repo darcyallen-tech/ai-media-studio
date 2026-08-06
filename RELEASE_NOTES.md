@@ -12,14 +12,17 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
-### Character sheet angles (Phase 1)
+### Character sheet angles (Phase 1) + composite sheet (Phase 2)
 - Optional pack slots beyond Front/Side/Close-up: **Back · ¾ front · ¾ back · Top**
-- **Generate sheet angles** on base cards **and each costume row** (needs Front):
-  checklist, multi-ref I2I (Seedream 5 Pro / Flux 2 Pro/Max, …), Est. cost, Generate
-- Per angle: preview + **Accept / Regenerate / Discard**
-- Identity lock = **that pack’s** Front→Side→Close-up only (costume never uses parent
-  base stills); Accept stores on the costume/base pack, not the parent
-- Edit form / costume replace preserve sheet angles when only core pack is updated
+- **Generate sheet angles** on base + costume rows (needs Front): checklist, multi-ref
+  I2I, Est. cost; Accept stores on that pack only (never parent base stills)
+- **Make sheet** (Phase 2): ≥3 angles incl. Front → local free grid (or AI polish),
+  layout auto/2×2/2×3/3×2, labeled cells, Accept saves composite on character/costume
+  without deleting angle slots; Library history + Send-to + R2V citation
+  `Character sheet: [Name] / [Costume]`
+- AI compose: auto-downscale each ref (longest edge ≤1024, no upscale); clear
+  one-liner on fal “area too large” / megapixel (prefer Local layout / fewer angles);
+  Flux 2* + ≥6 angles shows Local layout hint. Local layout unchanged.
 - Smoke: `python scripts/smoke_sheet_angles.py`
 
 ### Costume Swap redesign (sequential angles)

@@ -35,7 +35,10 @@ from media_studio.character_store import (
     HELPER_NONE,
     IDENTITY_SLOTS,
     MAX_STILLS_PER_CHARACTER,
+    ALL_IDENTITY_SLOTS,
+    LOCAL_SHEET_LAYOUT_MODEL,
     SHEET_ANGLE_SLOTS,
+    SHEET_LAYOUT_PRESETS,
     SLOT_LABELS,
     SLOT_SHORT,
     T2I_SEQ_ORDER,
@@ -45,9 +48,12 @@ from media_studio.character_store import (
     add_character,
     add_character_angle,
     assemble_character_t2i_description,
+    auto_sheet_layout,
+    character_sheet_citation_label,
     character_t2i_i2i_prompt_for_slot,
     character_t2i_prompt_for_slot,
     compile_clothing_helper,
+    compose_character_sheet_local,
     costume_prompt_for_slot,
     costume_ref_order_for_slot,
     default_practical_resolution,
@@ -59,20 +65,28 @@ from media_studio.character_store import (
     estimate_costume_swap_cost,
     estimate_profile_cost,
     estimate_sheet_angle_cost,
+    estimate_sheet_compose_cost,
     estimate_t2i_character_cost,
+    friendly_sheet_compose_error,
+    is_flux2_sheet_model,
+    is_local_sheet_layout,
     list_base_characters,
     list_costume_children,
     load_characters,
     multi_ref_image_edit_labels,
     preferred_costume_model,
     preferred_sheet_resolution,
+    prepare_sheet_ai_angle_refs,
     profile_prompt_for_slot,
     run_background_remove,
     set_character_locked,
+    set_character_sheet,
     set_character_slot,
     sheet_angle_identity_for_character,
     sheet_angle_prompt_for_slot,
     sheet_angle_ref_order,
+    sheet_compose_model_labels,
+    sheet_layout_prompt,
     short_outfit_label,
     t2i_character_model_labels,
     t2i_resolution_options,
@@ -184,6 +198,15 @@ class CharactersView:
         self._sheet_accepted: set[str] = set()
         self._sheet_running_slot: str | None = None
         self._sheet_checks: dict[str, ft.Checkbox] = {}
+
+        # Phase 2 composite sheet session
+        self._compose_busy = False
+        self._compose_char_id: str | None = None
+        self._compose_char_name: str = ""
+        self._compose_is_costume: bool = False
+        self._compose_parent_name: str = ""
+        self._compose_pending_path: str | None = None
+        self._compose_angle_checks: dict[str, ft.Checkbox] = {}
 
         # Lightbox
         self._lightbox_dialog: ft.AlertDialog | None = None
@@ -1628,6 +1651,202 @@ class CharactersView:
             visible=False,
         )
 
+        # ----- Phase 2: Make character / costume sheet (composite grid) -----
+        _compose_models = sheet_compose_model_labels()
+        self.compose_title = ft.Text(
+            "Make character sheet",
+            size=FONT_SM,
+            color=TEXT,
+            weight=ft.FontWeight.W_700,
+        )
+        self.compose_char_label = ft.Text("", size=FONT_SM, color=TEXT_MUTED)
+        self.compose_angles_col = ft.Column(spacing=2, tight=True)
+        self._compose_angle_checks = {}
+        for s in ALL_IDENTITY_SLOTS:
+            cb = ft.Checkbox(
+                label=SLOT_SHORT[s],
+                value=True,
+                fill_color=ACCENT,
+                on_change=self._on_compose_controls_change,
+            )
+            self._compose_angle_checks[s] = cb
+            self.compose_angles_col.controls.append(cb)
+        self.compose_layout_dd = styled_dropdown(
+            label_text="Layout",
+            options=list(SHEET_LAYOUT_PRESETS),
+            value="auto",
+            on_select=self._on_compose_controls_change,
+            expand=True,
+        )
+        self.compose_model_dd = styled_dropdown(
+            label_text="Compose mode",
+            options=_compose_models,
+            value=LOCAL_SHEET_LAYOUT_MODEL,
+            on_select=self._on_compose_controls_change,
+            expand=True,
+        )
+        self.compose_flux_hint = ft.Text(
+            "Many angles → Local layout recommended; AI path auto-downscales refs.",
+            size=11,
+            color=TEXT_MUTED,
+            visible=False,
+        )
+        _compose_res = edit_resolution_options(preferred_costume_model())
+        self.compose_res_dd = styled_dropdown(
+            label_text="Resolution (AI path)",
+            options=_compose_res or ["auto"],
+            value=default_practical_resolution(_compose_res) if _compose_res else "auto",
+            on_select=self._on_compose_controls_change,
+            expand=True,
+        )
+        self.compose_res_dd.visible = False
+        self.compose_note = ft.TextField(
+            label="Optional layout note (Enhance ok)",
+            hint_text="Usually blank — grid + labels are automatic",
+            value="",
+            dense=True,
+            filled=True,
+            fill_color=PANEL,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+            max_lines=2,
+            multiline=True,
+        )
+        self.btn_compose_enhance = make_enhance_button(
+            on_click=self._on_compose_enhance,
+            tooltip="Rewrite layout note only (Grok)",
+        )
+        self.compose_cost = ft.Text(
+            estimate_sheet_compose_cost(model_key=LOCAL_SHEET_LAYOUT_MODEL),
+            size=FONT_SM,
+            color=TEXT_MUTED,
+        )
+        self.btn_compose_generate = ft.FilledButton(
+            content="Generate sheet",
+            on_click=self._compose_generate,
+            style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+            height=40,
+        )
+        self.btn_compose_close = ft.TextButton(
+            content="Close",
+            on_click=self._compose_close,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+        )
+        self.compose_progress_ring = ft.ProgressRing(
+            width=28, height=28, stroke_width=3, color=ACCENT, visible=False
+        )
+        self.compose_busy_row = ft.Row(
+            [
+                self.compose_progress_ring,
+                ft.Text(
+                    "Composing sheet…",
+                    size=FONT_SM,
+                    color=ACCENT,
+                    weight=ft.FontWeight.W_600,
+                ),
+            ],
+            spacing=10,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            visible=False,
+        )
+        self.compose_preview_img = ft.Image(
+            src="",
+            width=220,
+            height=220,
+            fit=ft.BoxFit.CONTAIN,
+            border_radius=6,
+            visible=False,
+        )
+        self.compose_preview_tap = ft.GestureDetector(
+            content=self.compose_preview_img,
+            on_tap=self._on_compose_preview_tap,
+            visible=False,
+        )
+        self.compose_preview_label = ft.Text(
+            "", size=FONT_SM, color=TEXT_MUTED, max_lines=3
+        )
+        self.btn_compose_accept = ft.FilledButton(
+            content="Accept sheet",
+            on_click=self._compose_accept,
+            style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
+            height=36,
+            visible=False,
+        )
+        self.btn_compose_regen = ft.OutlinedButton(
+            content="Regenerate",
+            on_click=self._compose_regenerate,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=36,
+            visible=False,
+        )
+        self.btn_compose_discard = ft.TextButton(
+            content="Discard",
+            on_click=self._compose_dismiss_result,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+            visible=False,
+        )
+        self.btn_compose_folder = ft.TextButton(
+            content="Show in folder",
+            on_click=self._compose_show_folder,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+            visible=False,
+        )
+        self.compose_send_host = ft.Row(spacing=4, wrap=True, visible=False)
+        self.compose_box = ft.Container(
+            content=ft.Column(
+                [
+                    self.compose_title,
+                    self.compose_char_label,
+                    ft.Text(
+                        "Lays out accepted angles on a neutral studio grid with labels. "
+                        "Does not change individual angle slots. Accept saves the composite "
+                        "on this character or costume for Send → R2V / Storyboard / Library.",
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                    ),
+                    label("Angles to include", muted=True),
+                    self.compose_angles_col,
+                    ft.Row([self.compose_layout_dd], spacing=0),
+                    ft.Row([self.compose_model_dd], spacing=0),
+                    self.compose_flux_hint,
+                    ft.Row([self.compose_res_dd], spacing=0),
+                    self.compose_note,
+                    ft.Row(
+                        [
+                            self.btn_compose_enhance,
+                            self.btn_compose_generate,
+                            self.btn_compose_close,
+                        ],
+                        spacing=8,
+                        wrap=True,
+                    ),
+                    self.compose_cost,
+                    self.compose_busy_row,
+                    self.compose_preview_label,
+                    self.compose_preview_tap,
+                    ft.Row(
+                        [
+                            self.btn_compose_accept,
+                            self.btn_compose_regen,
+                            self.btn_compose_discard,
+                            self.btn_compose_folder,
+                        ],
+                        spacing=6,
+                        wrap=True,
+                    ),
+                    self.compose_send_host,
+                ],
+                spacing=8,
+                tight=True,
+            ),
+            bgcolor=PANEL_ELEVATED,
+            border=ft.Border.all(1, ACCENT),
+            border_radius=8,
+            padding=12,
+            visible=False,
+        )
+
         self.empty_state = ft.Column(
             [
                 ft.Text(
@@ -1779,6 +1998,7 @@ class CharactersView:
             self.bg_preview_box,
             self.profile_box,
             self.sheet_box,
+            self.compose_box,
             ft.Row([self.btn_save, self.btn_cancel_edit], spacing=8),
             self.costume_box,
             self.placer_box,
@@ -3493,6 +3713,7 @@ class CharactersView:
             self.costume_box.visible = False
             self.placer_box.visible = False
             self.variation_box.visible = False
+            self.compose_box.visible = False
         except Exception:
             pass
         self._sheet_char_id = c.id
@@ -3915,6 +4136,597 @@ class CharactersView:
                 self.page.update()
             except Exception:
                 pass
+
+    # ----- Phase 2: make character / costume sheet composite -----
+
+    def _compose_model_choice(self) -> str:
+        return (self.compose_model_dd.value or LOCAL_SHEET_LAYOUT_MODEL).strip()
+
+    def _compose_resolution(self) -> str | None:
+        if not getattr(self.compose_res_dd, "visible", True):
+            return None
+        return (self.compose_res_dd.value or "").strip() or None
+
+    def _compose_selected_angles(self) -> list[tuple[str, str]]:
+        """Selected (slot, path) from current character pack."""
+        if not self._compose_char_id:
+            return []
+        ch = next(
+            (c for c in load_characters() if c.id == self._compose_char_id),
+            None,
+        )
+        if ch is None:
+            return []
+        pack = {s: p for s, p in ch.filled_angles_ordered()}
+        out: list[tuple[str, str]] = []
+        for s in ALL_IDENTITY_SLOTS:
+            cb = self._compose_angle_checks.get(s)
+            if cb is None or not bool(getattr(cb, "value", False)):
+                continue
+            p = pack.get(s)
+            if p and Path(p).is_file():
+                out.append((s, p))
+        return out
+
+    def _refresh_compose_cost(self) -> None:
+        model = self._compose_model_choice()
+        self.compose_cost.value = estimate_sheet_compose_cost(
+            model_key=model,
+            resolution=self._compose_resolution(),
+        )
+        local = is_local_sheet_layout(model)
+        try:
+            self.compose_res_dd.visible = not local
+            n = len(self._compose_selected_angles())
+            lay = (self.compose_layout_dd.value or "auto").strip()
+            if lay.lower() == "auto" and n:
+                lay = f"auto → {auto_sheet_layout(n)}"
+            self.compose_cost.value = (
+                f"{self.compose_cost.value} · {n} angle(s) · {lay}"
+            )
+            # Flux 2* + many angles: nudge toward Local layout
+            self.compose_flux_hint.visible = (
+                (not local) and n >= 6 and is_flux2_sheet_model(model)
+            )
+        except Exception:
+            pass
+
+    async def _on_compose_controls_change(
+        self, e: ft.ControlEvent | None = None
+    ) -> None:
+        self._refresh_compose_cost()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _make_open_compose(self, c: SavedCharacter):
+        async def _click(_e: ft.ControlEvent) -> None:
+            self._open_compose(c)
+
+        return _click
+
+    def _open_compose(self, c: SavedCharacter) -> None:
+        if self._compose_busy or self._sheet_busy or self._costume_busy:
+            return
+        if not c.can_compose_sheet():
+            self._set_status(
+                "Need ≥3 angles including Front before Make sheet.",
+                error=True,
+            )
+            return
+        try:
+            self.profile_box.visible = False
+            self.sheet_box.visible = False
+            self.costume_box.visible = False
+            self.placer_box.visible = False
+            self.variation_box.visible = False
+        except Exception:
+            pass
+        self._compose_char_id = c.id
+        self._compose_char_name = c.name
+        self._compose_is_costume = bool(c.is_costume_variant())
+        self._compose_parent_name = ""
+        if self._compose_is_costume and c.parent_id:
+            parent = next(
+                (x for x in load_characters() if x.id == c.parent_id), None
+            )
+            if parent:
+                self._compose_parent_name = parent.name
+        filled = {s for s, _ in c.filled_angles_ordered()}
+        for s in ALL_IDENTITY_SLOTS:
+            cb = self._compose_angle_checks.get(s)
+            if cb is None:
+                continue
+            has = s in filled
+            cb.value = has  # default all accepted angles
+            cb.visible = has
+            cb.disabled = not has
+            cb.label = SLOT_SHORT[s] + (" ✓" if has else "")
+        who = c.name
+        if self._compose_is_costume and self._compose_parent_name:
+            who = f"{self._compose_parent_name} / {c.name}"
+        self.compose_title.value = (
+            "Make costume sheet"
+            if self._compose_is_costume
+            else "Make character sheet"
+        )
+        n = c.angle_count()
+        self.compose_char_label.value = (
+            f"{who} · {n} angles · "
+            + (
+                f"saved sheet: {Path(c.sheet_path).name}"
+                if c.has_sheet()
+                else "no sheet yet"
+            )
+        )
+        self._compose_pending_path = None
+        self._compose_set_result_ui(None)
+        self._refresh_compose_cost()
+        self.compose_box.visible = True
+        self._set_status(
+            f"Make sheet · {who}: pick angles (≥3, Front on), layout, then Generate."
+        )
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _compose_close(self, e: ft.ControlEvent | None = None) -> None:
+        if self._compose_busy:
+            return
+        self.compose_box.visible = False
+        self._compose_pending_path = None
+        self._compose_set_result_ui(None)
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _set_compose_busy(self, busy: bool, *, message: str = "") -> None:
+        self._compose_busy = busy
+        self.compose_busy_row.visible = busy
+        self.compose_progress_ring.visible = busy
+        try:
+            t = self.compose_busy_row.controls[1]
+            if isinstance(t, ft.Text):
+                t.value = message or "Composing sheet…"
+        except Exception:
+            pass
+        self.btn_compose_generate.disabled = busy
+        self.btn_compose_enhance.disabled = busy
+        self.btn_compose_close.disabled = busy
+        self.compose_model_dd.disabled = busy
+        self.compose_layout_dd.disabled = busy
+        if busy:
+            self.btn_compose_accept.visible = False
+            self.btn_compose_regen.visible = False
+            self.btn_compose_discard.visible = False
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _compose_set_result_ui(self, path: str | None) -> None:
+        if path and Path(path).is_file():
+            self.compose_preview_img.src = path
+            self.compose_preview_img.visible = True
+            self.compose_preview_tap.visible = True
+            self.btn_compose_accept.visible = True
+            self.btn_compose_regen.visible = True
+            self.btn_compose_discard.visible = True
+            self.btn_compose_folder.visible = True
+            self.compose_preview_label.value = (
+                "Sheet ready — Accept to save on this pack · Regenerate · Discard"
+            )
+            self._rebuild_compose_send_menu(path)
+        else:
+            self.compose_preview_img.visible = False
+            self.compose_preview_tap.visible = False
+            self.btn_compose_accept.visible = False
+            self.btn_compose_regen.visible = False
+            self.btn_compose_discard.visible = False
+            self.btn_compose_folder.visible = False
+            self.compose_send_host.visible = False
+            self.compose_send_host.controls.clear()
+            if not self._compose_busy:
+                self.compose_preview_label.value = ""
+
+    def _rebuild_compose_send_menu(self, path: str | None) -> None:
+        from media_studio.flet_send_to import (
+            build_send_menu_items,
+            make_send_menu_button,
+        )
+
+        self.compose_send_host.controls.clear()
+        if not path or not Path(path).is_file():
+            self.compose_send_host.visible = False
+            return
+
+        def _ok(msg: str) -> None:
+            self._set_status(msg)
+
+        def _err(msg: str, is_err: bool = True) -> None:
+            self._set_status(msg, error=is_err)
+
+        items = build_send_menu_items(
+            self.state,
+            image_path=path,
+            status_cb=_ok,
+            status_cb_err=_err,
+        )
+        # Prefixed R2V character-sheet citation path
+        items = list(items)
+        try:
+            items.insert(
+                0,
+                ft.MenuItemButton(
+                    content=ft.Text(
+                        "R2V · Character sheet ref",
+                        size=FONT_SM,
+                        color=TEXT,
+                    ),
+                    on_click=self._make_send_sheet_as_r2v_ref(path),
+                    style=ft.ButtonStyle(color=TEXT),
+                ),
+            )
+        except Exception:
+            pass
+        btn = make_send_menu_button(items)
+        if btn is not None:
+            self.compose_send_host.controls.append(btn)
+            self.compose_send_host.visible = True
+
+    def _make_send_sheet_as_r2v_ref(self, path: str):
+        async def _click(_e: ft.ControlEvent) -> None:
+            await self._send_sheet_as_character_ref(path)
+
+        return _click
+
+    async def _send_sheet_as_character_ref(self, path: str) -> None:
+        """Send composite sheet as a single R2V/R2I character ref with citation label."""
+        if not path or not Path(path).is_file():
+            self._set_status("No sheet file.", error=True)
+            return
+        ch = next(
+            (c for c in load_characters() if c.id == self._compose_char_id),
+            None,
+        )
+        label = (
+            character_sheet_citation_label(
+                ch, parent_name=self._compose_parent_name or None
+            )
+            if ch
+            else f"Character sheet: {self._compose_char_name or Path(path).name}"
+        )
+        # Creative Vision ref pack
+        vv = getattr(self.state, "vision_view", None)
+        ok = False
+        if vv is not None and hasattr(vv, "ref_pack"):
+            pack = vv.ref_pack
+            try:
+                from types import SimpleNamespace
+
+                choice = SimpleNamespace(
+                    label=label,
+                    id=self._compose_char_id,
+                )
+                if hasattr(pack, "_set_char"):
+                    pack._set_char(0, path, choice)
+                    ok = True
+                elif hasattr(pack, "set_character"):
+                    pack.set_character(path, label=label)
+                    ok = True
+            except Exception:
+                ok = False
+        # Studio Video R2V still
+        if not ok:
+            try:
+                self.state.video_ref_path = str(Path(path).resolve())
+                vview = getattr(self.state, "video_view", None)
+                if vview is not None:
+                    if hasattr(vview, "open_received"):
+                        vview.open_received(
+                            ref_path=self.state.video_ref_path,
+                            scenario_label=label,
+                        )
+                        ok = True
+                    elif hasattr(vview, "receive_from_image"):
+                        vview.receive_from_image(
+                            ref_path=self.state.video_ref_path,
+                            scenario_label=label,
+                        )
+                        ok = True
+            except Exception:
+                pass
+        switch = getattr(self.state, "switch_to_vision", None)
+        if switch and vv is not None:
+            try:
+                switch()
+            except Exception:
+                pass
+        elif getattr(self.state, "switch_to_video", None) and not vv:
+            try:
+                self.state.switch_to_video()
+            except Exception:
+                pass
+        if ok:
+            self._set_status(f"Sent as single ref · {label}")
+        else:
+            # Fallback generic send
+            from media_studio.flet_send_to import send_to_video_ref
+
+            handler = send_to_video_ref(
+                self.state, path, status_cb=lambda m: self._set_status(m)
+            )
+            await handler(None)  # type: ignore[arg-type]
+            self._set_status(f"Sent sheet still · {label}")
+
+    async def _on_compose_preview_tap(self, e: ft.ControlEvent) -> None:
+        path = self._compose_pending_path
+        if path and Path(path).is_file():
+            self._open_preview(path, title=self.compose_title.value or "Sheet")
+
+    async def _compose_show_folder(self, e: ft.ControlEvent | None = None) -> None:
+        path = self._compose_pending_path
+        if not path or not Path(path).is_file():
+            ch = next(
+                (c for c in load_characters() if c.id == self._compose_char_id),
+                None,
+            )
+            path = ch.sheet_file() if ch else None
+        if path:
+            self._set_status(show_in_folder(path))
+        else:
+            self._set_status("No sheet file to show.", error=True)
+
+    async def _on_compose_enhance(self, e: ft.ControlEvent) -> None:
+        def _extra() -> dict[str, Any]:
+            slots = [s for s, _ in self._compose_selected_angles()]
+            return {
+                "workspace": "characters",
+                "mode": "compose_sheet",
+                "angles": slots,
+                "layout": self.compose_layout_dd.value,
+                "guidance": (
+                    "Rewrite only the optional layout note for a character-sheet "
+                    "grid composite. Keep short. Do not invent new people or outfits."
+                ),
+            }
+
+        await run_prompt_enhance(
+            page=self.page,
+            state=self.state,
+            prompt_field=self.compose_note,
+            get_model=self._compose_model_choice,
+            get_extra_context=_extra,
+            status_ctrl=self.status,
+            job_progress=self.job_progress,
+            enhance_btn=self.btn_compose_enhance,
+            busy_controls=[self.btn_compose_generate],
+            context_label="sheet layout note",
+            allow_empty_with_context=True,
+            busy_scope="characters",
+        )
+
+    async def _compose_generate(self, e: ft.ControlEvent | None = None) -> None:
+        await self._run_compose(regen=False)
+
+    async def _compose_regenerate(self, e: ft.ControlEvent | None = None) -> None:
+        await self._run_compose(regen=True)
+
+    async def _run_compose(self, *, regen: bool) -> None:
+        if self._compose_busy or self._sheet_busy:
+            return
+        angles = self._compose_selected_angles()
+        if len(angles) < 3:
+            self._set_status("Select at least 3 angles (Front required).", error=True)
+            return
+        if not any(s == "front" for s, _ in angles):
+            self._set_status("Front must be included in the sheet.", error=True)
+            return
+        if not self._compose_char_id:
+            self._set_status("No character selected.", error=True)
+            return
+        if self.state.is_busy("characters"):
+            return
+        if not self.state.try_busy("characters"):
+            return
+
+        model = self._compose_model_choice()
+        layout = (self.compose_layout_dd.value or "auto").strip()
+        note = (self.compose_note.value or "").strip()
+        self._refresh_compose_cost()
+        self._set_compose_busy(True, message="Composing sheet…")
+        self.job_progress.start("Make character sheet…", self.page)
+        self._set_status(
+            f"Composing sheet ({len(angles)} angles, {layout})"
+            + (" · regen" if regen else "")
+            + "…"
+        )
+
+        def on_progress(msg: str) -> None:
+            self.job_progress.set_message(classify_progress(msg), self.page)
+            try:
+                t = self.compose_busy_row.controls[1]
+                if isinstance(t, ft.Text):
+                    t.value = msg or "Composing sheet…"
+                self.page.update()
+            except Exception:
+                pass
+
+        try:
+            from media_studio.job_context import to_thread_with_job
+
+            if is_local_sheet_layout(model):
+                on_progress("Local layout compose…")
+                path = await to_thread_with_job(
+                    self.state,
+                    compose_character_sheet_local,
+                    angles,
+                    layout=layout,
+                )
+            else:
+                from media_studio.secrets_store import has_fal_key
+                from media_studio.services import generate
+
+                if not has_fal_key():
+                    self._set_compose_busy(False)
+                    self.job_progress.finish_error(
+                        "FAL key required for AI compose — use Local layout (free).",
+                        self.page,
+                    )
+                    self._set_status(
+                        "FAL key required for AI path — switch to Local layout (free).",
+                        error=True,
+                    )
+                    return
+                slots = [s for s, _ in angles]
+                raw_paths = [p for _, p in angles]
+                # Pre-upload: longest side ≤1024 (no upscale); originals untouched
+                on_progress(
+                    f"Downscaling {len(raw_paths)} refs for API (≤1024 edge)…"
+                )
+                paths = await to_thread_with_job(
+                    self.state,
+                    prepare_sheet_ai_angle_refs,
+                    raw_paths,
+                    output_dir=self.state.output_dir,
+                    model_choice=model,
+                    on_progress=on_progress,
+                )
+                if len(paths) < 3:
+                    err = "Need ≥3 readable angle stills after prep."
+                    self._set_compose_busy(False)
+                    self.job_progress.finish_error(err, self.page)
+                    self._set_status(err, error=True)
+                    return
+                prompt = sheet_layout_prompt(slots, layout=layout, note=note)
+                params_json = edit_params_json_for_resolution(
+                    self._compose_resolution()
+                )
+                result = await to_thread_with_job(
+                    self.state,
+                    generate,
+                    prompt,
+                    model_choice=model,
+                    image_file=paths[0],
+                    extra_image_files=paths[1:],
+                    output_dir=self.state.output_dir,
+                    on_progress=on_progress,
+                    scenario="character-sheet-compose",
+                    parameters_json=params_json,
+                )
+                path = result.primary_image if result.ok else None
+                if not path and result.ok:
+                    imgs = result.image_paths or []
+                    path = imgs[0] if imgs else None
+                if not result.ok or not path:
+                    raw_err = (
+                        getattr(result, "status", None) or "Sheet compose failed."
+                    )
+                    err = friendly_sheet_compose_error(
+                        raw_err, context="Sheet compose"
+                    )
+                    self._set_compose_busy(False)
+                    self.job_progress.finish_error(err, self.page)
+                    self._set_status(err, error=True)
+                    return
+
+            if path and Path(path).is_file():
+                self._compose_pending_path = str(path)
+                self._set_compose_busy(False)
+                self._compose_set_result_ui(str(path))
+                self.job_progress.finish_ok(
+                    "Sheet ready — Accept to save on pack", self.page
+                )
+                self._set_status(
+                    "Sheet composite ready — Accept · Regenerate · Discard · Send-to."
+                )
+            else:
+                err = "Sheet compose produced no file."
+                self._set_compose_busy(False)
+                self._compose_set_result_ui(None)
+                self.job_progress.finish_error(err, self.page)
+                self._set_status(err, error=True)
+        except Exception as exc:
+            err = friendly_sheet_compose_error(exc, context="Sheet compose")
+            self._set_compose_busy(False)
+            self._compose_set_result_ui(None)
+            self.job_progress.finish_error(err, self.page)
+            self._set_status(err, error=True)
+            traceback.print_exc()
+        finally:
+            self.state.clear_busy("characters")
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+    async def _compose_accept(self, e: ft.ControlEvent | None = None) -> None:
+        if self._compose_busy:
+            return
+        path = self._compose_pending_path
+        char_id = self._compose_char_id
+        if not path or not Path(path).is_file() or not char_id:
+            self._set_status("No sheet preview to accept.", error=True)
+            return
+        try:
+            updated = set_character_sheet(char_id, path)
+        except Exception as exc:
+            self._set_status(str(exc), error=True)
+            return
+        if not updated:
+            self._set_status("Accept failed — character not found.", error=True)
+            return
+        # Library asset (one entry)
+        try:
+            from media_studio.history import append_history
+
+            cite = character_sheet_citation_label(
+                updated, parent_name=self._compose_parent_name or None
+            )
+            append_history(
+                job_kind="character_sheet",
+                model=self._compose_model_choice(),
+                prompt=cite,
+                files=[updated.sheet_file() or path],
+                cost_estimate=estimate_sheet_compose_cost(
+                    model_key=self._compose_model_choice()
+                ),
+                notes=[f"angles={updated.angle_count()}", "phase2", cite],
+                output_dir=self.state.output_dir,
+                scenario="character-sheet",
+            )
+        except Exception:
+            pass
+        who = updated.name
+        if updated.is_costume_variant() and self._compose_parent_name:
+            who = f"{self._compose_parent_name} / {updated.name}"
+        self._compose_pending_path = updated.sheet_file() or path
+        self._compose_set_result_ui(self._compose_pending_path)
+        self.compose_char_label.value = (
+            f"{who} · sheet saved: {Path(self._compose_pending_path).name}"
+        )
+        self._set_status(
+            f"Saved sheet on {who} — angle slots unchanged. "
+            "Send-to uses Character sheet citation."
+        )
+        self.refresh()
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _compose_dismiss_result(self, e: ft.ControlEvent | None = None) -> None:
+        if self._compose_busy:
+            return
+        self._compose_pending_path = None
+        self._compose_set_result_ui(None)
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     # ----- costume swap -----
 
@@ -5457,8 +6269,12 @@ class CharactersView:
             weight=ft.FontWeight.W_600,
             max_lines=1,
         )
+        sheet_note = " · sheet ✓" if c.has_sheet() else ""
         notes_txt = ft.Text(
-            f"{notes} · {pack}", size=FONT_SM, color=TEXT_MUTED, max_lines=2
+            f"{notes} · {pack}{sheet_note}",
+            size=FONT_SM,
+            color=TEXT_MUTED,
+            max_lines=2,
         )
         missing = ft.Text(
             "Still file missing",
@@ -5505,6 +6321,26 @@ class CharactersView:
                 )
                 if has_front
                 else "Needs Front still first"
+            ),
+        )
+        can_compose = bool(c.can_compose_sheet())
+        n_angles = c.angle_count()
+        has_saved_sheet = bool(c.has_sheet())
+        btn_make_sheet = ft.OutlinedButton(
+            content="Make sheet" + (" ✓" if has_saved_sheet else ""),
+            on_click=self._make_open_compose(c),
+            style=ft.ButtonStyle(
+                color=ACCENT if has_saved_sheet else TEXT,
+                side=ft.BorderSide(1, ACCENT if has_saved_sheet else BORDER),
+            ),
+            height=36,
+            disabled=not can_compose,
+            visible=True,
+            tooltip=(
+                f"Compose grid from {n_angles} angles"
+                + (" · sheet saved" if has_saved_sheet else "")
+                if can_compose
+                else "Needs ≥3 angles including Front"
             ),
         )
         btn_placer = ft.OutlinedButton(
@@ -5555,6 +6391,7 @@ class CharactersView:
             btn_use,
             btn_costume,
             btn_sheet,
+            btn_make_sheet,
             btn_placer,
             btn_var,
             btn_edit,
@@ -5706,6 +6543,8 @@ class CharactersView:
             self._costume_close()
         if self._sheet_char_id == c.id:
             self._sheet_close()
+        if self._compose_char_id == c.id:
+            self._compose_close()
         if self._variation_source_id == c.id:
             self._dismiss_variation()
         self._set_status(f"Deleted: {c.name}")

@@ -285,9 +285,16 @@ class RefPackPanel:
         for i, it in enumerate(items, start=1):
             tag = style.tag(i)
             if it.role == "character":
-                lines.append(
-                    f"{tag} = character identity / likeness for “{it.label}”."
-                )
+                lab = it.label or ""
+                if lab.lower().startswith("character sheet"):
+                    lines.append(
+                        f"{tag} = {lab} — multi-angle identity/outfit pack as one ref "
+                        "(do not invent extra angles; match person + wardrobe from the sheet)."
+                    )
+                else:
+                    lines.append(
+                        f"{tag} = character identity / likeness for “{lab}”."
+                    )
             elif it.role == "scene":
                 lines.append(
                     f"{tag} = scene / location plate for “{it.label}”."

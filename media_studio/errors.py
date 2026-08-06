@@ -466,6 +466,23 @@ def friendly_error(
             + _clip(raw, 160)
         )
 
+    # Multi-ref megapixel / combined area (Flux 2 sheet compose, etc.)
+    if any(
+        x in low
+        for x in (
+            "requested area too large",
+            "area too large",
+            "megapixel",
+            "mega-pixel",
+            "too many megapixels",
+            "max megapixel",
+        )
+    ):
+        return (
+            f"{prefix}Too many/large refs for this model — try Local layout, "
+            "fewer angles, or a lower Resolution."
+        )
+
     # File too large / payload limits — image vs video copy
     if any(
         x in low

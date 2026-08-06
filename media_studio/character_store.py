@@ -105,6 +105,8 @@ class SavedCharacter:
     parent_id: str | None = None
     # Protect from retention / auto-delete of character stills
     locked: bool = False
+    # Phase 2 composite character/costume sheet (does not replace angle slots)
+    sheet_path: str = ""
 
     def display_notes(self) -> str:
         return (self.notes or "").strip()
@@ -114,6 +116,31 @@ class SavedCharacter:
 
     def is_base(self) -> bool:
         return not self.is_costume_variant()
+
+    def has_sheet(self) -> bool:
+        p = (self.sheet_path or "").strip()
+        return bool(p and Path(p).is_file())
+
+    def sheet_file(self) -> str | None:
+        if self.has_sheet():
+            return str(Path(self.sheet_path).resolve())
+        return None
+
+    def can_compose_sheet(self) -> bool:
+        """≥3 angles including Front (Phase 2 gate)."""
+        if not self.has_front():
+            return False
+        return self.angle_count() >= 3
+
+    def filled_angles_ordered(self) -> list[tuple[str, str]]:
+        """(slot, path) in display order for sheet layout."""
+        pack = self.normalized_identity()
+        out: list[tuple[str, str]] = []
+        for s in ALL_IDENTITY_SLOTS:
+            p = (pack.get(s) or "").strip()
+            if p and Path(p).is_file():
+                out.append((s, p))
+        return out
 
     def _sync_from_identity(self) -> None:
         """Keep still_path / still_paths aligned with identity pack."""
@@ -291,6 +318,7 @@ def _from_dict(item: dict[str, Any]) -> SavedCharacter | None:
     parent_id = str(parent_raw).strip() if parent_raw else None
     if parent_id == "":
         parent_id = None
+    sheet_raw = str(item.get("sheet_path") or "").strip()
     entry = SavedCharacter(
         id=str(item.get("id") or uuid.uuid4().hex[:12]),
         name=name,
@@ -302,6 +330,7 @@ def _from_dict(item: dict[str, Any]) -> SavedCharacter | None:
         identity=identity,
         parent_id=parent_id,
         locked=bool(item.get("locked") or False),
+        sheet_path=sheet_raw,
     )
     entry._sync_from_identity()
     return entry
@@ -320,6 +349,7 @@ def _to_dict(c: SavedCharacter) -> dict[str, Any]:
         "updated_at": c.updated_at,
         "parent_id": c.parent_id or None,
         "locked": bool(c.locked),
+        "sheet_path": (c.sheet_path or "").strip() or None,
     }
 
 
@@ -690,6 +720,7 @@ def update_character(
     identity: dict[str, str | Path | None] | None = None,
     parent_id: str | None | object = ...,  # type: ignore[assignment]
     locked: bool | None = None,
+    sheet_path: str | Path | None | object = ...,  # type: ignore[assignment]
 ) -> SavedCharacter | None:
     characters = load_characters()
     found: SavedCharacter | None = None
@@ -757,6 +788,13 @@ def update_character(
     if parent_id is not ...:  # explicit set (including None)
         new_parent = (str(parent_id).strip() if parent_id else None) or None
     new_locked = found.locked if locked is None else bool(locked)
+    new_sheet = found.sheet_path or ""
+    if sheet_path is not ...:
+        if sheet_path is None or sheet_path == "":
+            new_sheet = ""
+        else:
+            sp = Path(str(sheet_path))
+            new_sheet = str(sp.resolve()) if sp.is_file() else ""
 
     updated = SavedCharacter(
         id=found.id,
@@ -768,11 +806,60 @@ def update_character(
         identity=pack,
         parent_id=new_parent,
         locked=new_locked,
+        sheet_path=new_sheet,
     )
     updated._sync_from_identity()
     characters[idx] = updated
     save_characters(characters)
     return updated
+
+
+def set_character_sheet(
+    char_id: str,
+    sheet_path: str | Path | None,
+    *,
+    clear: bool = False,
+) -> SavedCharacter | None:
+    """
+    Store or clear the composite character/costume sheet image.
+
+    Does **not** modify individual angle slots. Copies into character_stills/
+    when the source is outside the store.
+    """
+    found = find_character(char_id)
+    if found is None:
+        return None
+    if clear or sheet_path is None or str(sheet_path).strip() == "":
+        old = (found.sheet_path or "").strip()
+        if old:
+            _delete_owned(old)
+        return update_character(char_id, sheet_path="")
+    src = Path(sheet_path)
+    if not src.is_file():
+        raise FileNotFoundError(f"Sheet image missing: {src}")
+    stored = _store_path(
+        src, char_id=found.id, name=found.name, slot="sheet"
+    )
+    return update_character(char_id, sheet_path=stored)
+
+
+def character_sheet_citation_label(
+    character: SavedCharacter,
+    *,
+    parent_name: str | None = None,
+) -> str:
+    """Citation map label: Character sheet: [Name] / [Costume]."""
+    if character.is_costume_variant():
+        parent = (parent_name or "").strip()
+        if not parent and character.parent_id:
+            p = find_character(character.parent_id)
+            if p:
+                parent = p.name
+        outfit = _costume_display_name(character.name, parent or None)
+        if parent:
+            return f"Character sheet: {parent} / {outfit}"
+        return f"Character sheet: {outfit}"
+    return f"Character sheet: {character.name}"
 
 
 def set_character_slot(
@@ -958,6 +1045,13 @@ def delete_character(
                     keep_paths.add(str(Path(p).resolve()))
                 except OSError:
                     keep_paths.add(p)
+        for c in keep:
+            sp = (c.sheet_path or "").strip()
+            if sp:
+                try:
+                    keep_paths.add(str(Path(sp).resolve()))
+                except OSError:
+                    keep_paths.add(sp)
         for c in to_wipe:
             for p in c.all_stills():
                 try:
@@ -965,6 +1059,13 @@ def delete_character(
                         _delete_owned(p)
                 except OSError:
                     _delete_owned(p)
+            sp = (c.sheet_path or "").strip()
+            if sp:
+                try:
+                    if str(Path(sp).resolve()) not in keep_paths:
+                        _delete_owned(sp)
+                except OSError:
+                    _delete_owned(sp)
     return True
 
 
@@ -979,6 +1080,12 @@ def locked_still_paths() -> set[str]:
                 out.add(str(Path(p).resolve()))
             except OSError:
                 out.add(p)
+        sp = (c.sheet_path or "").strip()
+        if sp:
+            try:
+                out.add(str(Path(sp).resolve()))
+            except OSError:
+                out.add(sp)
     return out
 
 
@@ -1975,6 +2082,375 @@ def preferred_sheet_resolution(model_label: str | None = None) -> str | None:
     if not opts:
         return None
     return default_practical_resolution(opts)
+
+
+# ---------------------------------------------------------------------------
+# Character sheet composite (Phase 2) — grid from accepted angles
+# ---------------------------------------------------------------------------
+
+LOCAL_SHEET_LAYOUT_MODEL = "Local layout (free)"
+SHEET_LAYOUT_PRESETS: tuple[str, ...] = ("auto", "2×2", "2×3", "3×2")
+
+# Neutral studio backgrounds (even lighting, no props)
+_SHEET_BG_DARK = (18, 20, 26)
+_SHEET_BG_LIGHT = (236, 238, 242)
+_SHEET_CELL_BG = (12, 14, 18)
+_SHEET_LABEL_FG = (240, 242, 248)
+_SHEET_LABEL_BG = (28, 32, 40)
+
+
+def sheet_compose_model_labels() -> list[str]:
+    """Local free compose first, then multi-ref edit models (optional polish)."""
+    labs = [LOCAL_SHEET_LAYOUT_MODEL]
+    for lab in multi_ref_image_edit_labels():
+        if lab not in labs:
+            labs.append(lab)
+    return labs
+
+
+def is_local_sheet_layout(model_choice: str | None) -> bool:
+    raw = (model_choice or "").strip().lower()
+    return (
+        not raw
+        or raw == LOCAL_SHEET_LAYOUT_MODEL.lower()
+        or raw.startswith("local layout")
+        or raw == "local"
+        or "free" in raw and "local" in raw
+    )
+
+
+# Multi-ref edit APIs (Flux 2 / Seedream / Nano Banana) reject huge combined ref area
+SHEET_AI_MAX_SIDE = 1024  # longest edge; never upscale smaller plates
+SHEET_AI_MAX_BYTES = 4 * 1024 * 1024  # keep multi-ref payloads lean
+SHEET_AI_AREA_TOO_LARGE_MSG = (
+    "Too many/large refs for this model — try Local layout, fewer angles, "
+    "or a lower Resolution."
+)
+
+
+def sheet_ai_max_side(model_choice: str | None = None) -> int:
+    """
+    Safe longest-edge for sheet AI compose refs.
+
+    Flux 2 / multi-ref edit models share ~megapixel budgets across all images;
+    1024 is a reliable default (model-specific hooks can tighten later).
+    """
+    raw = (model_choice or "").strip().lower()
+    if not raw or is_local_sheet_layout(raw):
+        return SHEET_AI_MAX_SIDE
+    # Slightly tighter for known multi-image Flux family under high ref counts
+    if "flux 2" in raw or "flux2" in raw or "blackforest" in raw:
+        return SHEET_AI_MAX_SIDE
+    if "seedream" in raw or "nano banana" in raw or "nano-banana" in raw:
+        return SHEET_AI_MAX_SIDE
+    return SHEET_AI_MAX_SIDE
+
+
+def is_flux2_sheet_model(model_choice: str | None) -> bool:
+    raw = (model_choice or "").strip().lower()
+    return "flux 2" in raw or "flux2" in raw
+
+
+def is_sheet_area_too_large_error(message: str | BaseException | None) -> bool:
+    """Detect fal 'Requested area too large' / megapixel multi-ref rejections."""
+    if message is None:
+        return False
+    low = str(message).lower()
+    markers = (
+        "requested area too large",
+        "area too large",
+        "megapixel",
+        "mega pixel",
+        "mega-pixel",
+        "too many megapixels",
+        "max megapixel",
+        "maximum megapixel",
+        "pixel limit",
+        "pixels limit",
+        "image area",
+        "total area",
+        "combined area",
+        "resolution too high",
+        "dimensions too large",
+    )
+    if any(m in low for m in markers):
+        return True
+    # "too large" near area/pixel/ref context (avoid bare file-size 413 alone)
+    if "too large" in low and any(
+        w in low for w in ("area", "pixel", "megapixel", "ref", "image")
+    ):
+        return True
+    return False
+
+
+def friendly_sheet_compose_error(
+    message: str | BaseException | None,
+    *,
+    context: str = "",
+) -> str:
+    """
+    One clear line for sheet AI failures — especially area/megapixel limits.
+
+    Avoids dumping a raw stack of identical fal validation lines.
+    """
+    raw = str(message or "").strip()
+    if is_sheet_area_too_large_error(raw):
+        return SHEET_AI_AREA_TOO_LARGE_MSG
+    # Collapse repeated identical lines from multi-ref validation dumps
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    if len(lines) >= 2:
+        uniq: list[str] = []
+        for ln in lines:
+            if not uniq or ln != uniq[-1]:
+                uniq.append(ln)
+        if len(uniq) == 1 and is_sheet_area_too_large_error(uniq[0]):
+            return SHEET_AI_AREA_TOO_LARGE_MSG
+        if len(lines) > 3 and len(set(lines)) <= 2:
+            # Many duplicates — prefer mapped message if any line matches
+            if any(is_sheet_area_too_large_error(ln) for ln in lines):
+                return SHEET_AI_AREA_TOO_LARGE_MSG
+            raw = uniq[0]
+    try:
+        from media_studio.errors import friendly_error
+
+        return friendly_error(raw, context=context or "Sheet compose", media_kind="image")
+    except Exception:
+        return raw or "Sheet compose failed."
+
+
+def prepare_sheet_ai_angle_refs(
+    paths: list[str],
+    *,
+    output_dir: str | Path,
+    model_choice: str | None = None,
+    on_progress: Any | None = None,
+) -> list[str]:
+    """
+    Downscale each angle for AI multi-ref compose (longest side ≤ safe max).
+
+    Preserves aspect; never upscales small plates. Originals on disk are untouched.
+    Local layout must not call this path.
+    """
+    from media_studio.motion_sync_prep import prepare_api_still
+
+    max_side = sheet_ai_max_side(model_choice)
+    out: list[str] = []
+    n = len(paths)
+    for i, raw in enumerate(paths):
+        p = (raw or "").strip()
+        if not p or not Path(p).is_file():
+            continue
+        label = f"angle {i + 1}/{n}"
+
+        def _prog(msg: str, *, _i: int = i) -> None:
+            if on_progress:
+                try:
+                    on_progress(msg)
+                except Exception:
+                    pass
+
+        try:
+            prep = prepare_api_still(
+                p,
+                output_dir=output_dir,
+                max_side=max_side,
+                max_bytes=SHEET_AI_MAX_BYTES,
+                on_progress=_prog,
+                proxy_subdir="_sheet_compose_proxies",
+                label=label,
+            )
+            out.append(str(prep.path.resolve()))
+        except Exception:
+            # Fall back to original rather than aborting the whole set
+            out.append(str(Path(p).resolve()))
+    return out
+
+
+def auto_sheet_layout(n_cells: int) -> str:
+    """Pick 2×2 / 2×3 / 3×2 from angle count (3×3 only when n≥7)."""
+    n = max(1, int(n_cells or 1))
+    if n <= 4:
+        return "2×2"
+    if n <= 6:
+        return "2×3"
+    return "3×3"
+
+
+def parse_sheet_layout(preset: str | None, *, n_cells: int) -> tuple[int, int]:
+    """Return (cols, rows) for a layout preset."""
+    raw = (preset or "auto").strip().lower().replace("x", "×")
+    if raw in ("", "auto"):
+        raw = auto_sheet_layout(n_cells).lower().replace("x", "×")
+    mapping = {
+        "2×2": (2, 2),
+        "2x2": (2, 2),
+        "2×3": (2, 3),
+        "2x3": (2, 3),
+        "3×2": (3, 2),
+        "3x2": (3, 2),
+        "3×3": (3, 3),
+        "3x3": (3, 3),
+    }
+    return mapping.get(raw, (2, 2))
+
+
+def sheet_layout_prompt(
+    slots: list[str],
+    *,
+    layout: str = "2×2",
+    note: str = "",
+) -> str:
+    """Optional AI multi-ref layout prompt (identity + outfit lock)."""
+    labels = [SLOT_SHORT.get(s, s) for s in slots]
+    cells = ", ".join(f"{i + 1}:{lab}" for i, lab in enumerate(labels))
+    base = (
+        "Compose a single character-reference sheet (contact sheet grid) from the "
+        f"provided reference images only. Layout: {layout} grid. "
+        f"Cell order: {cells}. "
+        "Neutral seamless studio background (dark or light grey), even soft lighting, "
+        "no props, no floor clutter, no extra people, no text logos except small "
+        "angle labels under each cell (Front, Side, Back, ¾ front, ¾ back, Top, Close-up). "
+        "Lock identity and outfit exactly from the refs — do not change costume, face, "
+        "hair, or body. Full-body scale consistent for full-body angles; Close-up stays "
+        "head/shoulders. Do not invent new angles beyond the refs provided."
+    )
+    n = (note or "").strip()
+    if n:
+        base += f" Layout note (secondary): {n}"
+    return base
+
+
+def estimate_sheet_compose_cost(
+    *,
+    model_key: str | None = None,
+    resolution: str | None = None,
+) -> str:
+    """Local layout is free; edit models = one image cost."""
+    if is_local_sheet_layout(model_key):
+        from media_studio.pricing import format_job_cost
+
+        return format_job_cost(0.0, unit="local compose", model=LOCAL_SHEET_LAYOUT_MODEL)
+    return estimate_costume_swap_cost(
+        1,
+        model_key=model_key or preferred_costume_model(),
+        resolution=resolution,
+    )
+
+
+def compose_character_sheet_local(
+    angles: list[tuple[str, str]],
+    *,
+    layout: str = "auto",
+    output_path: str | Path | None = None,
+    bg: str = "dark",
+    cell_size: int = 512,
+    gap: int = 16,
+    label_h: int = 36,
+    max_long_edge: int = 2400,
+) -> str:
+    """
+    Pure local grid composite from accepted angle stills (no API).
+
+    ``angles``: list of (slot_key, image_path). Labels under each cell.
+    Returns path to written PNG/JPEG.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    from media_studio.naming import unique_path
+
+    cells = [
+        (s, p)
+        for s, p in angles
+        if s and p and Path(p).is_file()
+    ]
+    if not cells:
+        raise ValueError("No angle stills to compose.")
+    cols, rows = parse_sheet_layout(layout, n_cells=len(cells))
+    capacity = cols * rows
+    if len(cells) > capacity:
+        # Prefer auto layout that fits all
+        cols, rows = parse_sheet_layout("auto", n_cells=len(cells))
+        capacity = cols * rows
+        if len(cells) > capacity:
+            # Grow rows
+            rows = (len(cells) + cols - 1) // cols
+            capacity = cols * rows
+
+    bg_rgb = _SHEET_BG_LIGHT if (bg or "").lower().startswith("light") else _SHEET_BG_DARK
+    canvas_w = cols * cell_size + (cols + 1) * gap
+    canvas_h = rows * (cell_size + label_h) + (rows + 1) * gap
+    canvas = Image.new("RGB", (canvas_w, canvas_h), bg_rgb)
+    draw = ImageDraw.Draw(canvas)
+    try:
+        font = ImageFont.truetype("arial.ttf", 18)
+    except OSError:
+        try:
+            font = ImageFont.truetype("DejaVuSans.ttf", 18)
+        except OSError:
+            font = ImageFont.load_default()
+
+    for i, (slot, path) in enumerate(cells):
+        if i >= capacity:
+            break
+        r, c = i // cols, i % cols
+        x0 = gap + c * (cell_size + gap)
+        y0 = gap + r * (cell_size + label_h + gap)
+        # Cell plate
+        plate = Image.new("RGB", (cell_size, cell_size), _SHEET_CELL_BG)
+        try:
+            im = Image.open(path).convert("RGB")
+        except OSError:
+            continue
+        # Fit inside cell (contain)
+        iw, ih = im.size
+        if iw < 1 or ih < 1:
+            continue
+        scale = min(cell_size / iw, cell_size / ih)
+        nw, nh = max(1, int(iw * scale)), max(1, int(ih * scale))
+        im = im.resize((nw, nh), Image.Resampling.LANCZOS)
+        px = (cell_size - nw) // 2
+        py = (cell_size - nh) // 2
+        plate.paste(im, (px, py))
+        canvas.paste(plate, (x0, y0))
+        # Label bar under cell
+        lab = SLOT_SHORT.get(slot, slot)
+        ly0 = y0 + cell_size
+        draw.rectangle(
+            [x0, ly0, x0 + cell_size, ly0 + label_h],
+            fill=_SHEET_LABEL_BG,
+        )
+        # Center label text
+        try:
+            bbox = draw.textbbox((0, 0), lab, font=font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        except Exception:
+            tw, th = len(lab) * 8, 14
+        tx = x0 + max(4, (cell_size - tw) // 2)
+        ty = ly0 + max(2, (label_h - th) // 2)
+        draw.text((tx, ty), lab, fill=_SHEET_LABEL_FG, font=font)
+
+    # Cap long edge
+    w, h = canvas.size
+    long_edge = max(w, h)
+    if long_edge > max_long_edge:
+        scale = max_long_edge / long_edge
+        canvas = canvas.resize(
+            (max(1, int(w * scale)), max(1, int(h * scale))),
+            Image.Resampling.LANCZOS,
+        )
+
+    if output_path is None:
+        STILLS_DIR.mkdir(parents=True, exist_ok=True)
+        dest = unique_path(STILLS_DIR, "character_sheet", ".jpg")
+    else:
+        dest = Path(output_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    # JPEG for size
+    if dest.suffix.lower() in (".jpg", ".jpeg"):
+        canvas.save(dest, format="JPEG", quality=92, optimize=True)
+    else:
+        canvas.save(dest)
+    return str(dest.resolve())
 
 
 # ---------------------------------------------------------------------------
