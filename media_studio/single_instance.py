@@ -25,6 +25,9 @@ PID_FILENAME = "instance.pid"
 
 Outcome = Literal["primary", "secondary", "unlocked"]
 
+# Held by the primary UI process so Refresh app can release before respawn
+_current_lock: InstanceLock | None = None  # type: ignore[name-defined]
+
 
 def _lock_path() -> Path:
     return app_data_dir() / LOCK_FILENAME
@@ -154,9 +157,41 @@ def try_acquire_primary() -> tuple[Outcome, InstanceLock | None]:
                 pass
 
         atexit.register(_cleanup)
+        global _current_lock
+        _current_lock = lock
         return "primary", lock
     except Exception:
         return "unlocked", None
+
+
+def register_primary_lock(lock: InstanceLock | None) -> None:
+    """Remember the primary lock for relaunch (app.py)."""
+    global _current_lock
+    _current_lock = lock
+
+
+def release_for_relaunch() -> None:
+    """
+    Drop single-instance lock so a respawned process can become primary.
+
+    Safe to call when unlocked / secondary. Does not delete user data.
+    """
+    global _current_lock
+    lock = _current_lock
+    _current_lock = None
+    if lock is not None:
+        try:
+            lock.release()
+        except Exception:
+            pass
+    # Best-effort: clear pid file if it was ours
+    try:
+        if _pid_path().is_file():
+            raw = _pid_path().read_text(encoding="utf-8").strip()
+            if raw == str(os.getpid()):
+                _pid_path().unlink(missing_ok=True)  # type: ignore[arg-type]
+    except Exception:
+        pass
 
 
 def signal_primary_instance(*, reason: str = "resolve_handoff") -> bool:

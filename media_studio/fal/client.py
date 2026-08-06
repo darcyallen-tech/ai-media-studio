@@ -400,6 +400,50 @@ def upload_error_detail(path: str | Path | None, exc: BaseException | str) -> st
     return " ".join(bits)
 
 
+def _format_fal_error_body(exc: BaseException) -> str:
+    """Best-effort extraction of fal/http error body for logs + UI."""
+    bits: list[str] = [f"{type(exc).__name__}: {exc}"]
+    for attr in (
+        "body",
+        "message",
+        "detail",
+        "args",
+        "response",
+        "status_code",
+        "error",
+    ):
+        try:
+            val = getattr(exc, attr, None)
+        except Exception:
+            continue
+        if val is None or val == "":
+            continue
+        if attr == "response":
+            try:
+                code = getattr(val, "status_code", None)
+                text = getattr(val, "text", None)
+                if code is not None:
+                    bits.append(f"status_code={code}")
+                if text:
+                    bits.append(f"response_text={str(text)[:1200]}")
+                elif hasattr(val, "json"):
+                    try:
+                        bits.append(f"response_json={val.json()!r}"[:1200])
+                    except Exception:
+                        pass
+            except Exception:
+                bits.append(f"response={val!r}"[:400])
+        elif attr == "args" and isinstance(val, (tuple, list)):
+            bits.append(f"args={val!r}"[:800])
+        else:
+            bits.append(f"{attr}={val!r}"[:800])
+    # Nested __cause__
+    cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    if cause is not None and cause is not exc:
+        bits.append(f"cause={type(cause).__name__}: {cause}")
+    return " | ".join(bits)
+
+
 def subscribe(
     endpoint: str,
     arguments: dict[str, Any],
@@ -416,8 +460,78 @@ def subscribe(
 
     _ensure_key_in_env()
 
+    # Absolute last-mile aspect policy (Seedance R2V / FLUX 3 I2V / Kling I2V…)
+    # Runs here so no caller can re-inject after builders.
+    args_out = dict(arguments or {})
+    omit_flag = False
+    debug_line = ""
+    try:
+        from media_studio.aspect_omit import (
+            append_aspect_debug_log,
+            apply_aspect_policy,
+            aspect_debug_line,
+            endpoint_omits_aspect_ratio,
+            strip_all_aspect_keys,
+        )
+
+        omit_flag = bool(endpoint_omits_aspect_ratio(endpoint))
+        args_out = apply_aspect_policy(
+            args_out, endpoint=endpoint, requested=args_out.get("aspect_ratio")
+        )
+        if omit_flag:
+            args_out = strip_all_aspect_keys(args_out)
+        # Seedance R2V: allowlist-only payload (drops negative_prompt, etc.)
+        from media_studio.aspect_omit import sanitize_seedance_r2v_arguments
+
+        args_out = sanitize_seedance_r2v_arguments(args_out, endpoint=endpoint)
+        debug_line = aspect_debug_line(
+            endpoint=endpoint,
+            arguments=args_out,
+            omit=omit_flag,
+            source="fal.subscribe",
+        )
+        # Always write disk log (failed jobs often have no job_*.json)
+        append_aspect_debug_log(debug_line)
+        append_aspect_debug_log(
+            f"PAYLOAD_DEBUG endpoint={endpoint} keys={sorted(args_out.keys())} "
+            f"duration={args_out.get('duration')!r}({type(args_out.get('duration')).__name__}) "
+            f"resolution={args_out.get('resolution')!r} "
+            f"aspect_ratio={args_out.get('aspect_ratio')!r} "
+            f"has_neg={('negative_prompt' in args_out)}"
+        )
+    except Exception as exc:
+        debug_line = f"ASPECT_DEBUG source=fal.subscribe ERROR {exc!r} endpoint={endpoint}"
+        try:
+            from media_studio.aspect_omit import append_aspect_debug_log
+
+            append_aspect_debug_log(debug_line)
+        except Exception:
+            pass
+
+    # Surface to UI progress (must not be classified away — callers pass-through)
     if on_progress:
-        on_progress(f"Queued on fal: {endpoint}")
+        if debug_line:
+            try:
+                on_progress(debug_line)
+            except Exception:
+                pass
+        try:
+            # Show key payload facts before queue (Seedance smoke)
+            from media_studio.aspect_omit import is_seedance_reference_endpoint
+
+            if is_seedance_reference_endpoint(endpoint):
+                on_progress(
+                    f"SEEDANCE_PAYLOAD keys={sorted(args_out.keys())} "
+                    f"aspect={args_out.get('aspect_ratio')!r} "
+                    f"dur={args_out.get('duration')!r} "
+                    f"res={args_out.get('resolution')!r}"
+                )
+        except Exception:
+            pass
+        try:
+            on_progress(f"Queued on fal: {endpoint}")
+        except Exception:
+            pass
 
     def _on_queue_update(update: Any) -> None:
         if on_progress is None:
@@ -438,13 +552,45 @@ def subscribe(
     try:
         result = fal_client.subscribe(
             endpoint,
-            arguments=arguments,
+            arguments=args_out,
             with_logs=with_logs,
             on_queue_update=_on_queue_update if with_logs else None,
         )
     except Exception as exc:
+        # Prefer RAW fal body in UI/logs (not only rewritten help text)
+        raw_body = _format_fal_error_body(exc)
+        try:
+            from media_studio.aspect_omit import append_aspect_debug_log
+
+            append_aspect_debug_log(
+                f"FAL_ERROR endpoint={endpoint} body={raw_body[:4000]}"
+            )
+            append_aspect_debug_log(
+                f"FAL_ERROR_PAYLOAD endpoint={endpoint} sent_keys={sorted(args_out.keys())} "
+                f"sent={{{', '.join(f'{k}={args_out.get(k)!r}' for k in sorted(args_out) if k != 'prompt')}}}"
+            )
+        except Exception:
+            pass
+        if on_progress:
+            try:
+                on_progress(f"FAL_RAW: {raw_body[:900]}")
+            except Exception:
+                pass
+            try:
+                on_progress(
+                    f"FAL_SENT keys={sorted(args_out.keys())} "
+                    f"aspect={args_out.get('aspect_ratio')!r} "
+                    f"dur={args_out.get('duration')!r} "
+                    f"res={args_out.get('resolution')!r}"
+                )
+            except Exception:
+                pass
+        # Lead with RAW so panel shows fal body even when friendly rewrites aspect text
+        friendly = friendly_error(exc, context=f"fal ({endpoint})")
         raise FalClientError(
-            friendly_error(exc, context=f"fal ({endpoint})")
+            f"RAW fal: {raw_body[:1200]}\n{friendly}"
+            if raw_body
+            else friendly
         ) from exc
 
     if result is None:

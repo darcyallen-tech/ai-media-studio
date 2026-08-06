@@ -22,6 +22,13 @@ from media_studio.character_store import (
     CHAR_HAIR_STYLE_OPTS,
     CHAR_HEIGHT_OPTS,
     CHAR_SKIN_OPTS,
+    CLOTHING_COLOR_OPTS,
+    CLOTHING_FIT_OPTS,
+    CLOTHING_MATERIAL_OPTS,
+    CLOTHING_NONE,
+    CLOTHING_SLOT_LABELS,
+    CLOTHING_SLOT_STYLES,
+    COSTUME_SEQ_ORDER,
     DEFAULT_CLOTHES,
     DEFAULT_VARIATION_MODEL,
     HELPER_NONE,
@@ -38,7 +45,9 @@ from media_studio.character_store import (
     assemble_character_t2i_description,
     character_t2i_i2i_prompt_for_slot,
     character_t2i_prompt_for_slot,
+    compile_clothing_helper,
     costume_prompt_for_slot,
+    costume_ref_order_for_slot,
     default_practical_resolution,
     default_practical_t2i_resolution,
     delete_character,
@@ -126,9 +135,12 @@ class CharactersView:
         self._costume_outfit: str = ""
         self._costume_results: dict[str, str] = {}  # slot -> path
         self._costume_errors: dict[str, str] = {}  # slot -> error message
-        self._costume_refs: list[str] = []  # identity stills for regen
+        self._costume_identity: dict[str, str] = {}  # identity pack for ref order
+        self._costume_refs: list[str] = []  # identity stills (legacy list)
         self._costume_model: str = preferred_costume_model()
         self._costume_busy = False
+        self._costume_running_slot: str | None = None  # slot currently generating
+        self._costume_seq_slot: str = "front"  # next angle to generate
         self._costumes_expanded: set[str] = set()  # parent ids with Costumes open
         self._create_mode = False  # New character (upload) vs edit existing
 
@@ -364,7 +376,7 @@ class CharactersView:
         self.costume_res_dd.visible = bool(_cos_res)
         self.costume_prompt = ft.TextField(
             label="New wardrobe / look",
-            hint_text='e.g. navy suit and tie · astronaut suit · "listing open house" blazer',
+            hint_text='e.g. navy suit and tie · astronaut suit · or use Clothing helper below',
             value="",
             dense=True,
             filled=True,
@@ -374,11 +386,126 @@ class CharactersView:
             text_size=FONT_SM,
             multiline=True,
             min_lines=2,
-            max_lines=3,
+            max_lines=4,
             on_change=self._on_costume_prompt_change,
         )
         self.btn_costume_enhance = make_enhance_button(on_click=self._on_costume_enhance)
+        # Optional clothing helper — per-slot style lists only
+        self._cloth_dd: dict[str, tuple[Any, Any, Any]] = {}
+        self._cloth_custom: dict[str, ft.TextField] = {}
+        self._cloth_bottom_row: ft.Control | None = None
+
+        def _cloth_row(key: str, section_title: str) -> ft.Control:
+            style_opts = list(CLOTHING_SLOT_STYLES.get(key, (CLOTHING_NONE,)))
+            style_label = CLOTHING_SLOT_LABELS.get(key, f"{section_title} style")
+            st = styled_dropdown(
+                label_text=style_label,
+                options=style_opts,
+                value=CLOTHING_NONE,
+                expand=True,
+            )
+            col = styled_dropdown(
+                label_text="Color",
+                options=list(CLOTHING_COLOR_OPTS),
+                value=CLOTHING_NONE,
+                expand=True,
+            )
+            mat = styled_dropdown(
+                label_text="Material",
+                options=list(CLOTHING_MATERIAL_OPTS),
+                value=CLOTHING_NONE,
+                expand=True,
+            )
+            custom = ft.TextField(
+                label=f"{section_title} custom override",
+                value="",
+                dense=True,
+                filled=True,
+                fill_color=PANEL,
+                border_color=BORDER,
+                color=TEXT,
+                text_size=FONT_SM,
+            )
+            self._cloth_dd[key] = (st, col, mat)
+            self._cloth_custom[key] = custom
+            return ft.Column(
+                [
+                    ft.Text(
+                        section_title,
+                        size=FONT_SM,
+                        color=TEXT_MUTED,
+                        weight=ft.FontWeight.W_600,
+                    ),
+                    ft.Row([st, col, mat], spacing=6),
+                    custom,
+                ],
+                spacing=4,
+                tight=True,
+            )
+
+        self.cloth_fit_dd = styled_dropdown(
+            label_text="Fit (global)",
+            options=list(CLOTHING_FIT_OPTS),
+            value=CLOTHING_NONE,
+            expand=True,
+        )
+        self.cloth_notes = ft.TextField(
+            label="Extra notes (optional)",
+            value="",
+            dense=True,
+            filled=True,
+            fill_color=PANEL,
+            border_color=BORDER,
+            color=TEXT,
+            text_size=FONT_SM,
+        )
+        self.btn_cloth_apply = ft.OutlinedButton(
+            content="Apply helper → wardrobe prompt",
+            on_click=self._on_cloth_apply,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=34,
+        )
+        self._cloth_bottom_row = _cloth_row("bottom", "Bottom")
+        self.cloth_helper_col = ft.Column(
+            [
+                ft.Text(
+                    "Clothing helper (optional) — each slot has its own styles only",
+                    size=FONT_SM,
+                    color=TEXT,
+                    weight=ft.FontWeight.W_600,
+                ),
+                _cloth_row("inner", "Inner top"),
+                _cloth_row("outer", "Outer (optional)"),
+                self._cloth_bottom_row,
+                _cloth_row("dress", "Dress (replaces bottom)"),
+                _cloth_row("footwear", "Footwear"),
+                _cloth_row("headwear", "Headwear (optional)"),
+                ft.Row([self.cloth_fit_dd], spacing=0),
+                self.cloth_notes,
+                self.btn_cloth_apply,
+            ],
+            spacing=6,
+            tight=True,
+            visible=False,
+        )
+        self.btn_cloth_toggle = ft.TextButton(
+            content="Show clothing helper",
+            on_click=self._on_cloth_toggle,
+            style=ft.ButtonStyle(color=ACCENT),
+        )
+        # When Dress is set, clear Bottom styles on apply (UI feedback)
+        try:
+            dress_st = self._cloth_dd["dress"][0]
+            dress_st.on_select = self._on_cloth_dress_change
+        except Exception:
+            pass
         self.costume_cost = ft.Text("Est. cost: —", size=FONT_SM, color=TEXT_MUTED)
+        self.costume_seq_status = ft.Text(
+            "Step 1 · Front only",
+            size=FONT_SM,
+            color=ACCENT,
+            weight=ft.FontWeight.W_600,
+        )
         self.costume_progress_ring = ft.ProgressRing(
             width=28, height=28, stroke_width=3, color=ACCENT, visible=False
         )
@@ -405,10 +532,18 @@ class CharactersView:
             selectable=True,
         )
         self.btn_costume_generate = ft.FilledButton(
-            content="Generate costume swap",
-            on_click=self._costume_generate_all,
+            content="Generate Front",
+            on_click=self._costume_generate_next,
             style=ft.ButtonStyle(bgcolor=ACCENT_BRIGHT, color=TEXT),
             height=40,
+        )
+        self.btn_costume_regen = ft.OutlinedButton(
+            content="Regenerate this angle",
+            on_click=self._costume_regen_current,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            height=40,
+            visible=False,
+            tooltip="Re-run only the current angle (uses costume Front as top ref when Side/Close-up)",
         )
         self.btn_costume_cancel = ft.TextButton(
             content="Close",
@@ -454,19 +589,25 @@ class CharactersView:
                     self.costume_title,
                     self.costume_char_label,
                     ft.Text(
-                        "Uses all identity stills as multi-ref. One generation per filled "
-                        "slot (Front / Side / Close-up). Pure black clean plate. "
-                        "Regenerate re-runs only that angle.",
+                        "Sequential: Front only first → OK → Side → Close-up. "
+                        "Each step is one image. After Front succeeds, that costume still "
+                        "is the top ref for Side/Close-up. Close-up is front-facing "
+                        "(not profile). Regenerate re-runs only that angle.",
                         size=FONT_SM,
                         color=TEXT_MUTED,
+                        max_lines=4,
                     ),
                     ft.Row([self.costume_model_dd], spacing=0),
                     ft.Row([self.costume_res_dd], spacing=0),
                     self.costume_prompt,
+                    self.btn_cloth_toggle,
+                    self.cloth_helper_col,
+                    self.costume_seq_status,
                     ft.Row(
                         [
                             self.btn_costume_enhance,
                             self.btn_costume_generate,
+                            self.btn_costume_regen,
                             self.btn_costume_cancel,
                         ],
                         spacing=8,
@@ -3138,8 +3279,15 @@ class CharactersView:
         else:
             self.costume_res_dd.label = "Resolution"
 
-    def _set_costume_busy(self, busy: bool, *, message: str = "") -> None:
+    def _set_costume_busy(
+        self,
+        busy: bool,
+        *,
+        message: str = "",
+        slot: str | None = None,
+    ) -> None:
         self._costume_busy = busy
+        self._costume_running_slot = slot if busy else None
         self.costume_busy_row.visible = busy
         self.costume_progress_ring.visible = busy
         try:
@@ -3149,16 +3297,52 @@ class CharactersView:
         except Exception:
             pass
         self.btn_costume_generate.disabled = busy
+        try:
+            self.btn_costume_regen.disabled = busy
+        except Exception:
+            pass
         self.btn_costume_enhance.disabled = busy
         self.btn_costume_cancel.disabled = busy
         try:
             self.costume_model_dd.disabled = busy
         except Exception:
             pass
+        # Re-enable/disable per-slot Regenerate on result cards (they were stuck
+        # disabled when built mid-job with busy=True)
+        try:
+            self._sync_costume_regen_buttons()
+        except Exception:
+            pass
         try:
             self.page.update()
         except Exception:
             pass
+
+    def _sync_costume_regen_buttons(self) -> None:
+        """Enable card Regenerate except while that slot (or any job) is running."""
+        running = self._costume_running_slot
+        for ctrl in list(self.costume_results_row.controls or []):
+            try:
+                col = getattr(ctrl, "content", None)
+                if col is None or not getattr(col, "controls", None):
+                    continue
+                for child in col.controls:
+                    if not isinstance(child, ft.OutlinedButton):
+                        continue
+                    tip = (getattr(child, "tooltip", None) or "") + ""
+                    # Match slot from tooltip "Re-run only Front" / "Retry Side"
+                    slot_hit = None
+                    for s, short in SLOT_SHORT.items():
+                        if short in tip:
+                            slot_hit = s
+                            break
+                    if running is None:
+                        child.disabled = False
+                    else:
+                        # Only the active job's regen is disabled; others wait on busy gate
+                        child.disabled = True
+            except Exception:
+                pass
 
     def _show_costume_errors(self) -> None:
         if not self._costume_errors:
@@ -3179,7 +3363,12 @@ class CharactersView:
         self._costume_outfit = ""
         self._costume_results = {}
         self._costume_errors = {}
+        pack = c.normalized_identity()
+        self._costume_identity = {
+            s: pack[s] for s in IDENTITY_SLOTS if pack.get(s)
+        }
         self._costume_refs = c.all_stills()
+        self._costume_seq_slot = "front"
         self._costume_model = preferred_costume_model()
         # Sync dropdown label
         from media_studio.fal.models import resolve_image_edit_model
@@ -3198,18 +3387,16 @@ class CharactersView:
         self.costume_errors_text.visible = False
         self.costume_errors_text.value = ""
         self.costume_busy_row.visible = False
-        n = c.angle_count()
-        self.costume_cost.value = estimate_costume_swap_cost(
-            n,
-            model_key=self._costume_model_choice(),
-            resolution=self._costume_resolution(),
-        )
         self.costume_results_row.controls.clear()
         self.btn_costume_save_new.visible = False
         self.btn_costume_replace.visible = False
         self.btn_costume_discard.visible = False
+        self.btn_costume_regen.visible = False
         self.costume_box.visible = True
-        self._set_status(f"Costume swap ready for {c.name} ({n} angle(s)).")
+        self._costume_sync_seq_ui()
+        self._set_status(
+            f"Costume swap · {c.name}: generate Front first, then Side, then Close-up."
+        )
         try:
             self.page.update()
         except Exception:
@@ -3222,6 +3409,8 @@ class CharactersView:
         self._costume_char_id = None
         self._costume_results = {}
         self._costume_errors = {}
+        self._costume_identity = {}
+        self._costume_seq_slot = "front"
         try:
             self.page.update()
         except Exception:
@@ -3229,6 +3418,110 @@ class CharactersView:
 
     async def _on_costume_prompt_change(self, e: ft.ControlEvent) -> None:
         self._refresh_costume_cost()
+
+    async def _on_cloth_toggle(self, e: ft.ControlEvent | None = None) -> None:
+        show = not self.cloth_helper_col.visible
+        self.cloth_helper_col.visible = show
+        self.btn_cloth_toggle.content = (
+            "Hide clothing helper" if show else "Show clothing helper"
+        )
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _on_cloth_dress_change(self, e: ft.ControlEvent | None = None) -> None:
+        """Dress set → clear Bottom styles (dress replaces bottom)."""
+        try:
+            dr = (self._cloth_dd["dress"][0].value or CLOTHING_NONE).strip()
+            has_dress = dr not in (CLOTHING_NONE, "", "none")
+            if has_dress and "bottom" in self._cloth_dd:
+                st, col, mat = self._cloth_dd["bottom"]
+                st.value = CLOTHING_NONE
+                col.value = CLOTHING_NONE
+                mat.value = CLOTHING_NONE
+                if "bottom" in self._cloth_custom:
+                    self._cloth_custom["bottom"].value = ""
+            if self._cloth_bottom_row is not None:
+                try:
+                    self._cloth_bottom_row.opacity = 0.45 if has_dress else 1.0
+                    self._cloth_bottom_row.disabled = bool(has_dress)
+                except Exception:
+                    pass
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _on_cloth_apply(self, e: ft.ControlEvent | None = None) -> None:
+        def _vals(key: str) -> tuple[str, str, str, str]:
+            st, col, mat = self._cloth_dd[key]
+            custom = self._cloth_custom[key]
+            return (
+                (st.value or CLOTHING_NONE),
+                (col.value or CLOTHING_NONE),
+                (mat.value or CLOTHING_NONE),
+                (custom.value or ""),
+            )
+
+        # Dress replaces bottom — clear bottom before compile if dress set
+        dr_s, dr_c, dr_m, dr_x = _vals("dress")
+        has_dress = bool(
+            (dr_x or "").strip()
+            or (dr_s and dr_s not in (CLOTHING_NONE, "", "none"))
+        )
+        if has_dress and "bottom" in self._cloth_dd:
+            st, col, mat = self._cloth_dd["bottom"]
+            st.value = CLOTHING_NONE
+            col.value = CLOTHING_NONE
+            mat.value = CLOTHING_NONE
+            self._cloth_custom["bottom"].value = ""
+
+        it_s, it_c, it_m, it_x = _vals("inner")
+        ot_s, ot_c, ot_m, ot_x = _vals("outer")
+        bt_s, bt_c, bt_m, bt_x = _vals("bottom")
+        ft_s, ft_c, ft_m, ft_x = _vals("footwear")
+        hw_s, hw_c, hw_m, hw_x = _vals("headwear")
+        compiled = compile_clothing_helper(
+            inner_top_style=it_s,
+            inner_top_color=it_c,
+            inner_top_material=it_m,
+            inner_top_custom=it_x,
+            outer_style=ot_s,
+            outer_color=ot_c,
+            outer_material=ot_m,
+            outer_custom=ot_x,
+            bottom_style=bt_s,
+            bottom_color=bt_c,
+            bottom_material=bt_m,
+            bottom_custom=bt_x,
+            dress_style=dr_s,
+            dress_color=dr_c,
+            dress_material=dr_m,
+            dress_custom=dr_x,
+            footwear_style=ft_s,
+            footwear_color=ft_c,
+            footwear_material=ft_m,
+            footwear_custom=ft_x,
+            headwear_style=hw_s,
+            headwear_color=hw_c,
+            headwear_material=hw_m,
+            headwear_custom=hw_x,
+            fit=(self.cloth_fit_dd.value or CLOTHING_NONE),
+            extra_notes=(self.cloth_notes.value or ""),
+        )
+        if not compiled:
+            self._set_status(
+                "Clothing helper empty — pick styles or use custom overrides.",
+                error=True,
+            )
+            return
+        self.costume_prompt.value = compiled
+        self._refresh_costume_cost()
+        self._set_status("Clothing helper applied to wardrobe prompt.")
+        try:
+            self.page.update()
+        except Exception:
+            pass
 
     async def _on_costume_model_change(self, e: ft.ControlEvent | None = None) -> None:
         self._costume_model = self._costume_model_choice()
@@ -3239,19 +3532,72 @@ class CharactersView:
         except Exception:
             pass
 
+    def _costume_next_slot(self) -> str | None:
+        """Next sequential angle that still needs a successful result."""
+        for s in COSTUME_SEQ_ORDER:
+            if s not in self._costume_results:
+                # Only offer slots that have identity source (or front always if any id)
+                if s == "front":
+                    if self._costume_identity.get("front") or self._costume_refs:
+                        return s
+                    continue
+                # Side/Close-up need Front costume done
+                if "front" not in self._costume_results:
+                    return None
+                if self._costume_identity.get(s) or self._costume_identity.get("front"):
+                    return s
+        return None
+
+    def _costume_sync_seq_ui(self) -> None:
+        nxt = self._costume_next_slot()
+        self._costume_seq_slot = nxt or "front"
+        done = [SLOT_SHORT[s] for s in COSTUME_SEQ_ORDER if s in self._costume_results]
+        if nxt is None:
+            self.costume_seq_status.value = (
+                "All angles done · "
+                + (" · ".join(done) if done else "none")
+                + " · save below"
+            )
+            self.btn_costume_generate.content = "All angles complete"
+            self.btn_costume_generate.disabled = True
+            self.btn_costume_regen.visible = bool(self._costume_results)
+        else:
+            short = SLOT_SHORT[nxt]
+            step = COSTUME_SEQ_ORDER.index(nxt) + 1
+            self.costume_seq_status.value = (
+                f"Step {step}/{len(COSTUME_SEQ_ORDER)} · {short}"
+                + (
+                    " · uses costume Front as primary ref"
+                    if nxt != "front" and "front" in self._costume_results
+                    else " · Front only first"
+                )
+            )
+            self.btn_costume_generate.content = f"Generate {short}"
+            self.btn_costume_generate.disabled = self._costume_busy
+            self.btn_costume_regen.visible = nxt in self._costume_results or bool(
+                self._costume_results
+            )
+        self._refresh_costume_cost()
+
     def _refresh_costume_cost(self) -> None:
         if not self._costume_char_id:
             return
-        ch = next(
-            (c for c in load_characters() if c.id == self._costume_char_id),
-            None,
+        # Sequential: estimate one image at a time (remaining steps)
+        remaining = sum(
+            1 for s in COSTUME_SEQ_ORDER if s not in self._costume_results
         )
-        n = ch.angle_count() if ch else 0
+        n = max(1, remaining) if remaining else 0
         model = self._costume_model_choice()
         self._costume_model = model
         self.costume_cost.value = estimate_costume_swap_cost(
-            n, model_key=model, resolution=self._costume_resolution()
+            n if n else 1, model_key=model, resolution=self._costume_resolution()
         )
+        if remaining == 0 and self._costume_results:
+            self.costume_cost.value = estimate_costume_swap_cost(
+                len(self._costume_results),
+                model_key=model,
+                resolution=self._costume_resolution(),
+            ) + " (done)"
 
     async def _on_costume_enhance(self, e: ft.ControlEvent) -> None:
         def _extra() -> dict[str, Any]:
@@ -3275,16 +3621,48 @@ class CharactersView:
             status_ctrl=self.status,
             job_progress=self.job_progress,
             enhance_btn=self.btn_costume_enhance,
-            busy_controls=[self.btn_costume_generate],
+            busy_controls=[self.btn_costume_generate, self.btn_costume_regen],
             context_label="costume outfit prompt",
             allow_empty_with_context=False,
             busy_scope="characters",
         )
 
-    async def _costume_generate_all(self, e: ft.ControlEvent) -> None:
-        if self._costume_busy:
+    async def _costume_generate_next(self, e: ft.ControlEvent | None = None) -> None:
+        """Generate the next sequential angle only (Front → Side → Close-up)."""
+        slot = self._costume_next_slot()
+        if not slot:
+            self._set_status("All costume angles done — save or regenerate one.", error=False)
             return
-        outfit = (self.costume_prompt.value or "").strip()
+        await self._costume_run_angle(slot, regen=False)
+
+    async def _costume_regen_current(self, e: ft.ControlEvent | None = None) -> None:
+        """Regenerate the last completed angle, or next pending if none."""
+        # Prefer last in sequence that has a result
+        slot = None
+        for s in reversed(COSTUME_SEQ_ORDER):
+            if s in self._costume_results:
+                slot = s
+                break
+        if not slot:
+            slot = self._costume_next_slot()
+        if not slot:
+            self._set_status("Nothing to regenerate.", error=True)
+            return
+        await self._costume_run_angle(slot, regen=True)
+
+    async def _costume_run_angle(self, slot: str, *, regen: bool) -> None:
+        """
+        Generate or regenerate one costume angle in the live session (no Save required).
+
+        Regen uses the same model, wardrobe prompt, and ref priority as first-run.
+        """
+        if self._costume_busy:
+            self._set_status(
+                f"Already generating {SLOT_SHORT.get(self._costume_running_slot or '', '…')}…",
+                error=False,
+            )
+            return
+        outfit = (self.costume_prompt.value or self._costume_outfit or "").strip()
         if not outfit:
             self._set_status("Describe the new wardrobe / look first.", error=True)
             return
@@ -3297,9 +3675,12 @@ class CharactersView:
         if not ch:
             self._set_status("Character not found.", error=True)
             return
-        slots = ch.filled_slots()
-        if not slots:
-            self._set_status("No identity stills on this character.", error=True)
+        # Side/Close-up require costume Front first (regen of Front is always allowed)
+        if slot != "front" and "front" not in self._costume_results:
+            self._set_status(
+                "Generate Front first — it becomes the top outfit ref for Side/Close-up.",
+                error=True,
+            )
             return
         from media_studio.secrets_store import has_fal_key
 
@@ -3314,16 +3695,23 @@ class CharactersView:
         model = self._costume_model_choice()
         self._costume_model = model
         self._costume_outfit = outfit
+        pack = ch.normalized_identity()
+        self._costume_identity = {
+            s: pack[s] for s in IDENTITY_SLOTS if pack.get(s)
+        }
         self._costume_refs = ch.all_stills()
-        self._costume_results = {}
-        self._costume_errors = {}
-        n = len(slots)
+        short = SLOT_SHORT.get(slot, slot)
         self._refresh_costume_cost()
-        self._set_costume_busy(
-            True, message=f"Generating costume · {n} angle(s)…"
-        )
-        self.job_progress.start(f"Costume swap · {n} image(s)…", self.page)
-        self._set_status(f"Generating costume for {ch.name} ({n} angles)…")
+        verb = "Regenerating" if regen else "Generating"
+        self._set_costume_busy(True, message=f"{verb} {short}…", slot=slot)
+        # Rebuild cards so this slot's Regenerate is disabled during the job
+        try:
+            self._rebuild_costume_results_ui()
+            self.page.update()
+        except Exception:
+            pass
+        self.job_progress.start(f"Costume · {short}…", self.page)
+        self._set_status(f"{verb} costume {short} for {ch.name}…")
         self.costume_errors_text.visible = False
 
         def on_progress(msg: str) -> None:
@@ -3331,83 +3719,65 @@ class CharactersView:
             try:
                 busy_txt = self.costume_busy_row.controls[1]
                 if isinstance(busy_txt, ft.Text):
-                    busy_txt.value = msg or "Generating costume…"
+                    busy_txt.value = msg or f"{verb} {short}…"
                 self.page.update()
             except Exception:
                 pass
 
         try:
-            for i, (slot, _path) in enumerate(slots, start=1):
-                short = SLOT_SHORT.get(slot, slot)
-                on_progress(f"{short} ({i}/{n})…")
-                path, err = await self._run_costume_slot(
-                    slot=slot,
-                    outfit=outfit,
-                    refs=self._costume_refs,
-                    on_progress=on_progress,
-                )
-                if path:
-                    self._costume_results[slot] = path
-                    self._costume_errors.pop(slot, None)
-                else:
-                    self._costume_errors[slot] = err or "Unknown error (no image returned)"
-                self._rebuild_costume_results_ui()
-                self._show_costume_errors()
-                try:
-                    self.page.update()
-                except Exception:
-                    pass
-
-            ok_n = len(self._costume_results)
-            fail_n = len(self._costume_errors)
-            if ok_n:
+            # For regen: keep prior result until success so Side/Close-up refs stay valid
+            path, err = await self._run_costume_slot(
+                slot=slot,
+                outfit=outfit,
+                on_progress=on_progress,
+                regen=regen,
+            )
+            if path:
+                self._costume_results[slot] = path
+                self._costume_errors.pop(slot, None)
                 self.job_progress.finish_ok(
-                    f"Costume ready · {ok_n} ok"
-                    + (f" · {fail_n} failed" if fail_n else ""),
-                    self.page,
+                    f"{short} {'updated' if regen else 'ready'}", self.page
                 )
-                msg = (
-                    f"Costume: {ok_n}/{n} angle(s) ready. "
-                    "Name the costume, regenerate failed slots, then save under parent."
-                )
-                if fail_n:
-                    fails = ", ".join(
-                        f"{SLOT_SHORT.get(s, s)}: {e[:80]}"
-                        for s, e in self._costume_errors.items()
+                nxt = self._costume_next_slot()
+                if regen:
+                    self._set_status(
+                        f"Regenerated {short} only · other angles unchanged."
                     )
-                    msg += f" Failures — {fails}"
-                    self._set_status(msg, error=True)
+                elif nxt:
+                    self._set_status(
+                        f"{short} OK · next: Generate {SLOT_SHORT[nxt]}"
+                        + (
+                            " (uses costume Front as top ref)"
+                            if nxt != "front"
+                            else ""
+                        )
+                    )
                 else:
-                    self._set_status(msg)
-                # Prefill short costume name from outfit prompt (editable)
-                outfit_txt = self._costume_outfit or (
-                    self.costume_prompt.value or ""
-                ).strip()
-                self.costume_variant_name.value = short_outfit_label(outfit_txt)
-                self.costume_variant_name.visible = True
-                self.btn_costume_save_new.visible = True
-                self.btn_costume_replace.visible = True
-                self.btn_costume_discard.visible = True
+                    self._set_status(
+                        f"Costume complete ({len(self._costume_results)} angles). "
+                        "Name and save under parent."
+                    )
+                if self._costume_results:
+                    self.costume_variant_name.visible = True
+                    if not (self.costume_variant_name.value or "").strip():
+                        self.costume_variant_name.value = short_outfit_label(outfit)
+                    self.btn_costume_save_new.visible = True
+                    self.btn_costume_replace.visible = True
+                    self.btn_costume_discard.visible = True
             else:
-                summary = "; ".join(
-                    f"{SLOT_SHORT.get(s, s)}: {e}"
-                    for s, e in self._costume_errors.items()
-                )
-                self.job_progress.finish_error(
-                    summary or "Costume swap failed for all slots.",
-                    self.page,
-                )
-                self._set_status(
-                    f"Costume swap failed for all slots. {summary}",
-                    error=True,
-                )
-                self._show_costume_errors()
+                self._costume_errors[slot] = err or f"{short}: failed"
+                self.job_progress.finish_error(err or "Failed", self.page)
+                self._set_status(err or f"{short} failed.", error=True)
         except Exception as exc:
             self.job_progress.finish_error(str(exc), self.page)
             self._set_status(f"Costume error: {exc}", error=True)
             traceback.print_exc()
         finally:
             self._set_costume_busy(False)
+            # Rebuild so Regenerate buttons are enabled again (were disabled mid-job)
+            self._rebuild_costume_results_ui()
+            self._show_costume_errors()
+            self._costume_sync_seq_ui()
             self.state.clear_busy("characters")
             try:
                 self.page.update()
@@ -3419,29 +3789,34 @@ class CharactersView:
         *,
         slot: str,
         outfit: str,
-        refs: list[str],
         on_progress: Any,
+        regen: bool = False,
     ) -> tuple[str | None, str | None]:
-        """One I2I call for a single angle. Returns (path, error_message)."""
+        """One I2I call for a single angle with costume ref priority."""
         from media_studio.job_context import to_thread_with_job
         from media_studio.services import generate
 
         short = SLOT_SHORT.get(slot, slot)
-        ch = (
-            next((c for c in load_characters() if c.id == self._costume_char_id), None)
-            if self._costume_char_id
-            else None
+        # When regenerating, use current session results for higher angles' refs
+        # (Front costume still tops Side/Close-up). Identity pack for base refs.
+        ordered = costume_ref_order_for_slot(
+            slot,
+            identity=self._costume_identity,
+            costume_results=self._costume_results,
         )
-        primary = ch.get_slot(slot) if ch else None
-        if not primary or not Path(primary).is_file():
-            primary = refs[0] if refs else None
-        if not primary or not Path(primary).is_file():
-            return None, f"{short}: no source still for this angle"
-        extras = [r for r in refs if r != primary and Path(r).is_file()]
+        if not ordered:
+            return None, f"{short}: no reference stills (need identity pack)"
+        primary = ordered[0]
+        extras = ordered[1:]
         prompt = costume_prompt_for_slot(outfit, slot)
         model = self._costume_model_choice()
         params_json = edit_params_json_for_resolution(self._costume_resolution())
-        on_progress(f"{short}…")
+        ref_note = f"refs={len(ordered)}"
+        if slot != "front" and self._costume_results.get("front"):
+            ref_note += " · costume Front first"
+        if regen:
+            ref_note += " · regen"
+        on_progress(f"{short} · {ref_note}…")
         try:
             result = await to_thread_with_job(
                 self.state,
@@ -3449,7 +3824,7 @@ class CharactersView:
                 prompt,
                 model_choice=model,
                 image_file=primary,
-                extra_image_files=extras,
+                extra_image_files=extras or None,
                 output_dir=self.state.output_dir,
                 on_progress=on_progress,
                 scenario="character-costume",
@@ -3465,29 +3840,33 @@ class CharactersView:
             imgs = result.image_paths or []
             path = imgs[0] if imgs else None
         if path and Path(path).is_file():
-            return str(path), None
+            return str(Path(path).resolve()), None
         return None, f"{short}: no image file in response"
 
     def _rebuild_costume_results_ui(self) -> None:
         self.costume_results_row.controls.clear()
         # Show successes in slot order; also show failed slots with regen
-        shown: set[str] = set()
+        running = self._costume_running_slot
         for slot in IDENTITY_SLOTS:
+            slot_busy = bool(running)  # any in-flight costume job blocks concurrent regen
             if slot in self._costume_results:
                 path = self._costume_results[slot]
+                # Bust Flet image cache when path is replaced after regen
                 img = ft.Image(
                     src=path,
                     width=_RESULT_THUMB,
                     height=_RESULT_THUMB,
                     fit=ft.BoxFit.COVER,
                     border_radius=6,
+                    gapless_playback=False,
                 )
                 btn_regen = ft.OutlinedButton(
                     content="Regenerate",
-                    on_click=self._make_costume_regen(slot),
+                    data=slot,  # stable slot id for click handler
+                    on_click=self._on_costume_regen_click,
                     style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
                     height=32,
-                    disabled=self._costume_busy,
+                    disabled=slot_busy,
                     tooltip=f"Re-run only {SLOT_SHORT[slot]} (~1 image)",
                 )
                 self.costume_results_row.controls.append(
@@ -3515,17 +3894,18 @@ class CharactersView:
                         border=ft.Border.all(1, BORDER),
                         border_radius=8,
                         padding=8,
+                        data=slot,
                     )
                 )
-                shown.add(slot)
             elif slot in self._costume_errors:
                 err = self._costume_errors[slot]
                 btn_regen = ft.OutlinedButton(
                     content="Retry",
-                    on_click=self._make_costume_regen(slot),
+                    data=slot,
+                    on_click=self._on_costume_regen_click,
                     style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
                     height=32,
-                    disabled=self._costume_busy,
+                    disabled=slot_busy,
                     tooltip=f"Retry {SLOT_SHORT[slot]}",
                 )
                 self.costume_results_row.controls.append(
@@ -3554,87 +3934,40 @@ class CharactersView:
                         border_radius=8,
                         padding=8,
                         width=_RESULT_THUMB + 40,
+                        data=slot,
                     )
                 )
-                shown.add(slot)
+
+    async def _on_costume_regen_click(self, e: ft.ControlEvent) -> None:
+        """
+        In-session Regenerate (before Save). Re-runs ONLY that angle with the
+        same model, wardrobe prompt, and ref priority — no Save/Edit required.
+        """
+        slot = getattr(e.control, "data", None) if e and e.control else None
+        if not slot or slot not in IDENTITY_SLOTS:
+            self._set_status("Regenerate: unknown angle.", error=True)
+            return
+        if self._costume_busy:
+            self._set_status(
+                f"Wait for {SLOT_SHORT.get(self._costume_running_slot or '', 'job')} to finish.",
+                error=False,
+            )
+            return
+        await self._costume_run_angle(str(slot), regen=True)
 
     def _make_costume_regen(self, slot: str):
+        """Legacy factory — prefer data= + _on_costume_regen_click."""
+
         async def _click(_e: ft.ControlEvent) -> None:
-            await self._costume_regen_one(slot)
+            if self._costume_busy:
+                return
+            await self._costume_run_angle(slot, regen=True)
 
         return _click
 
     async def _costume_regen_one(self, slot: str) -> None:
-        if self._costume_busy:
-            return
-        outfit = (self.costume_prompt.value or self._costume_outfit or "").strip()
-        if not outfit:
-            self._set_status("Outfit prompt missing.", error=True)
-            return
-        if not self._costume_refs:
-            self._set_status("No identity refs for regenerate.", error=True)
-            return
-        from media_studio.secrets_store import has_fal_key
-
-        if not has_fal_key():
-            self._set_status("FAL API key required.", error=True)
-            return
-        if self.state.is_busy("characters"):
-            return
-        if not self.state.try_busy("characters"):
-            return
-
-        short = SLOT_SHORT.get(slot, slot)
-        model = self._costume_model_choice()
-        self.costume_cost.value = estimate_costume_swap_cost(1, model_key=model)
-        self._set_costume_busy(True, message=f"Regenerating {short}…")
-        self.job_progress.start(f"Regenerate {short}…", self.page)
-
-        def on_progress(msg: str) -> None:
-            self.job_progress.set_message(classify_progress(msg), self.page)
-            try:
-                busy_txt = self.costume_busy_row.controls[1]
-                if isinstance(busy_txt, ft.Text):
-                    busy_txt.value = msg or f"Regenerating {short}…"
-                self.page.update()
-            except Exception:
-                pass
-
-        try:
-            path, err = await self._run_costume_slot(
-                slot=slot,
-                outfit=outfit,
-                refs=self._costume_refs,
-                on_progress=on_progress,
-            )
-            if path:
-                self._costume_results[slot] = path
-                self._costume_errors.pop(slot, None)
-                self._rebuild_costume_results_ui()
-                self._show_costume_errors()
-                self.job_progress.finish_ok(f"{short} updated", self.page)
-                self._set_status(f"Regenerated {short} only.")
-                self.btn_costume_save_new.visible = True
-                self.btn_costume_replace.visible = True
-                self.btn_costume_discard.visible = True
-            else:
-                self._costume_errors[slot] = err or f"{short}: regenerate failed"
-                self._rebuild_costume_results_ui()
-                self._show_costume_errors()
-                self.job_progress.finish_error(err or "Regenerate failed", self.page)
-                self._set_status(err or "Regenerate failed.", error=True)
-        except Exception as exc:
-            self.job_progress.finish_error(str(exc), self.page)
-            self._set_status(str(exc), error=True)
-            traceback.print_exc()
-        finally:
-            self._set_costume_busy(False)
-            self.state.clear_busy("characters")
-            self._refresh_costume_cost()
-            try:
-                self.page.update()
-            except Exception:
-                pass
+        """Regenerate a single angle only (from result card or toolbar)."""
+        await self._costume_run_angle(slot, regen=True)
 
     async def _costume_save_new(self, e: ft.ControlEvent) -> None:
         if not self._costume_results:

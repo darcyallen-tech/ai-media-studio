@@ -43,7 +43,8 @@ class JobProgress:
             size=FONT_SM,
             color=TEXT_MUTED,
             visible=False,
-            max_lines=2,
+            max_lines=6,  # ASPECT_DEBUG + fal error need room
+            selectable=True,
         )
         # Bar in a Row so expand is horizontal only (not a tall slab in ListView)
         self.control = ft.Column(
@@ -104,12 +105,16 @@ class JobProgress:
         self.message.value = message
         self.message.color = "#e57373"
         self._upd(page)
-        # Credits / quota: helpful top-up modal (fal vs xAI)
+        # Credits / quota first; else content-policy (Seedance face filter, etc.)
         if page is not None and message:
             try:
-                from media_studio.flet_dialogs import maybe_show_credits_dialog
+                from media_studio.flet_dialogs import (
+                    maybe_show_credits_dialog,
+                    maybe_show_generation_stopped_dialog,
+                )
 
-                maybe_show_credits_dialog(page, message)
+                if not maybe_show_credits_dialog(page, message):
+                    maybe_show_generation_stopped_dialog(page, message)
             except Exception:
                 pass
 
@@ -145,7 +150,11 @@ class JobProgress:
 
 def classify_progress(msg: str) -> str:
     """Map fal progress lines to short user-facing phases."""
-    m = (msg or "").lower()
+    raw = (msg or "").strip()
+    m = raw.lower()
+    # Never swallow aspect-policy debug (was rewritten to "Generating…" when >80 chars)
+    if raw.startswith("ASPECT_DEBUG") or "aspect_debug" in m:
+        return raw if len(raw) <= 320 else (raw[:317] + "…")
     if any(k in m for k in ("upload", "uploading")):
         return "Uploading…"
     if any(k in m for k in ("queue", "queued", "waiting", "pending")):
@@ -154,8 +163,8 @@ def classify_progress(msg: str) -> str:
         return "Saving…"
     if any(k in m for k in ("generat", "infer", "running", "process", "edit", "render")):
         return "Generating…"
-    if msg and len(msg.strip()) < 80:
-        return msg.strip()
+    if raw and len(raw) < 80:
+        return raw
     return "Generating…"
 
 

@@ -13,11 +13,29 @@ from typing import Any, Literal
 VisionMode = Literal[
     "text_to_image",
     "image_to_image",
+    "reference_to_image",  # R2I — build still from identity/style/prop refs
     "text_to_video",
     "image_to_video",
+    "reference_to_video",  # R2V — multi identity / omni refs (not start-frame lock)
+    "video_to_video",  # V2V — source clip + prompt (align with Studio)
     "bridge",
     "extend",
 ]
+
+# UI pill rows (aligned with Studio naming: T2I/I2I/R2I · I2V/T2V/R2V/V2V)
+VISION_IMAGE_PILLS: tuple[tuple[str, str], ...] = (
+    ("text_to_image", "Text→Image"),
+    ("image_to_image", "Image→Image"),
+    ("reference_to_image", "R2I"),
+)
+VISION_VIDEO_PILLS: tuple[tuple[str, str], ...] = (
+    ("text_to_video", "Text→Video"),
+    ("image_to_video", "Image→Video"),
+    ("reference_to_video", "R2V"),
+    ("video_to_video", "V2V"),
+    ("bridge", "Bridge/Connect"),
+    ("extend", "Extend Video"),
+)
 
 
 @dataclass(frozen=True)
@@ -688,20 +706,6 @@ T2V_MODELS: dict[str, VisionModelSpec] = {
         default_duration="6s",
         extra_defaults={"generate_audio": True, "auto_fix": True, "safety_tolerance": "4"},
     ),
-    "veo 3.1 reference": VisionModelSpec(
-        key="veo 3.1 reference",
-        label="Veo 3.1 Reference pack",
-        mode="text_to_video",
-        endpoint="fal-ai/veo3.1/reference-to-video",
-        # Same standard Veo rate until fal quotes otherwise
-        cost_estimate_usd=3.20,  # 8s × $0.40
-        cost_per_second=0.40,
-        notes="T2V guided by 1–N reference stills. ~$0.40/s on fal (standard Veo family).",
-        max_refs=8,
-        duration_choices=("8s",),
-        default_duration="8s",
-        extra_defaults={"generate_audio": True, "auto_fix": False, "safety_tolerance": "4"},
-    ),
     "luma ray 2": VisionModelSpec(
         key="luma ray 2",
         label="Luma Ray 2",
@@ -762,64 +766,6 @@ T2V_MODELS: dict[str, VisionModelSpec] = {
         supports_negative=False,
         duration_as_int=True,
         native_stereo_audio=True,
-    ),
-    "grok imagine 1.5 reference": VisionModelSpec(
-        key="grok imagine 1.5 reference",
-        label="Grok Imagine 1.5 · Reference pack",
-        mode="text_to_video",
-        endpoint="xai/grok-imagine-video/v1.5/reference-to-video",
-        cost_estimate_usd=0.66,  # 8s × 0.08 + ~0.02 refs
-        cost_per_second=0.08,
-        notes=(
-            "Grok Imagine 1.5 R2V — 1–7 reference stills; tag <IMAGE_0>… in the prompt. "
-            "Native audio. 1–15s · 480p/720p. Est. $0.08/s @480p, $0.14/s @720p + $0.01/ref. "
-            "Also on Studio Video → R2V."
-        ),
-        duration_choices=tuple(str(i) for i in range(1, 16)),
-        default_duration="8",
-        aspect_choices=("16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16"),
-        default_aspect="16:9",
-        resolution_choices=("480p", "720p"),
-        default_resolution="480p",
-        supports_audio=False,
-        supports_negative=False,
-        max_refs=7,
-        duration_as_int=True,
-        native_stereo_audio=True,
-        prompt_citation_style="angle",
-        image_field="reference_image_urls",
-    ),
-    "minimax h3 omni": VisionModelSpec(
-        key="minimax h3 omni",
-        label="MiniMax H3 · Omni reference",
-        mode="text_to_video",
-        endpoint="minimax/h3/reference-to-video",
-        cost_estimate_usd=1.30,
-        cost_per_second=0.26,
-        notes=(
-            "H3 omni reference-to-video — up to 9 images + 3 videos + 3 audio "
-            "(≤12 files). Cite as Image 1 / Video 1 / Audio 1 in the prompt. "
-            "Motion transfer, subject lock, optional Audio 1 bed. "
-            "Native stereo · 2K · 5–15s. Est. ~$0.26/s (+ ref surcharges per fal)."
-        ),
-        duration_choices=tuple(str(i) for i in range(5, 16)),
-        default_duration="5",
-        aspect_choices=(
-            "adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16",
-        ),
-        default_aspect="adaptive",
-        resolution_choices=("2K",),
-        default_resolution="2K",
-        supports_audio=False,
-        supports_negative=False,
-        max_refs=9,
-        max_ref_videos=3,
-        max_ref_audios=3,
-        max_total_refs=12,
-        omni_reference=True,
-        duration_as_int=True,
-        native_stereo_audio=True,
-        prompt_citation_style="plain",
     ),
     "flux 3 t2v": VisionModelSpec(
         key="flux 3 t2v",
@@ -1013,6 +959,261 @@ I2V_MODELS: dict[str, VisionModelSpec] = {
 }
 
 # ---------------------------------------------------------------------------
+# R2I — Reference → Image (build still from identity/style/prop refs, not plate edit)
+# ---------------------------------------------------------------------------
+
+R2I_MODELS: dict[str, VisionModelSpec] = {
+    # Multi-ref edit endpoints — tab intent: build still from refs (not plate-edit I2I)
+    "flux 2 pro r2i": VisionModelSpec(
+        key="flux 2 pro r2i",
+        label="Flux 2 Pro · R2I",
+        mode="reference_to_image",
+        endpoint="fal-ai/flux-2-pro/edit",
+        cost_estimate_usd=0.03,
+        notes=(
+            "Build a still from Character / style / prop refs (multi-ref). "
+            "Not plate-edit I2I — freer composition from identity pack. ~$0.03/image."
+        ),
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=I2I_ASPECT_CHOICES,
+        default_aspect="Match source",
+        resolution_choices=(),
+        supports_audio=False,
+        supports_negative=False,
+        max_refs=3,
+        image_field="image_urls",
+        edit_model_key="flux 2 pro",
+        supports_strength=False,
+        extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "4"},
+    ),
+    "flux 2 max r2i": VisionModelSpec(
+        key="flux 2 max r2i",
+        label="Flux 2 Max · R2I",
+        mode="reference_to_image",
+        endpoint="fal-ai/flux-2-max/edit",
+        cost_estimate_usd=0.07,
+        notes="Highest-quality multi-ref still from character/style refs.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=I2I_ASPECT_CHOICES,
+        default_aspect="Match source",
+        supports_audio=False,
+        max_refs=3,
+        image_field="image_urls",
+        edit_model_key="flux 2 max",
+        extra_defaults={"num_images": 1, "output_format": "jpeg", "safety_tolerance": "4"},
+    ),
+    "nano banana pro r2i": VisionModelSpec(
+        key="nano banana pro r2i",
+        label="Nano Banana Pro · R2I",
+        mode="reference_to_image",
+        endpoint="fal-ai/nano-banana-pro/edit",
+        cost_estimate_usd=0.08,
+        notes="Creative multi-ref still from identity/style refs.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=I2I_ASPECT_CHOICES,
+        default_aspect="Match source",
+        supports_audio=False,
+        max_refs=3,
+        image_field="image_urls",
+        edit_model_key="nano banana pro",
+        extra_defaults={"num_images": 1},
+    ),
+    "seedream 5 pro r2i": VisionModelSpec(
+        key="seedream 5 pro r2i",
+        label="Seedream 5 Pro · R2I",
+        mode="reference_to_image",
+        endpoint="bytedance/seedream/v5/pro/edit",
+        cost_estimate_usd=0.07,
+        notes="Grounded multi-ref still from character/style refs.",
+        duration_choices=(),
+        default_duration="",
+        aspect_choices=I2I_ASPECT_CHOICES,
+        default_aspect="Match source",
+        supports_audio=False,
+        max_refs=3,
+        image_field="image_urls",
+        edit_model_key="seedream 5 pro",
+        extra_defaults={"num_images": 1},
+    ),
+}
+
+# ---------------------------------------------------------------------------
+# R2V — Reference → Video (multi identity / omni; freer framing)
+# ---------------------------------------------------------------------------
+
+R2V_MODELS: dict[str, VisionModelSpec] = {
+    "minimax h3 omni": VisionModelSpec(
+        key="minimax h3 omni",
+        label="MiniMax H3 · Omni reference",
+        mode="reference_to_video",
+        endpoint="minimax/h3/reference-to-video",
+        cost_estimate_usd=1.30,
+        cost_per_second=0.26,
+        notes=(
+            "H3 omni R2V — Character-first multi identity (up to 9 images) + optional "
+            "video/audio advanced refs. Cite Image 1 / Video 1 / Audio 1. "
+            "Native stereo · 2K · 5–15s. Default R2V model. Also Studio Video → R2V."
+        ),
+        duration_choices=tuple(str(i) for i in range(5, 16)),
+        default_duration="5",
+        aspect_choices=(
+            "adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16",
+        ),
+        default_aspect="adaptive",
+        resolution_choices=("2K",),
+        default_resolution="2K",
+        supports_audio=False,
+        supports_negative=False,
+        max_refs=9,
+        max_ref_videos=3,
+        max_ref_audios=3,
+        max_total_refs=12,
+        omni_reference=True,
+        duration_as_int=True,
+        native_stereo_audio=True,
+        prompt_citation_style="plain",
+    ),
+    "grok imagine 1.5 reference": VisionModelSpec(
+        key="grok imagine 1.5 reference",
+        label="Grok Imagine 1.5 · Reference pack",
+        mode="reference_to_video",
+        endpoint="xai/grok-imagine-video/v1.5/reference-to-video",
+        cost_estimate_usd=0.66,
+        cost_per_second=0.08,
+        notes=(
+            "Grok Imagine 1.5 R2V — 1–7 reference stills; tag <IMAGE_0>… in the prompt. "
+            "Native audio. 1–15s · 480p/720p. Also Studio Video → R2V."
+        ),
+        duration_choices=tuple(str(i) for i in range(1, 16)),
+        default_duration="8",
+        aspect_choices=("16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16"),
+        default_aspect="16:9",
+        resolution_choices=("480p", "720p"),
+        default_resolution="480p",
+        supports_audio=False,
+        supports_negative=False,
+        max_refs=7,
+        duration_as_int=True,
+        native_stereo_audio=True,
+        prompt_citation_style="angle",
+        image_field="reference_image_urls",
+    ),
+    "veo 3.1 reference": VisionModelSpec(
+        key="veo 3.1 reference",
+        label="Veo 3.1 Reference pack",
+        mode="reference_to_video",
+        endpoint="fal-ai/veo3.1/reference-to-video",
+        cost_estimate_usd=3.20,
+        cost_per_second=0.40,
+        notes="R2V guided by 1–N reference stills. ~$0.40/s on fal (standard Veo family).",
+        max_refs=8,
+        duration_choices=("8s",),
+        default_duration="8s",
+        extra_defaults={"generate_audio": True, "auto_fix": False, "safety_tolerance": "4"},
+    ),
+    "seedance 2.0 reference": VisionModelSpec(
+        key="seedance 2.0 reference",
+        label="Seedance 2.0 · Reference-to-Video",
+        mode="reference_to_video",
+        endpoint="bytedance/seedance-2.0/reference-to-video",
+        cost_estimate_usd=1.50,
+        cost_per_second=0.30,
+        notes=(
+            "Seedance 2.0 R2V — multi reference stills (identity/style). "
+            "aspect_ratio: auto | 21:9 | 16:9 | 4:3 | 1:1 | 3:4 | 9:16 (default auto). "
+            "Not I2V start-frame lock. Also Studio Video → R2V."
+        ),
+        duration_choices=("auto",) + tuple(str(i) for i in range(4, 16)),
+        default_duration="5",
+        aspect_choices=(
+            "auto",
+            "21:9",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+        ),
+        default_aspect="auto",
+        omit_aspect_ratio=False,
+        resolution_choices=("480p", "720p"),  # fal R2V schema (not 1080p)
+        default_resolution="720p",
+        supports_audio=True,
+        supports_negative=False,  # never send negative_prompt
+        max_refs=9,
+        duration_as_int=False,  # API expects string "15" / "auto", not int
+        image_field="image_urls",
+        extra_defaults={"generate_audio": True},
+    ),
+    # FLUX 3 listed under R2V as identity-ref emphasis (still single-image API)
+    "flux 3 r2v": VisionModelSpec(
+        key="flux 3 r2v",
+        label="FLUX 3 · Identity ref (R2V)",
+        mode="reference_to_video",
+        endpoint="blackforestlabs/flux-3/image-to-video",
+        cost_estimate_usd=1.36,
+        cost_per_second=0.17,
+        cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        draft_endpoint="blackforestlabs/flux-3/image-to-video/draft",
+        enhance_endpoint="blackforestlabs/flux-3/draft-enhance",
+        cost_per_second_draft=0.06,
+        notes=(
+            "FLUX 3 with Character as identity ref (freer framing). "
+            "Single still only — no multi-char element API. "
+            "For multi-pose timed pins use Director · Keyframe Take. "
+            "Aspect follows still (no aspect_ratio)."
+        ),
+        duration_choices=("auto",) + tuple(str(i) for i in range(5, 21)),
+        default_duration="8",
+        aspect_choices=(ASPECT_FOLLOWS_STILL,),
+        default_aspect=ASPECT_FOLLOWS_STILL,
+        omit_aspect_ratio=True,
+        resolution_choices=("720p", "1080p"),
+        default_resolution="720p",
+        supports_audio=True,
+        supports_negative=False,
+        max_refs=1,
+        duration_as_int=True,
+        image_field="image_url",
+        extra_defaults={"generate_audio": True, "safety_tolerance": 2},
+    ),
+}
+
+# ---------------------------------------------------------------------------
+# V2V — Video → Video (source clip + prompt; align with Studio V2V)
+# ---------------------------------------------------------------------------
+
+V2V_MODELS: dict[str, VisionModelSpec] = {
+    "flux 3 extend v2v": VisionModelSpec(
+        key="flux 3 extend v2v",
+        label="FLUX 3 · Extend (V2V)",
+        mode="video_to_video",
+        endpoint="blackforestlabs/flux-3/extend-video",
+        cost_estimate_usd=1.36,
+        cost_per_second=0.17,
+        cost_per_second_by_resolution={"720p": 0.17, "1080p": 0.29},
+        draft_endpoint="blackforestlabs/flux-3/extend-video/draft",
+        enhance_endpoint="blackforestlabs/flux-3/draft-enhance",
+        cost_per_second_draft=0.06,
+        notes=(
+            "Continue a clip with prompt + optional native audio. "
+            "Same family as Extend Video tab; listed here for Studio-aligned V2V."
+        ),
+        duration_choices=("auto",) + tuple(str(i) for i in range(5, 21)),
+        default_duration="8",
+        resolution_choices=("720p", "1080p"),
+        default_resolution="720p",
+        supports_audio=True,
+        duration_as_int=True,
+        video_field="video_url",
+        extra_defaults={"generate_audio": True, "safety_tolerance": 2},
+    ),
+}
+
+# ---------------------------------------------------------------------------
 # Bridge / connect shots (start + end frame)
 # ---------------------------------------------------------------------------
 
@@ -1144,10 +1345,16 @@ def models_for_mode(mode: VisionMode) -> dict[str, VisionModelSpec]:
         return T2I_MODELS
     if mode == "image_to_image":
         return I2I_MODELS
+    if mode == "reference_to_image":
+        return R2I_MODELS
     if mode == "text_to_video":
         return T2V_MODELS
     if mode == "image_to_video":
         return I2V_MODELS
+    if mode == "reference_to_video":
+        return R2V_MODELS
+    if mode == "video_to_video":
+        return V2V_MODELS
     if mode == "extend":
         return EXTEND_MODELS
     return BRIDGE_MODELS
@@ -1170,8 +1377,11 @@ def find_vision_model(
         else [
             T2I_MODELS,
             I2I_MODELS,
+            R2I_MODELS,
             T2V_MODELS,
             I2V_MODELS,
+            R2V_MODELS,
+            V2V_MODELS,
             BRIDGE_MODELS,
             EXTEND_MODELS,
         ]
@@ -1191,8 +1401,12 @@ def default_vision_model(mode: VisionMode) -> VisionModelSpec:
     for key in (
         "flux 2 pro t2i",
         "flux 2 pro i2i",
+        "flux 2 pro r2i",
         "veo 3.1 fast",
         "veo 3.1 fast i2v",
+        "flux 3 i2v",
+        "minimax h3 omni",
+        "flux 3 extend v2v",
         "veo 3.1 fast bridge",
         "flux 3 extend",
     ):
@@ -1202,8 +1416,16 @@ def default_vision_model(mode: VisionMode) -> VisionModelSpec:
 
 
 def is_still_mode(mode: VisionMode | str | None) -> bool:
-    """True for pure still modes (T2I / I2I) — no video duration / audio."""
-    return mode in ("text_to_image", "image_to_image")
+    """True for pure still modes (T2I / I2I / R2I) — no video duration / audio."""
+    return mode in ("text_to_image", "image_to_image", "reference_to_image")
+
+
+def is_r2v_mode(mode: VisionMode | str | None) -> bool:
+    return mode == "reference_to_video"
+
+
+def is_r2i_mode(mode: VisionMode | str | None) -> bool:
+    return mode == "reference_to_image"
 
 
 def duration_seconds(token: str | None) -> float:
@@ -1485,7 +1707,8 @@ def build_vision_arguments(
                 except (TypeError, ValueError):
                     args[spec.duration_param] = dur
             else:
-                args[spec.duration_param] = dur
+                # Seedance (and similar): string enum "15" / "auto", not int
+                args[spec.duration_param] = str(dur).replace("s", "").strip()
 
     aspect = (aspect_ratio or spec.default_aspect or "").strip()
     is_grok_v = "grok-imagine-video" in ep
@@ -1511,23 +1734,22 @@ def build_vision_arguments(
                     picked = str(a)
                     break
             args["resolution"] = picked or str(res)
-        # FLUX 3 I2V rejects aspect_ratio (even "auto") — frame follows still.
-        # T2V / first→last / extend may still accept aspect when not omit_aspect_ratio.
-        omit_ar = bool(getattr(spec, "omit_aspect_ratio", False)) or (
-            "image-to-video" in ep and "first-last" not in ep
+        # FLUX 3 I2V + central omit list (aspect_omit.py)
+        from media_studio.aspect_omit import (
+            endpoint_omits_aspect_ratio,
+            is_aspect_omit_ui_sentinel,
+        )
+
+        omit_ar = (
+            bool(getattr(spec, "omit_aspect_ratio", False))
+            or endpoint_omits_aspect_ratio(ep)
+            or ("image-to-video" in ep and "first-last" not in ep)
         )
         if omit_ar:
             args.pop("aspect_ratio", None)
-        elif aspect and aspect not in (
-            "",
-            "—",
-            "none",
-            ASPECT_FOLLOWS_STILL.lower(),
-            "follows still",
-        ):
-            # Skip UI sentinels
+        elif aspect and not is_aspect_omit_ui_sentinel(aspect):
             al = aspect.strip().lower()
-            if al not in ("follows still", "auto (from start still)"):
+            if al not in ("", "—", "none"):
                 args["aspect_ratio"] = aspect
     elif is_grok_v:
         res = resolution or spec.default_resolution
@@ -1541,8 +1763,26 @@ def build_vision_arguments(
         if res:
             args["resolution"] = res
     elif "seedance" in ep:
-        if aspect and aspect not in ("", "auto", "—"):
+        from media_studio.aspect_omit import is_aspect_omit_ui_sentinel
+
+        # R2V accepts aspect including "auto"; I2V same enum family
+        if aspect and not is_aspect_omit_ui_sentinel(aspect):
             args["aspect_ratio"] = aspect
+        elif "reference-to-video" in ep:
+            args["aspect_ratio"] = "auto"
+        res = resolution or spec.default_resolution or "720p"
+        res_l = str(res).strip().lower()
+        if "reference-to-video" in ep and res_l in ("1080p", "4k", "2k"):
+            res = "720p"
+        if res and spec.resolution_choices:
+            picked = None
+            for a in spec.resolution_choices:
+                if str(a).lower() == str(res).lower():
+                    picked = str(a)
+                    break
+            args["resolution"] = picked or str(res)
+        else:
+            args["resolution"] = str(res)
     elif "kling-video" in ep:
         args.pop("resolution", None)
         if aspect and aspect not in ("", "auto", "—"):
@@ -1575,18 +1815,82 @@ def build_vision_arguments(
         ):
             args["end_image_url"] = last_frame_url
 
+    elif spec.mode == "reference_to_video":
+        # R2V: multi-ref / omni / single identity — freer framing (not start-frame lock)
+        imgs = [u for u in (ref_urls or []) if u]
+        if image_url and image_url not in imgs:
+            imgs = [image_url] + imgs
+        vids = [u for u in (ref_video_urls or []) if u]
+        auds = [u for u in (ref_audio_urls or []) if u]
+        if not imgs and not vids:
+            raise ValueError(
+                "R2V needs Character 1 / identity refs (or a motion clip)."
+            )
+        if getattr(spec, "omni_reference", False) or (
+            is_h3 and "reference-to-video" in ep
+        ):
+            cap_i = max(1, int(spec.max_refs or 9))
+            cap_v = max(0, int(getattr(spec, "max_ref_videos", 0) or 0)) or 3
+            cap_a = max(0, int(getattr(spec, "max_ref_audios", 0) or 0)) or 3
+            total_cap = int(getattr(spec, "max_total_refs", 0) or 0) or 12
+            imgs, vids, auds = imgs[:cap_i], vids[:cap_v], auds[:cap_a]
+            while len(imgs) + len(vids) + len(auds) > total_cap:
+                if auds:
+                    auds.pop()
+                elif imgs and len(imgs) > 1:
+                    imgs.pop()
+                elif vids:
+                    vids.pop()
+                else:
+                    break
+            if imgs:
+                args["reference_image_urls"] = imgs
+            if vids:
+                args["reference_video_urls"] = vids
+            if auds:
+                args["reference_audio_urls"] = auds
+        elif "image_urls" in (spec.image_field or "") or "seedance" in ep:
+            cap_i = max(1, int(spec.max_refs or 9))
+            args["image_urls"] = imgs[:cap_i]
+        elif "reference_image" in (spec.image_field or ""):
+            field = spec.image_field or "reference_image_urls"
+            args[field] = imgs[: max(1, int(spec.max_refs or 7))]
+        else:
+            # Single-image R2V (e.g. FLUX 3 identity) — first ref as image_url
+            field = (spec.image_field or "image_url").strip() or "image_url"
+            args[field] = imgs[0]
+        # Soft-inject citation if missing
+        if imgs and (getattr(spec, "omni_reference", False) or int(spec.max_refs or 0) > 1):
+            low = text.lower()
+            style = (spec.prompt_citation_style or "plain").lower()
+            if style == "angle" and "<image_0>" not in low and "<image0>" not in low:
+                tags = ", ".join(f"<IMAGE_{i}>" for i in range(min(len(imgs), 7)))
+                args["prompt"] = (
+                    text.rstrip(".")
+                    + f". Use {tags} as visual reference(s) for subject and style."
+                )
+            elif style == "plain" and "image 1" not in low:
+                args["prompt"] = (
+                    text.rstrip(".")
+                    + ". Use Image 1 (and Image 2…) as character identity reference(s)."
+                )
+
     elif spec.mode == "bridge":
         if not first_frame_url or not last_frame_url:
             raise ValueError("Bridge needs both a start frame and an end frame.")
         args[spec.first_frame_field] = first_frame_url
         args[spec.last_frame_field] = last_frame_url
 
-    elif spec.mode == "extend":
+    elif spec.mode in ("extend", "video_to_video"):
         vid = (source_video_url or "").strip()
         if not vid and ref_video_urls:
             vid = str(ref_video_urls[0] or "").strip()
         if not vid:
-            raise ValueError("Extend needs a source video clip.")
+            raise ValueError(
+                "V2V needs a source video clip."
+                if spec.mode == "video_to_video"
+                else "Extend needs a source video clip."
+            )
         vfield = (getattr(spec, "video_field", None) or "video_url").strip() or "video_url"
         args[vfield] = vid
 
@@ -1594,7 +1898,7 @@ def build_vision_arguments(
         if getattr(spec, "omni_reference", False) or (
             is_h3 and "reference-to-video" in ep
         ):
-            # MiniMax H3 omni: reference_image_urls / _video_ / _audio_
+            # Legacy path if omni still tagged text_to_video
             imgs = [u for u in (ref_urls or []) if u]
             vids = [u for u in (ref_video_urls or []) if u]
             auds = [u for u in (ref_audio_urls or []) if u]
@@ -1614,7 +1918,6 @@ def build_vision_arguments(
             imgs = imgs[:cap_i]
             vids = vids[:cap_v]
             auds = auds[:cap_a]
-            # Trim to combined cap (prefer keeping videos + images, drop audio last)
             while len(imgs) + len(vids) + len(auds) > total_cap:
                 if auds:
                     auds.pop()
@@ -1675,4 +1978,21 @@ def build_vision_arguments(
     for k in list(args.keys()):
         if args[k] is None or args[k] == "":
             args.pop(k, None)
+
+    # Single durable aspect policy (omit list + send enums) — last word before return
+    from media_studio.aspect_omit import apply_aspect_policy
+
+    req = aspect_ratio
+    if req is None and "aspect_ratio" in args:
+        req = args.get("aspect_ratio")
+    args = apply_aspect_policy(
+        args,
+        endpoint=spec.endpoint,
+        mode=getattr(spec, "mode", None),
+        requested=req,
+    )
+    # Seedance R2V: strict allowlist (no negative_prompt), duration str, res 480p/720p
+    from media_studio.aspect_omit import sanitize_seedance_r2v_arguments
+
+    args = sanitize_seedance_r2v_arguments(args, endpoint=spec.endpoint)
     return args

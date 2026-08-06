@@ -200,6 +200,10 @@ class StudioVideoView:
         update_best_for_line(
             self.model_best_for, self.model_dd.value, dropdown=self.model_dd
         )
+        from media_studio.flet_dialogs import make_seedance_likeness_banner
+
+        # Persistent hint when Seedance R2V is selected (not a blocking modal)
+        self.seedance_likeness_banner = make_seedance_likeness_banner()
         opts = control_options(self.model_dd.value)
         # Optional last frame for I2V (MiniMax H3 first→last)
         self.end_path: str | None = None
@@ -287,13 +291,22 @@ class StudioVideoView:
             visible=False,
         )
         self.btn_add_identity = ft.OutlinedButton(
-            content="Add character reference",
+            content="Add another character",
             icon=ft.Icons.PERSON_ADD_ALT_1,
-            on_click=self._add_identity_ref_upload,
+            on_click=self._add_identity_char_slot,
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
             height=34,
             visible=False,
-            tooltip="Add another identity still (multi-ref models only)",
+            tooltip="Adds another Character library dropdown (not a folder picker)",
+        )
+        self._extra_char_pickers: list[Any] = []
+        self.extra_char_host = ft.Column(spacing=6, tight=True, visible=False)
+        self.citation_map_label = ft.Text(
+            "",
+            size=FONT_SM,
+            color=ACCENT_BRIGHT,
+            max_lines=4,
+            visible=False,
         )
         self.btn_use_char_as_start = ft.TextButton(
             content="Use as start frame",
@@ -316,6 +329,13 @@ class StudioVideoView:
             size=11,
             color=TEXT_MUTED,
             max_lines=2,
+        )
+        # R2V: full Character · Scene · Prop pack (library dropdowns + citation map)
+        from media_studio.flet_ref_pack import RefPackPanel
+
+        self.ref_pack = RefPackPanel(
+            page,
+            on_change=self._on_video_ref_pack_change,
         )
         self.i2v_role_dd = styled_dropdown(
             label_text="Still role (legacy)",
@@ -435,6 +455,26 @@ class StudioVideoView:
             height=32,
             visible=False,
         )
+        self._i2v_identity_col = ft.Column(
+            [
+                label("Character / identity ref", muted=True),
+                self.identity_hint,
+                self.char_picker.root,
+                self.extra_char_host,
+                self.identity_count_label,
+                self.citation_map_label,
+                self.identity_list,
+                ft.Row(
+                    [self.btn_add_identity, self.btn_use_char_as_start],
+                    spacing=4,
+                    wrap=True,
+                ),
+                self.i2v_role_dd,
+                self.i2v_role_hint,
+            ],
+            spacing=4,
+            tight=True,
+        )
         self._ref_col = ft.Column(
             [
                 label("Start / source frame", muted=True),
@@ -446,18 +486,8 @@ class StudioVideoView:
                     wrap=True,
                 ),
                 ft.Divider(height=1, color=BORDER),
-                label("Character / identity ref", muted=True),
-                self.identity_hint,
-                self.char_picker.root,
-                self.identity_count_label,
-                self.identity_list,
-                ft.Row(
-                    [self.btn_add_identity, self.btn_use_char_as_start],
-                    spacing=4,
-                    wrap=True,
-                ),
-                self.i2v_role_dd,
-                self.i2v_role_hint,
+                self._i2v_identity_col,
+                self.ref_pack.root,
             ],
             spacing=4,
             tight=True,
@@ -561,7 +591,8 @@ class StudioVideoView:
         except Exception:
             pass
 
-        # Native stereo note for H3
+        # Native stereo note for H3 + Seedance R2V face-filter banner
+        spec = None
         try:
             spec = resolve_video_model(_dd_value(self.model_dd))
             self.native_stereo_note.visible = bool(
@@ -569,6 +600,19 @@ class StudioVideoView:
             )
         except Exception:
             self.native_stereo_note.visible = False
+        try:
+            from media_studio.flet_dialogs import set_seedance_likeness_banner_visible
+
+            set_seedance_likeness_banner_visible(
+                self.seedance_likeness_banner,
+                endpoint=getattr(spec, "endpoint", None) if spec else None,
+                model_choice=_dd_value(self.model_dd),
+            )
+        except Exception:
+            try:
+                self.seedance_likeness_banner.visible = False
+            except Exception:
+                pass
 
         # Prompt labels
         try:
@@ -623,6 +667,20 @@ class StudioVideoView:
             update_best_for_line(self.model_best_for, model, dropdown=self.model_dd)
         except Exception:
             pass
+        try:
+            from media_studio.flet_dialogs import set_seedance_likeness_banner_visible
+
+            vspec = resolve_video_model(model)
+            set_seedance_likeness_banner_visible(
+                self.seedance_likeness_banner,
+                endpoint=getattr(vspec, "endpoint", None) if vspec else None,
+                model_choice=model,
+            )
+        except Exception:
+            try:
+                self.seedance_likeness_banner.visible = False
+            except Exception:
+                pass
         opts = control_options(model)
         # Duration (required for T2V / I2V cost + API)
         dur_choices = list(opts.get("duration_choices") or ["5"])
@@ -739,6 +797,7 @@ class StudioVideoView:
             self.btn_reset_scenario,
             ft.Row([self.model_dd], spacing=0),
             self.model_best_for,
+            self.seedance_likeness_banner,
             ft.Row(
                 [self.dur_dd, self.res_dd, self.aspect_dd, self.start_time],
                 spacing=8,
@@ -1268,12 +1327,22 @@ class StudioVideoView:
                 start = max(0.0, float(self.start_time.value or 0))
             except (TypeError, ValueError):
                 start = 0.0
-        # Omit aspect when control is disabled / Follows still (FLUX 3 I2V)
+        # Omit aspect when control is disabled / Follows still|refs (omit list)
         ar = _dd_value(self.aspect_dd)
-        if getattr(self.aspect_dd, "disabled", False) or (
-            ar and str(ar).strip().lower() in ("follows still", "—", "none")
-        ):
-            ar = None
+        try:
+            from media_studio.aspect_omit import is_aspect_omit_ui_sentinel
+
+            if getattr(self.aspect_dd, "disabled", False) or is_aspect_omit_ui_sentinel(
+                ar
+            ):
+                ar = None
+        except Exception:
+            if getattr(self.aspect_dd, "disabled", False) or (
+                ar
+                and str(ar).strip().lower()
+                in ("follows still", "follows refs / adaptive", "—", "none")
+            ):
+                ar = None
         extra: dict[str, Any] = {}
         has_start = bool(
             self.state.video_ref_path and Path(str(self.state.video_ref_path)).is_file()
@@ -1320,7 +1389,7 @@ class StudioVideoView:
         return i2v_max_identity_refs(self._current_i2v_spec())
 
     def _sync_i2v_role_ui(self) -> None:
-        """Refresh Start vs Character slots + multi-ref Add for I2V/R2V."""
+        """Refresh Start vs Character slots; R2V uses full RefPackPanel."""
         from media_studio.flux3_draft import (
             i2v_supports_multi_identity,
             is_flux3_i2v_model_choice,
@@ -1328,26 +1397,62 @@ class StudioVideoView:
         from media_studio.studio_modality import normalize_video_modality
 
         modality = normalize_video_modality(getattr(self, "_modality", "i2v"))
+        is_r2v = modality == "r2v"
         show_id = modality in ("i2v", "r2v")
         flux3 = self._flux3_i2v_active()
         cap = self._identity_cap() if show_id else 1
         multi = show_id and i2v_supports_multi_identity(self._current_i2v_spec())
         n = len(self._identity_refs)
 
+        # R2V → Character/Scene/Prop pack; I2V → simpler character identity slots
         try:
-            self.char_picker.root.visible = show_id
-            if show_id:
+            self.ref_pack.root.visible = is_r2v
+            self._i2v_identity_col.visible = show_id and not is_r2v
+            if is_r2v:
+                self.ref_pack.set_context(
+                    model_choice=_dd_value(self.model_dd),
+                    mode="r2v",
+                )
+                # Keep _identity_refs in sync for generate
+                self._on_video_ref_pack_change()
+                n = len(self._identity_refs)
+            elif show_id:
+                self.char_picker.root.visible = True
                 self.char_picker.refresh()
+            else:
+                self.char_picker.root.visible = False
         except Exception:
             pass
 
+        if is_r2v:
+            self.start_frame_hint.value = (
+                "Optional composition opening — separate from Character / Scene / Prop."
+            )
+            self.btn_clear_start.visible = bool(
+                self.state.video_ref_path
+                and Path(str(self.state.video_ref_path)).is_file()
+            )
+            has_start = bool(
+                self.state.video_ref_path
+                and Path(str(self.state.video_ref_path)).is_file()
+            )
+            self._i2v_image_role = (
+                "start_frame" if has_start else "identity_ref"
+            )
+            return
+
+        self.start_frame_hint.value = (
+            "Composition opening frame — layout lock when set"
+        )
         self.identity_hint.visible = show_id
         self.identity_count_label.visible = show_id
-        self.identity_list.visible = show_id and n > 0
+        self.identity_list.visible = False  # paths shown via citation map
         self.btn_use_char_as_start.visible = show_id and n > 0
         self.btn_clear_start.visible = bool(
             self.state.video_ref_path and Path(str(self.state.video_ref_path)).is_file()
         )
+        self.extra_char_host.visible = show_id and bool(self._extra_char_pickers)
+        self.citation_map_label.visible = show_id and n > 0
 
         if flux3:
             self.identity_hint.value = (
@@ -1361,20 +1466,32 @@ class StudioVideoView:
             self.identity_count_label.value = f"{min(n, 1)} / 1 ref" if show_id else ""
         elif show_id:
             self.identity_hint.value = (
-                "Likeness only — freer framing (not a locked opening frame). "
-                + ("Multi-ref: add more characters below." if multi else "Single identity ref.")
+                "Character library dropdowns (not folders). "
+                + ("Add another character up to model max." if multi else "Single identity ref.")
             )
-            self.btn_add_identity.visible = multi and n < cap
+            n_slots = 1 + len(self._extra_char_pickers)
+            self.btn_add_identity.visible = multi and n_slots < cap
             self.btn_add_identity.tooltip = (
-                f"Add another identity still (max {cap})"
+                f"Add Character library dropdown (max {cap})"
                 if multi
                 else "This model allows one identity ref"
             )
             self.identity_count_label.value = f"{n} / {cap} refs"
+            # Live Image 1 / Image 2 map
+            from media_studio.flet_ref_pack import citation_style_for_model
+
+            style = citation_style_for_model(
+                _dd_value(self.model_dd), mode=modality
+            )
+            bits = []
+            for i, path in enumerate(self._identity_refs, start=1):
+                bits.append(f"{style.tag(i)} = {Path(path).name} (character)")
+            self.citation_map_label.value = " · ".join(bits) if bits else ""
         else:
             self.identity_hint.value = ""
             self.btn_add_identity.visible = False
             self.identity_count_label.value = ""
+            self.citation_map_label.value = ""
 
         self._rebuild_identity_list_ui()
         # Derive role from slots
@@ -1388,6 +1505,30 @@ class StudioVideoView:
         model = _dd_value(self.model_dd) or ""
         if is_flux3_i2v_model_choice(model) and modality == "i2v" and not multi:
             # Best For already notes single identity
+            pass
+
+    def _on_video_ref_pack_change(self) -> None:
+        """R2V pack → identity_refs list (Character first, then Scene, Prop)."""
+        try:
+            items = self.ref_pack.ordered_items()
+            paths = [it.path for it in items if it.path and Path(it.path).is_file()]
+        except Exception:
+            paths = []
+        self._identity_refs = list(paths)
+        self._identity_from_char = {
+            it.path
+            for it in (self.ref_pack.ordered_items() if hasattr(self, "ref_pack") else [])
+            if getattr(it, "role", None) == "character" and it.path
+        }
+        try:
+            has_start = bool(
+                self.state.video_ref_path
+                and Path(str(self.state.video_ref_path)).is_file()
+            )
+            self._i2v_image_role = (
+                "start_frame" if has_start else "identity_ref"
+            )
+        except Exception:
             pass
 
     def _rebuild_identity_list_ui(self) -> None:
@@ -1465,19 +1606,51 @@ class StudioVideoView:
             else "identity_ref"
         )
 
-    async def _add_identity_ref_upload(self, e: ft.ControlEvent | None = None) -> None:
-        try:
-            files = await pick_image(self.page, dialog_title="Character identity still")
-        except Exception as exc:
-            self.status_text.value = f"Picker error: {exc}"
+    async def _add_identity_char_slot(self, e: ft.ControlEvent | None = None) -> None:
+        """Add another Character **library** dropdown — never OS folder."""
+        from media_studio.flet_character_picker import CharacterPicker
+
+        cap = self._identity_cap()
+        n = 1 + len(self._extra_char_pickers)
+        if n >= cap:
+            self.status_text.value = f"Max {cap} character ref(s) for this model."
             self.page.update()
             return
-        if not files or not files[0].path:
-            return
-        self._add_identity_path(files[0].path, from_character=False)
+        idx = len(self._extra_char_pickers)
+
+        def _on_sel(path: str, choice: Any, *, i: int = idx) -> None:
+            label = getattr(choice, "label", None) or Path(path).name
+            self._add_identity_path(path, from_character=True)
+            self._sync_i2v_role_ui()
+            self.status_text.value = f"Character {i + 2}: {label}"
+            try:
+                self.page.update()
+            except Exception:
+                pass
+
+        def _on_clr(*, i: int = idx) -> None:
+            pass
+
+        picker = CharacterPicker(
+            self.page,
+            on_select=_on_sel,
+            on_clear=_on_clr,
+            label_text=f"Character {idx + 2}",
+        )
+        self._extra_char_pickers.append(picker)
+        self.extra_char_host.controls.append(picker.root)
+        self.extra_char_host.visible = True
+        try:
+            picker.refresh()
+        except Exception:
+            pass
         self._sync_i2v_role_ui()
-        self.status_text.value = f"Identity ref: {Path(files[0].path).name}"
+        self.status_text.value = f"Character {idx + 2} slot — pick from library."
         self.page.update()
+
+    async def _add_identity_ref_upload(self, e: ft.ControlEvent | None = None) -> None:
+        # Legacy name — redirect to library slot
+        await self._add_identity_char_slot(e)
 
     async def _use_identity_as_start(self, e: ft.ControlEvent | None = None) -> None:
         """Explicit: copy first character still into Start / source frame."""
@@ -1618,6 +1791,20 @@ class StudioVideoView:
                 )
             except Exception:
                 pass
+            try:
+                from media_studio.flet_dialogs import set_seedance_likeness_banner_visible
+
+                vspec = resolve_video_model(model)
+                set_seedance_likeness_banner_visible(
+                    self.seedance_likeness_banner,
+                    endpoint=getattr(vspec, "endpoint", None) if vspec else None,
+                    model_choice=model,
+                )
+            except Exception:
+                try:
+                    self.seedance_likeness_banner.visible = False
+                except Exception:
+                    pass
             opts = control_options(model)
             self.dur_dd.options = [
                 ft.DropdownOption(key=x, text=x) for x in (opts.get("duration_choices") or ["5"])
@@ -1637,7 +1824,12 @@ class StudioVideoView:
             try:
                 self.aspect_dd.disabled = not bool(opts.get("aspect_enabled", True))
                 if opts.get("aspect_follows_still"):
-                    self.aspect_dd.label = "Aspect (follows still)"
+                    lab = (
+                        opts.get("aspect_omit_label")
+                        or opts.get("aspect_value")
+                        or "Follows still"
+                    )
+                    self.aspect_dd.label = f"Aspect ({lab})"
                 else:
                     self.aspect_dd.label = "Aspect ratio"
             except Exception:
@@ -1745,6 +1937,11 @@ class StudioVideoView:
                 and self.draft_first.visible
                 and self.draft_first.value
             )
+            if modality == "r2v":
+                try:
+                    self._on_video_ref_pack_change()
+                except Exception:
+                    pass
             has_id = bool(self._identity_refs)
             role = (
                 "start_frame"
@@ -1760,6 +1957,17 @@ class StudioVideoView:
                 "draft_first": draft_on,
                 "identity_ref_count": len(self._identity_refs),
             }
+            if modality == "r2v":
+                try:
+                    snap["guidance"] = (
+                        "R2V reference pack. "
+                        + (self.ref_pack.enhance_guidance() or "")
+                        + " Start frame is optional composition lock; "
+                        "Character/Scene/Prop are identity refs."
+                    )
+                    snap["citation_map"] = self.ref_pack.mapping_text()
+                except Exception:
+                    pass
             # FLUX 3 Video — full crash course injected in enhance_prompt; set flags here
             try:
                 from media_studio.flux3_draft import (
@@ -2243,20 +2451,38 @@ class StudioVideoView:
                     vid = self.state.video_source_path
                 elif modality == "r2v" and has_clip:
                     vid = self.state.video_source_path
-                # Multi-ref prompt naming for enhance-style models
+                # Multi-ref prompt naming — use live citation map when available
                 gen_prompt = prompt
-                if extras and "ref 1" not in prompt.lower() and "image 1" not in prompt.lower():
-                    n_all = 1 + len(extras)
-                    if n_all > 1 and (
-                        "seedance" in (model or "").lower()
-                        or "reference" in (model or "").lower()
-                        or "grok" in (model or "").lower()
-                    ):
-                        tags = ", ".join(f"character from ref {i}" for i in range(1, n_all + 1))
-                        gen_prompt = (
-                            gen_prompt.rstrip(".")
-                            + f". Use {tags} for identity/likeness as ordered stills."
-                        )
+                map_txt = ""
+                try:
+                    if modality == "r2v" and getattr(self, "ref_pack", None):
+                        map_txt = self.ref_pack.mapping_text()
+                except Exception:
+                    map_txt = ""
+                if (
+                    (extras or (modality == "r2v" and id_refs))
+                    and "image 1" not in prompt.lower()
+                    and "ref 1" not in prompt.lower()
+                    and "<image" not in prompt.lower()
+                ):
+                    if map_txt and "No refs" not in map_txt:
+                        gen_prompt = gen_prompt.rstrip(".") + f". Refs: {map_txt}."
+                    elif extras:
+                        n_all = 1 + len(extras)
+                        if n_all > 1 and (
+                            "seedance" in (model or "").lower()
+                            or "reference" in (model or "").lower()
+                            or "grok" in (model or "").lower()
+                            or "h3" in (model or "").lower()
+                            or "omni" in (model or "").lower()
+                        ):
+                            tags = ", ".join(
+                                f"Image {i}" for i in range(1, n_all + 1)
+                            )
+                            gen_prompt = (
+                                gen_prompt.rstrip(".")
+                                + f". Use {tags} as ordered identity/scene/prop refs."
+                            )
                 result = await to_thread_with_job(
                     self.state,
                     generate,
@@ -2324,19 +2550,35 @@ class StudioVideoView:
                 except Exception:
                     pass
             else:
-                from media_studio.errors import friendly_error
-
-                err = friendly_error(
-                    result.status or "Video generate failed.", context="Generate"
+                from media_studio.errors import (
+                    detect_content_policy_violation,
+                    friendly_error,
                 )
-                self.job_progress.finish_error(err, self.page)
+
+                raw_err = result.status or "Video generate failed."
+                policy = detect_content_policy_violation(raw_err, context="Generate")
+                err = (
+                    policy.short_reason
+                    if policy is not None
+                    else friendly_error(raw_err, context="Generate")
+                )
+                # Pass raw to progress so policy/credits detectors see provider tokens
+                self.job_progress.finish_error(raw_err, self.page)
                 self.job_log.finish_error(err, self.page)
                 self.status_text.value = err
         except Exception as exc:
-            from media_studio.errors import friendly_error
+            from media_studio.errors import (
+                detect_content_policy_violation,
+                friendly_error,
+            )
 
-            err = friendly_error(exc, context="Generate")
-            self.job_progress.finish_error(err, self.page)
+            policy = detect_content_policy_violation(exc, context="Generate")
+            err = (
+                policy.short_reason
+                if policy is not None
+                else friendly_error(exc, context="Generate")
+            )
+            self.job_progress.finish_error(str(exc), self.page)
             self.job_log.finish_error(err, self.page)
             self.status_text.value = err
             traceback.print_exc()

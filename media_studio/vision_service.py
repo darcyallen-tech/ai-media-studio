@@ -137,22 +137,34 @@ def run_vision(
                 )
             progress(f"Uploading source clip: {vp.name}")
             source_video_url = upload_file(vp, on_progress=progress)
-        elif mode == "image_to_image":
+        elif mode in ("image_to_image", "reference_to_image"):
+            # I2I: primary source plate. R2I: first character/ref still is primary.
             ip = Path(image_path) if image_path else None
+            if (not ip or not ip.is_file()) and mode == "reference_to_image" and ref_paths:
+                for cand in ref_paths:
+                    p = Path(cand) if cand else None
+                    if p and p.is_file():
+                        ip = p
+                        break
             if not ip or not ip.is_file():
                 return VisionResult(
                     ok=False,
                     model_key=spec.key,
                     endpoint=spec.endpoint,
-                    status="Image→Image needs a source still.",
+                    status=(
+                        "R2I needs Character 1 or a reference still."
+                        if mode == "reference_to_image"
+                        else "Image→Image needs a source still."
+                    ),
                     cost_label=format_vision_cost(
                         spec, aspect_ratio=aspect_ratio, resolution=resolution
                     ),
                 )
             source_still_path = ip
-            progress(f"Uploading source still: {ip.name}")
+            progress(
+                f"Uploading {'primary ref' if mode == 'reference_to_image' else 'source still'}: {ip.name}"
+            )
             image_url = upload_file(ip, on_progress=progress)
-            # Multi-ref extras — cap from fal.models (edit_model_key), not dual table
             from media_studio.fal.models import max_extra_ref_images_for_choice
             from media_studio.vision_registry import I2I_MAX_EXTRA_REFS
 
@@ -163,7 +175,7 @@ def run_vision(
                 I2I_MAX_EXTRA_REFS,
                 max(0, int(max_extra_ref_images_for_choice(edit_key))),
             )
-            for rp in (ref_paths or [])[:extra_cap]:
+            for rp in (ref_paths or [])[: max(extra_cap + 1, 8)]:
                 try:
                     p = Path(rp)
                     if not p.is_file():
@@ -176,6 +188,18 @@ def run_vision(
                     progress(f"Skip ref {rp}: {exc}")
                 if len(ref_urls) >= extra_cap:
                     break
+        elif mode == "video_to_video":
+            vp = Path(source_video_path) if source_video_path else None
+            if not vp or not vp.is_file():
+                return VisionResult(
+                    ok=False,
+                    model_key=spec.key,
+                    endpoint=spec.endpoint,
+                    status="V2V needs a source video clip.",
+                    cost_label=format_vision_cost(spec, duration_token=duration),
+                )
+            progress(f"Uploading source clip: {vp.name}")
+            source_video_url = upload_file(vp, on_progress=progress)
         elif mode == "image_to_video":
             ip = Path(image_path) if image_path else None
             if not ip or not ip.is_file():
@@ -192,7 +216,12 @@ def run_vision(
             if last_frame_path and Path(last_frame_path).is_file():
                 progress(f"Uploading end frame: {Path(last_frame_path).name}")
                 last_url = upload_file(Path(last_frame_path), on_progress=progress)
-
+        elif mode == "reference_to_video":
+            # Character / multi-ref first — optional start frame as primary image_url
+            if image_path and Path(image_path).is_file():
+                progress(f"Uploading optional start/identity: {Path(image_path).name}")
+                image_url = upload_file(Path(image_path), on_progress=progress)
+            # refs uploaded below
         elif mode == "bridge":
             fp = Path(first_frame_path) if first_frame_path else None
             lp = Path(last_frame_path) if last_frame_path else None
@@ -209,20 +238,32 @@ def run_vision(
             progress(f"Uploading end frame: {lp.name}")
             last_url = upload_file(lp, on_progress=progress)
 
-        # Reference pack for reference-to-video / omni / video context
-        if mode not in ("image_to_image", "text_to_image") or is_omni:
-            # Still refs (omni + Veo reference pack + subject library)
-            if mode != "image_to_image":
+        # Reference pack for R2V / omni / video context
+        if mode not in (
+            "image_to_image",
+            "reference_to_image",
+            "text_to_image",
+        ) or is_omni or mode == "reference_to_video":
+            if mode not in ("image_to_image", "reference_to_image") or mode == "reference_to_video":
                 cap_img = max(1, int(spec.max_refs or 8)) if (
-                    is_omni or int(spec.max_refs or 0) > 0
+                    is_omni
+                    or mode == "reference_to_video"
+                    or int(spec.max_refs or 0) > 0
                 ) else 8
                 for rp in ref_paths or []:
                     try:
                         p = Path(rp)
                         if not p.is_file():
                             continue
+                        # Avoid double-upload of primary already in image_url
+                        if image_url and source_still_path and str(p.resolve()) == str(
+                            source_still_path.resolve()
+                        ):
+                            continue
                         progress(f"Uploading ref still: {p.name}")
-                        ref_urls.append(upload_file(p, on_progress=progress))
+                        u = upload_file(p, on_progress=progress)
+                        if u not in ref_urls:
+                            ref_urls.append(u)
                     except Exception as exc:
                         progress(f"Skip ref still {rp}: {exc}")
                     if len(ref_urls) >= cap_img:
@@ -266,7 +307,7 @@ def run_vision(
         )
 
     try:
-        if mode == "image_to_image":
+        if mode in ("image_to_image", "reference_to_image"):
             from media_studio.fal.models import (
                 build_edit_arguments,
                 resolve_image_edit_model,
@@ -360,12 +401,19 @@ def run_vision(
 
                 endpoint_for_run = str(spec.draft_endpoint)
                 arguments = strip_resolution_for_draft(arguments)
-                arguments = strip_omitted_aspect(
-                    arguments, endpoint=endpoint_for_run
+                from media_studio.aspect_omit import apply_aspect_policy
+
+                arguments = apply_aspect_policy(
+                    arguments,
+                    endpoint=endpoint_for_run,
+                    mode=mode,
+                    requested=aspect_ratio,
                 )
-                # Also strip if full endpoint omits (spec-level) even if draft URL differs
-                arguments = strip_omitted_aspect(
-                    arguments, endpoint=getattr(spec, "endpoint", None)
+                arguments = apply_aspect_policy(
+                    arguments,
+                    endpoint=getattr(spec, "endpoint", None),
+                    mode=mode,
+                    requested=aspect_ratio,
                 )
                 dur_s = duration_seconds(duration or spec.default_duration)
                 draft_est = estimate_draft_cost_usd(spec, duration_s=dur_s)
@@ -376,12 +424,15 @@ def run_vision(
             elif draft:
                 progress("Draft not available for this model — full quality.")
             else:
-                # Full quality: still hard-omit aspect for FLUX 3 I2V
+                # Full quality: unified aspect policy (last-mile defense)
                 try:
-                    from media_studio.flux3_draft import strip_omitted_aspect
+                    from media_studio.aspect_omit import apply_aspect_policy
 
-                    arguments = strip_omitted_aspect(
-                        arguments, endpoint=endpoint_for_run
+                    arguments = apply_aspect_policy(
+                        arguments,
+                        endpoint=endpoint_for_run,
+                        mode=mode,
+                        requested=aspect_ratio,
                     )
                 except Exception:
                     pass
@@ -405,6 +456,47 @@ def run_vision(
             if isinstance(img, str) and img.strip():
                 return [img.strip()]
         return []
+
+    # Last-mile aspect policy for every video (and non-I2I still) submit
+    if mode not in ("image_to_image", "reference_to_image", "text_to_image"):
+        try:
+            from media_studio.aspect_omit import (
+                append_aspect_debug_log,
+                apply_aspect_policy,
+                aspect_debug_line,
+                endpoint_omits_aspect_ratio,
+                strip_all_aspect_keys,
+            )
+
+            arguments = apply_aspect_policy(
+                arguments,
+                endpoint=endpoint_for_run,
+                mode=mode,
+                requested=aspect_ratio,
+            )
+            omit_here = endpoint_omits_aspect_ratio(
+                endpoint_for_run
+            ) or endpoint_omits_aspect_ratio(getattr(spec, "endpoint", None))
+            if omit_here:
+                arguments = strip_all_aspect_keys(arguments)
+            line = aspect_debug_line(
+                endpoint=endpoint_for_run,
+                arguments=arguments,
+                mode=mode,
+                omit=omit_here,
+                source="vision_service",
+            )
+            append_aspect_debug_log(line, output_dir=output_dir)
+            progress(line)
+        except Exception as exc:
+            err_line = f"ASPECT_DEBUG source=vision_service ERROR {exc!r}"
+            try:
+                from media_studio.aspect_omit import append_aspect_debug_log
+
+                append_aspect_debug_log(err_line, output_dir=output_dir)
+            except Exception:
+                pass
+            progress(err_line)
 
     # --- Run fal: T2I may sequential-batch when API is one-at-a-time ---
     progress("Running Creative Vision on fal…")

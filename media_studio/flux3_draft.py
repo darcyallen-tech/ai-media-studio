@@ -364,38 +364,24 @@ def format_draft_vs_full_cost(
     return "Est. cost: —"
 
 
-def endpoint_omits_aspect_ratio(endpoint: str | None) -> bool:
-    """
-    True when the fal endpoint rejects aspect_ratio entirely
-    (not even ``auto``). FLUX 3 pure I2V + its /draft twin.
-    """
-    ep = (endpoint or "").strip().lower()
-    if not ep:
-        return False
-    # Pure I2V (full or draft) — not first-last / extend / T2V / keyframes
-    if "blackforestlabs/flux-3/image-to-video" in ep and "first-last" not in ep:
-        return True
-    return False
+# Re-export from the single policy module (never maintain a twin list here).
+from media_studio.aspect_omit import (  # noqa: E402
+    apply_aspect_policy,
+    endpoint_omits_aspect_ratio,
+    strip_omitted_aspect,
+)
 
 
 def strip_resolution_for_draft(arguments: dict[str, Any]) -> dict[str, Any]:
-    """Draft OpenAPI has no resolution field; also drop rejected aspect_ratio."""
+    """
+    Draft OpenAPI has no resolution field.
+
+    Aspect is applied via apply_aspect_policy by callers with the draft endpoint;
+    for omit endpoints (FLUX 3 I2V draft) aspect is dropped. We do **not**
+    unconditionally pop aspect for all drafts (T2V/first-last may need it).
+    """
     out = dict(arguments)
     out.pop("resolution", None)
-    # Defense-in-depth: draft I2V must never post aspect_ratio
-    out.pop("aspect_ratio", None)
-    return out
-
-
-def strip_omitted_aspect(
-    arguments: dict[str, Any],
-    *,
-    endpoint: str | None = None,
-) -> dict[str, Any]:
-    """Remove aspect_ratio when the target endpoint rejects it."""
-    out = dict(arguments or {})
-    if endpoint_omits_aspect_ratio(endpoint):
-        out.pop("aspect_ratio", None)
     return out
 
 

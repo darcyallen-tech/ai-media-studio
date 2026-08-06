@@ -1708,27 +1708,26 @@ def build_flux3_director_arguments(
         }
 
     has_start = bool(start)
-    # FLUX 3 pure I2V never accepts aspect_ratio (even auto)
-    ep_check = (endpoint or "").lower()
-    flux3_i2v_no_ar = (
-        "blackforestlabs/flux-3/image-to-video" in ep_check
-        and "first-last" not in ep_check
+    ar, ar_note = resolve_director_aspect_for_api(
+        spec, aspect_ratio, has_start_image=has_start
     )
-    if flux3_i2v_no_ar or not getattr(spec, "aspect_param", None):
-        args.pop("aspect_ratio", None)
-        if flux3_i2v_no_ar:
-            args["_aspect_note"] = (
-                "aspect_ratio omitted — FLUX 3 I2V follows the still "
-                "(do not send aspect_ratio, not even auto)."
-            )
-    else:
-        ar, ar_note = resolve_director_aspect_for_api(
-            spec, aspect_ratio, has_start_image=has_start
-        )
-        if ar and (spec.aspect_param or "aspect_ratio"):
-            args[spec.aspect_param or "aspect_ratio"] = ar
-        if ar_note:
-            args["_aspect_note"] = ar_note
+    if ar and getattr(spec, "aspect_param", None):
+        args[spec.aspect_param or "aspect_ratio"] = ar
+    if ar_note:
+        args["_aspect_note"] = ar_note
+    # Unified endpoint policy (omit FLUX 3 pure I2V, etc.)
+    from media_studio.aspect_omit import apply_aspect_policy, aspect_omit_note
+
+    had = "aspect_ratio" in args
+    args = apply_aspect_policy(
+        args,
+        endpoint=endpoint,
+        mode="director",
+        requested=aspect_ratio,
+    )
+    if had and "aspect_ratio" not in args:
+        args["_aspect_note"] = aspect_omit_note(endpoint)
+    # Drop internal note keys from fal payload if any caller spreads args raw
     return endpoint, args
 
 
@@ -1805,6 +1804,11 @@ def build_grok_imagine_director_arguments(
         }
         if ar and (spec.aspect_param or "aspect_ratio"):
             args[spec.aspect_param or "aspect_ratio"] = ar
+        from media_studio.aspect_omit import apply_aspect_policy
+
+        args = apply_aspect_policy(
+            args, endpoint=endpoint, mode="director", requested=aspect_ratio
+        )
         return endpoint, args
 
     if len(urls) == 1:
@@ -1816,6 +1820,11 @@ def build_grok_imagine_director_arguments(
             "duration": total,
             "resolution": res if res in ("480p", "720p", "1080p") else "720p",
         }
+        from media_studio.aspect_omit import apply_aspect_policy
+
+        args = apply_aspect_policy(
+            args, endpoint=endpoint, mode="director", requested=aspect_ratio
+        )
         return endpoint, args
 
     # No refs — pure T2V
@@ -1830,6 +1839,11 @@ def build_grok_imagine_director_arguments(
     }
     if ar and (spec.aspect_param or "aspect_ratio"):
         args[spec.aspect_param or "aspect_ratio"] = ar
+    from media_studio.aspect_omit import apply_aspect_policy
+
+    args = apply_aspect_policy(
+        args, endpoint=endpoint, mode="director", requested=aspect_ratio
+    )
     return endpoint, args
 
 
@@ -1978,6 +1992,19 @@ def build_director_arguments(
         args["_aspect_note"] = ar_note
     if max_chars:
         args["_multi_prompt_max_chars"] = max_chars
+
+    # Kling multi-shot I2V: endpoint policy omits aspect on image-to-video paths
+    from media_studio.aspect_omit import apply_aspect_policy, aspect_omit_note
+
+    had = "aspect_ratio" in args
+    args = apply_aspect_policy(
+        args,
+        endpoint=endpoint,
+        mode="director_multi_shot",
+        requested=aspect_ratio,
+    )
+    if had and "aspect_ratio" not in args:
+        args["_aspect_note"] = aspect_omit_note(endpoint)
 
     return endpoint, args
 

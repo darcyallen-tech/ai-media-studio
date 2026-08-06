@@ -58,7 +58,11 @@ def resolve_vision_studio_model(model_choice: str | None):
         for mode in (
             "text_to_video",
             "text_to_image",
+            "image_to_image",
+            "reference_to_image",
             "image_to_video",
+            "reference_to_video",
+            "video_to_video",
             "bridge",
             "extend",
         ):
@@ -108,6 +112,8 @@ def _control_options_vision(spec: Any) -> dict[str, Any]:
     if mode in (
         "text_to_video",
         "image_to_video",
+        "reference_to_video",
+        "video_to_video",
         "bridge",
         "extend",
     ):
@@ -117,13 +123,19 @@ def _control_options_vision(spec: Any) -> dict[str, Any]:
             if spec.default_duration in dur_choices
             else dur_choices[0]
         )
-        omit_ar = bool(getattr(spec, "omit_aspect_ratio", False))
-        if omit_ar:
-            from media_studio.vision_registry import ASPECT_FOLLOWS_STILL
+        from media_studio.aspect_omit import (
+            aspect_omit_ui_label,
+            endpoint_omits_aspect_ratio,
+        )
 
-            ar_choices = [ASPECT_FOLLOWS_STILL]
-            ar_value = ASPECT_FOLLOWS_STILL
-            show_ar = True  # show disabled "Follows still"
+        omit_ar = bool(getattr(spec, "omit_aspect_ratio", False)) or endpoint_omits_aspect_ratio(
+            getattr(spec, "endpoint", None)
+        )
+        if omit_ar:
+            label = aspect_omit_ui_label(getattr(spec, "endpoint", None))
+            ar_choices = [label]
+            ar_value = label
+            show_ar = True  # show disabled Follows still / Follows refs
             ar_enabled = False
         else:
             ar_choices = list(spec.aspect_choices or ()) or ["16:9"]
@@ -162,6 +174,7 @@ def _control_options_vision(spec: Any) -> dict[str, Any]:
             "aspect_visible": show_ar,
             "aspect_enabled": ar_enabled,
             "aspect_follows_still": omit_ar,
+            "aspect_omit_label": ar_value if omit_ar else "",
             "strength_visible": False,
             "strength_value": 0.6,
             "generate_audio_visible": bool(getattr(spec, "supports_audio", False)),
@@ -229,7 +242,11 @@ def control_options(model_choice: str | None) -> dict[str, Any]:
     if vspec is not None and getattr(vspec, "mode", "") in (
         "text_to_video",
         "text_to_image",
+        "image_to_image",
+        "reference_to_image",
         "image_to_video",
+        "reference_to_video",
+        "video_to_video",
         "bridge",
         "extend",
     ):
@@ -309,30 +326,28 @@ def control_options(model_choice: str | None) -> dict[str, Any]:
             if spec.default_duration in dur_choices
             else (dur_choices[0] if dur_choices else "5")
         )
-        # No aspect_ratio param (e.g. FLUX 3 I2V) → show disabled "Follows still"
-        show_ar = bool(spec.aspect_ratio_param)
+        # No aspect_ratio param or central omit list → disabled Follows still/refs
+        from media_studio.aspect_omit import (
+            aspect_omit_ui_label,
+            endpoint_omits_aspect_ratio,
+            spec_omits_aspect_ratio,
+        )
+
+        omit_ar = spec_omits_aspect_ratio(spec) or endpoint_omits_aspect_ratio(
+            getattr(spec, "endpoint", None)
+        )
+        show_ar = bool(spec.aspect_ratio_param) and not omit_ar
         ar_enabled = True
         aspect_follows_still = False
-        ep_low = (getattr(spec, "endpoint", None) or "").lower()
-        flux3_i2v = (
-            "blackforestlabs/flux-3/image-to-video" in ep_low
-            and "first-last" not in ep_low
-        )
-        if not show_ar and (
-            flux3_i2v or getattr(spec, "task", "") == "image_to_video"
+        aspect_omit_label = aspect_omit_ui_label(getattr(spec, "endpoint", None))
+        if omit_ar or (
+            not show_ar and getattr(spec, "task", "") == "image_to_video"
         ):
-            # Prefer explicit follows-still for I2V models that derive frame from still
-            if flux3_i2v or not show_ar:
-                from media_studio.vision_registry import ASPECT_FOLLOWS_STILL
-
-                show_ar = True
-                ar_enabled = False
-                aspect_follows_still = True
-                ar_choices = [ASPECT_FOLLOWS_STILL]
-                ar_value = ASPECT_FOLLOWS_STILL
-            else:
-                ar_choices = [NONE]
-                ar_value = NONE
+            show_ar = True
+            ar_enabled = False
+            aspect_follows_still = True
+            ar_choices = [aspect_omit_label]
+            ar_value = aspect_omit_label
         elif show_ar and spec.allowed_aspect_ratios:
             ar_choices = list(spec.allowed_aspect_ratios)
             ar_value = NONE
@@ -390,6 +405,7 @@ def control_options(model_choice: str | None) -> dict[str, Any]:
             "aspect_visible": show_ar,
             "aspect_enabled": ar_enabled if show_ar else False,
             "aspect_follows_still": aspect_follows_still,
+            "aspect_omit_label": aspect_omit_label if aspect_follows_still else "",
             "strength_visible": False,
             "strength_value": 0.8,
             "generate_audio_visible": show_gen_audio,

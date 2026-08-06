@@ -616,6 +616,41 @@ def open_settings_dialog(
     async def _on_close(_e: ft.ControlEvent) -> None:
         close_dialog(page, dialog)
 
+    async def _on_refresh_app(_e: ft.ControlEvent) -> None:
+        """Hard relaunch — load latest code without wiping keys/library."""
+        from media_studio.relaunch import try_relaunch
+
+        def _err(msg: str) -> None:
+            _set_error(msg)
+            try:
+                show_snack(page, msg)
+            except Exception:
+                pass
+            try:
+                page.update()
+            except Exception:
+                pass
+
+        def _status(msg: str) -> None:
+            try:
+                show_snack(page, msg)
+            except Exception:
+                pass
+            try:
+                save_note.value = msg
+                page.update()
+            except Exception:
+                pass
+
+        ok = try_relaunch(page=page, on_status=_status, on_error=_err, delay_s=1.0)
+        if not ok:
+            return
+        # Close settings so snack is visible briefly before exit
+        try:
+            close_dialog(page, dialog)
+        except Exception:
+            pass
+
     content = ft.Column(
         [
             ft.Text(
@@ -844,6 +879,21 @@ def open_settings_dialog(
                 icon=ft.Icons.REFRESH,
                 on_click=_refresh_spend,
                 style=ft.ButtonStyle(color=TEXT_MUTED),
+            ),
+            ft.Divider(height=1, color=BORDER),
+            # Dev / test QoL — hard relaunch after code pulls
+            ft.Text("App", size=FONT_SM, weight=ft.FontWeight.W_700, color=TEXT),
+            ft.Text(
+                "Relaunch to load latest code. Settings, keys, and library data stay on disk.",
+                size=FONT_SM,
+                color=TEXT_MUTED,
+            ),
+            ft.OutlinedButton(
+                content="Refresh app",
+                icon=ft.Icons.RESTART_ALT,
+                on_click=_on_refresh_app,
+                style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+                tooltip="Relaunch to load latest code",
             ),
             ft.Divider(height=1, color=BORDER),
             save_note,

@@ -26,6 +26,7 @@ from media_studio.config import ensure_output_dir  # noqa: E402
 from media_studio.flet_app import run  # noqa: E402
 from media_studio.secrets_store import apply_secrets_to_env  # noqa: E402
 from media_studio.single_instance import (  # noqa: E402
+    register_primary_lock,
     signal_primary_instance,
     try_acquire_primary,
 )
@@ -50,12 +51,17 @@ def main() -> None:
         sys.exit(0)
 
     # "primary" holds lock; "unlocked" = fail soft (run without guard)
+    register_primary_lock(lock)
     try:
         run()
     finally:
         if lock is not None:
             try:
                 lock.release()
+            except Exception:
+                pass
+            try:
+                register_primary_lock(None)
             except Exception:
                 pass
 

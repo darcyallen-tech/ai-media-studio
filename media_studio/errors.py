@@ -64,6 +64,139 @@ class CreditsErrorInfo:
     topup_button_label: str
 
 
+@dataclass(frozen=True)
+class ContentPolicyInfo:
+    """Structured content / partner-policy rejection for UI popup + status."""
+
+    kind: Literal["likeness", "other"]
+    short_reason: str  # plain "because" clause + status one-liner
+    full_error: str  # raw provider / app error for Copy
+    body: str  # full popup body including "Your generation was stopped because:"
+
+
+# Provider type strings and message phrases that indicate policy rejections
+_POLICY_TYPE_MARKERS = (
+    "content_policy_violation",
+    "partner_validation_failed",
+    "content_policy",
+    "content policy",
+    "policy_violation",
+    "safety_violation",
+    "moderation",
+    "sensitive content",
+    "nsfw",
+)
+
+_LIKENESS_MARKERS = (
+    "likeness",
+    "real people",
+    "real person",
+    "real-world person",
+    "private information",
+    "face filter",
+    "photoreal face",
+    "photorealistic face",
+    "looks like a real",
+    "resemblance to",
+    "celebrity",
+)
+
+_LIKENESS_REASON = (
+    "The reference images may look like real people. Seedance’s partner filter "
+    "often blocks photoreal faces (including AI-generated ones that look "
+    "photographic). Try stylized characters or a character-sheet layout."
+)
+
+
+def detect_content_policy_violation(
+    exc: BaseException | str,
+    *,
+    context: str = "",
+) -> ContentPolicyInfo | None:
+    """
+    If this looks like a fal/partner content or face-filter rejection, return
+    structured copy for the Generation stopped popup and status line.
+
+    Detects:
+    - type-like tokens: content_policy_violation, partner_validation_failed
+    - message phrases: likeness / real people / private information / sensitive content
+    """
+    raw = str(exc).strip() if not isinstance(exc, str) else exc.strip()
+    if not raw:
+        return None
+    low = raw.lower()
+    ctx = (context or "").lower()
+    combined = f"{ctx} {low}"
+
+    has_type = any(m in combined for m in _POLICY_TYPE_MARKERS)
+    has_likeness = any(m in combined for m in _LIKENESS_MARKERS)
+    # "blocked" alone is too broad; require policy context
+    has_blocked = "blocked" in combined and any(
+        w in combined
+        for w in ("content", "policy", "safety", "partner", "moderation", "prompt")
+    )
+
+    if not (has_type or has_likeness or has_blocked):
+        return None
+
+    if has_likeness or (
+        "partner_validation" in combined
+        and any(w in combined for w in ("face", "person", "people", "likeness", "photo"))
+    ):
+        reason = _LIKENESS_REASON
+        kind: Literal["likeness", "other"] = "likeness"
+    else:
+        # Shortened provider message (drop long JSON / stack noise)
+        reason = _shorten_policy_message(raw)
+        kind = "other"
+
+    body = f"Your generation was stopped because: {reason}"
+    return ContentPolicyInfo(
+        kind=kind,
+        short_reason=reason,
+        full_error=raw,
+        body=body,
+    )
+
+
+def _shorten_policy_message(raw: str) -> str:
+    """One short plain-language clause from a provider policy error."""
+    text = re.sub(r"\s+", " ", (raw or "").strip())
+    # Prefer nested "message": "..." if present
+    m = re.search(r'"message"\s*:\s*"([^"]{8,200})"', text, re.I)
+    if m:
+        text = m.group(1).strip()
+    # Drop common prefixes
+    for pref in (
+        "fal subscribe failed:",
+        "fal (",
+        "error:",
+        "exception:",
+        "generate:",
+    ):
+        if text.lower().startswith(pref):
+            text = text[len(pref) :].strip()
+    # First sentence-ish chunk
+    for sep in (". ", "; ", "\n"):
+        if sep in text:
+            head = text.split(sep, 1)[0].strip()
+            if len(head) >= 12:
+                text = head
+                break
+    text = _clip(text, 220)
+    if not text:
+        return (
+            "The provider blocked this request under its content policy. "
+            "Soften the prompt or change references, then retry."
+        )
+    # Ensure it reads as a reason clause
+    if text[0].islower():
+        text = text[0].upper() + text[1:]
+    if not text.endswith("."):
+        text = text + "."
+    return text
+
+
 def detect_credits_error(
     exc: BaseException | str,
     *,
@@ -307,6 +440,12 @@ def friendly_error(
             f"Top up: {credits.topup_url}"
         )
 
+    # Content policy / partner face filter — before generic "validation" branch
+    # (partner_validation_failed contains "validation" and would otherwise mis-map)
+    policy = detect_content_policy_violation(raw, context=context)
+    if policy is not None:
+        return f"{prefix}{policy.short_reason}"
+
     # API keys
     if "xai_api_key" in low or ("api key" in low and "xai" in low) or "xai api key is not set" in low:
         return (
@@ -360,8 +499,16 @@ def friendly_error(
 
     # Aspect ratio / dimension enum rejections
     if "aspect" in low or "aspect_ratio" in low:
-        # Keep any "Sent aspect_ratio=…" detail already attached by Director
-        if "sent aspect_ratio=" in low or "this endpoint accepts" in low:
+        # Keep raw fal body / director detail when already present
+        if (
+            "sent aspect_ratio=" in low
+            or "this endpoint accepts" in low
+            or "raw fal:" in low
+            or "raw:" in low
+            or "unexpected" in low
+            or "additional propert" in low
+            or "not permitted" in low
+        ):
             if prefix and not raw.startswith(prefix.rstrip(": ")):
                 return f"{prefix}{raw}"
             return raw or f"{prefix}Aspect ratio not accepted by this model."
@@ -371,11 +518,17 @@ def friendly_error(
                 "do not send aspect_ratio (not even auto). Hide Aspect / use "
                 "“Follows still”, then retry."
             )
+        if "seedance" in low:
+            # Prefer original message (may be wrong-field, not aspect enum)
+            return raw if raw else (
+                f"{prefix}Seedance R2V: check aspect_ratio (auto|ratios), "
+                "resolution (480p|720p), duration as string, no negative_prompt."
+            )
         return (
             f"{prefix}Aspect ratio not accepted by this model. "
-            "For Kling multi-shot or FLUX 3 I2V with a start still, aspect follows "
-            "the still (do not send aspect_ratio). For pure text multi-shot use "
-            "exactly 16:9, 9:16, or 1:1. Pick a listed ratio or Auto, then retry."
+            "For Kling I2V or FLUX 3 pure I2V, aspect follows the still "
+            "(do not send aspect_ratio). Seedance R2V uses auto or listed ratios. "
+            "For pure text multi-shot use exactly 16:9, 9:16, or 1:1. Retry."
         )
     if any(x in low for x in ("invalid resolution", "resolution", "unsupported size")) and (
         "422" in low or "enum" in low or "allowed" in low or "must be" in low
@@ -446,7 +599,7 @@ def friendly_error(
             f"{prefix}Upload to fal failed. Check internet/VPN, then retry with a smaller file."
         )
 
-    # Content policy / safety
+    # Content policy fallback (detect already ran early; catch residual phrasing)
     if any(
         x in low
         for x in (

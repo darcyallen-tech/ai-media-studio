@@ -278,31 +278,36 @@ def _video_entries() -> list[GuideEntry]:
             BRIDGE_MODELS,
             EXTEND_MODELS,
             I2V_MODELS,
+            R2I_MODELS,
+            R2V_MODELS,
             T2V_MODELS,
+            V2V_MODELS,
         )
 
         for reg, default_mod in (
             (T2V_MODELS, "T2V"),
             (I2V_MODELS, "I2V"),
+            (R2V_MODELS, "R2V"),
+            (V2V_MODELS, "V2V"),
             (BRIDGE_MODELS, "First→Last"),
             (EXTEND_MODELS, "Extend"),
         ):
             for key, spec in reg.items():
-                # Skip if already covered by fal VIDEO_MODELS label match
                 if any(e.key == key or e.name == spec.label for e in out):
                     continue
                 short, detail = _best(key, spec.label)
                 flags: set[str] = set()
                 lims: list[str] = [getattr(spec, "notes", "") or ""]
                 mods = [default_mod]
-                if getattr(spec, "omni_reference", False):
-                    mods = ["R2V", "Omni"]
+                if getattr(spec, "omni_reference", False) or default_mod == "R2V":
+                    if "R2V" not in mods:
+                        mods = ["R2V"] + [m for m in mods if m != "R2V"]
+                    if getattr(spec, "omni_reference", False):
+                        mods.append("Omni")
                     flags.add("multi_char")
                     flags.add("multi_ref")
                     lims.append(
-                        f"Omni: up to {getattr(spec, 'max_refs', 9)} images, "
-                        f"{getattr(spec, 'max_ref_videos', 3)} video, "
-                        f"{getattr(spec, 'max_ref_audios', 3)} audio"
+                        f"Multi identity / refs (up to {getattr(spec, 'max_refs', 9)})"
                     )
                 if getattr(spec, "native_stereo_audio", False) or getattr(
                     spec, "supports_audio", False
@@ -327,6 +332,28 @@ def _video_entries() -> list[GuideEntry]:
                         sort_group=22,
                     )
                 )
+        for key, spec in R2I_MODELS.items():
+            if any(e.name == spec.label for e in out):
+                continue
+            short, detail = _best(key, spec.label)
+            out.append(
+                GuideEntry(
+                    key=f"vision:{key}",
+                    name=spec.label,
+                    family="image",
+                    modalities=("R2I",),
+                    best_for=short or "Build still from character/style refs",
+                    strengths=detail or (getattr(spec, "notes", "") or short),
+                    limitations=_join(
+                        getattr(spec, "notes", "") or "",
+                        f"Max {getattr(spec, 'max_refs', 3)} identity/style refs",
+                    ),
+                    flags=frozenset({"multi_ref", "multi_char"}),
+                    open_target="vision",
+                    model_choice=spec.label,
+                    sort_group=12,
+                )
+            )
     except Exception:
         pass
     return out

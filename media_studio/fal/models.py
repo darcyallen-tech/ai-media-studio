@@ -1135,28 +1135,36 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
         generate_audio_param="generate_audio",
         default_generate_audio=True,
         duration_param="duration",
-        duration_as_int=False,
+        duration_as_int=False,  # string "15" / "auto" per fal schema
         default_duration="5",
         min_duration_seconds=4.0,
         max_duration_seconds=15.0,
         allowed_durations=("auto",) + tuple(str(i) for i in range(4, 16)),
         resolution_param="resolution",
-        allowed_resolutions=("480p", "720p", "1080p", "4k"),
+        allowed_resolutions=("480p", "720p"),  # R2V schema
         default_resolution="720p",
+        # fal docs: aspect_ratio enum auto|21:9|16:9|4:3|1:1|3:4|9:16
         aspect_ratio_param="aspect_ratio",
-        allowed_aspect_ratios=("auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"),
+        allowed_aspect_ratios=(
+            "auto",
+            "21:9",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+        ),
         default_aspect_ratio="auto",
         auto_image_refs_in_prompt=True,
         cost_per_second=0.18,
         cost_per_second_by_resolution={
             "480p": 0.12,
             "720p": 0.18,
-            "1080p": 0.28,
-            "4k": 0.55,
         },
         notes=(
             "Seedance 2.0 Reference-to-Video — multi-ref from still(s) (+ optional video). "
-            "Prompt: @Image1 / @Video1. Up to 4K on standard. Est. ~$0.18/s @720p."
+            "aspect_ratio: auto (default) or listed ratios · res 480p/720p. "
+            "Prompt: @Image1 / @Video1. Est. ~$0.18/s @720p."
         ),
     ),
     # Motion-preserving edits via reference-to-video (source clip as @Video1)
@@ -1179,10 +1187,19 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
         max_duration_seconds=15.0,
         allowed_durations=("auto",) + tuple(str(i) for i in range(4, 16)),
         resolution_param="resolution",
-        allowed_resolutions=("480p", "720p", "1080p", "4k"),
+        allowed_resolutions=("480p", "720p", "1080p"),
         default_resolution="720p",
+        # Same endpoint as R2V — sends aspect_ratio (fal docs)
         aspect_ratio_param="aspect_ratio",
-        allowed_aspect_ratios=("auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"),
+        allowed_aspect_ratios=(
+            "auto",
+            "21:9",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+        ),
         default_aspect_ratio="auto",
         auto_image_refs_in_prompt=True,
         cost_per_second=0.30,
@@ -1190,11 +1207,10 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
             "480p": 0.18,
             "720p": 0.30,
             "1080p": 0.45,
-            "4k": 0.90,
         },
         notes=(
             "Seedance 2.0 motion-preserving edit via reference-to-video: source clip as "
-            "@Video1 + optional ref still as @Image1. Up to 4K. "
+            "@Video1 + optional ref still as @Image1. aspect_ratio auto or listed ratios. "
             "Strong alternative to Kling for furniture/product V2V. Est. ~$0.30/s @720p."
         ),
     ),
@@ -1220,13 +1236,22 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
         allowed_resolutions=("480p", "720p"),
         default_resolution="720p",
         aspect_ratio_param="aspect_ratio",
-        allowed_aspect_ratios=("auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"),
+        allowed_aspect_ratios=(
+            "auto",
+            "21:9",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+        ),
         default_aspect_ratio="auto",
         auto_image_refs_in_prompt=True,
         cost_per_second=0.15,
         cost_per_second_by_resolution={"480p": 0.10, "720p": 0.15},
         notes=(
             "Seedance 2.0 Fast V2V / ref edit — cheaper tests (up to 720p). "
+            "aspect_ratio auto or listed ratios. "
             "Source clip @Video1 + optional still @Image1. Est. ~$0.15/s @720p."
         ),
     ),
@@ -2075,22 +2100,14 @@ def build_video_edit_arguments(
             keep = other.get("keep_audio", spec.default_keep_audio)
         args[spec.keep_audio_param] = bool(keep)
 
-    if spec.aspect_ratio_param:
-        ar_req = params.get("aspect_ratio")
-        if ar_req is None:
-            ar_req = other.get("aspect_ratio")
-        if ar_req is None:
-            ar_req = spec.default_aspect_ratio
-        _apply_aspect_ratio_arg(
-            args,
-            notes,
-            param_name=spec.aspect_ratio_param,
-            requested=ar_req,
-            allowed=spec.allowed_aspect_ratios,
-            default=spec.default_aspect_ratio or "1:1",
-            source_image=None,
-            resolution_hint=None,
-        )
+    # Aspect: provisional set for models with param; apply_aspect_policy is last word
+    ar_req = params.get("aspect_ratio")
+    if ar_req is None:
+        ar_req = other.get("aspect_ratio")
+    if ar_req is None:
+        ar_req = spec.default_aspect_ratio
+    if spec.aspect_ratio_param and ar_req is not None:
+        args[spec.aspect_ratio_param] = ar_req
 
     if spec.duration_param:
         dur_in = params.get("duration_seconds") or params.get("duration")
@@ -2135,6 +2152,27 @@ def build_video_edit_arguments(
             f"{spec.label} uses prompt + video only; reference stills are not sent to the API."
         )
 
+    from media_studio.aspect_omit import (
+        apply_aspect_policy,
+        aspect_omit_note,
+        endpoint_omits_aspect_ratio,
+    )
+
+    before = "aspect_ratio" in args
+    args = apply_aspect_policy(
+        args,
+        endpoint=spec.endpoint,
+        mode=spec.task,
+        requested=ar_req,
+    )
+    if before and "aspect_ratio" not in args and endpoint_omits_aspect_ratio(
+        spec.endpoint
+    ):
+        notes.append(aspect_omit_note(spec.endpoint))
+
+    from media_studio.aspect_omit import sanitize_seedance_r2v_arguments
+
+    args = sanitize_seedance_r2v_arguments(args, endpoint=spec.endpoint)
     return args, notes
 
 
@@ -2299,61 +2337,14 @@ def build_i2v_arguments(
                 res = "2K"
             args[spec.resolution_param] = res
 
-    # Never send aspect_ratio when the model has no param (e.g. FLUX 3 I2V)
-    # or when the endpoint is known to reject it (even "auto").
-    ep_low = (spec.endpoint or "").lower()
-    flux3_i2v_ep = (
-        "blackforestlabs/flux-3/image-to-video" in ep_low
-        and "first-last" not in ep_low
-    )
-    omit_aspect = (not spec.aspect_ratio_param) or flux3_i2v_ep
-    if omit_aspect:
-        args.pop("aspect_ratio", None)
-        if params.get("aspect_ratio") or other.get("aspect_ratio") or flux3_i2v_ep:
-            notes.append(
-                "aspect_ratio omitted — FLUX 3 I2V follows the still "
-                "(do not send aspect_ratio, not even auto)."
-                if flux3_i2v_ep
-                else "aspect_ratio omitted (follows still)."
-            )
-    elif spec.aspect_ratio_param:
-        ar_req = params.get("aspect_ratio")
-        if ar_req is None:
-            ar_req = other.get("aspect_ratio")
-        if ar_req is None:
-            ar_req = spec.default_aspect_ratio
-        ar_low = str(ar_req or "").strip().lower()
-        # UI sentinels that mean "do not send"
-        if ar_low in (
-            "follows still",
-            "auto (from start still)",
-            "auto (from ref still)",
-            "—",
-            "none",
-            "",
-        ):
-            notes.append("aspect_ratio omitted (follows still).")
-        else:
-            allowed_low = {a.lower() for a in (spec.allowed_aspect_ratios or ())}
-            # Seedance "auto" / H3 "adaptive"
-            if ar_low in ("auto", "adaptive") and ar_low in allowed_low:
-                for a in spec.allowed_aspect_ratios or ():
-                    if a.lower() == ar_low:
-                        args[spec.aspect_ratio_param] = a
-                        break
-                else:
-                    args[spec.aspect_ratio_param] = ar_req
-            else:
-                _apply_aspect_ratio_arg(
-                    args,
-                    notes,
-                    param_name=spec.aspect_ratio_param,
-                    requested=ar_req,
-                    allowed=spec.allowed_aspect_ratios,
-                    default=spec.default_aspect_ratio or "1:1",
-                    source_image=None,
-                    resolution_hint=None,
-                )
+    # Provisional aspect for models with a param; unified policy is last word below
+    ar_req_i2v = params.get("aspect_ratio")
+    if ar_req_i2v is None:
+        ar_req_i2v = other.get("aspect_ratio")
+    if ar_req_i2v is None:
+        ar_req_i2v = spec.default_aspect_ratio
+    if spec.aspect_ratio_param and ar_req_i2v is not None:
+        args[spec.aspect_ratio_param] = ar_req_i2v
 
     # Image role: start_frame (layout lock) vs identity_ref (likeness only)
     image_role = (
@@ -2463,6 +2454,31 @@ def build_i2v_arguments(
     if getattr(spec, "native_stereo_audio", False):
         notes.append("Native stereo / generated audio on output (no toggle).")
 
+    from media_studio.aspect_omit import (
+        apply_aspect_policy,
+        aspect_omit_note,
+        endpoint_omits_aspect_ratio,
+    )
+
+    before_ar = "aspect_ratio" in args
+    args = apply_aspect_policy(
+        args,
+        endpoint=spec.endpoint,
+        mode="image_to_video",
+        requested=ar_req_i2v,
+    )
+    if before_ar and "aspect_ratio" not in args and endpoint_omits_aspect_ratio(
+        spec.endpoint
+    ):
+        notes.append(aspect_omit_note(spec.endpoint))
+    elif not before_ar and "aspect_ratio" not in args and endpoint_omits_aspect_ratio(
+        spec.endpoint
+    ):
+        notes.append(aspect_omit_note(spec.endpoint))
+
+    from media_studio.aspect_omit import sanitize_seedance_r2v_arguments
+
+    args = sanitize_seedance_r2v_arguments(args, endpoint=spec.endpoint)
     return args, notes
 
 

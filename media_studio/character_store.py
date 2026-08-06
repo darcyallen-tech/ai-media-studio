@@ -59,7 +59,7 @@ VARIATION_PROMPT = (
 )
 
 DEFAULT_VARIATION_MODEL = "flux 2 pro"
-DEFAULT_COSTUME_MODEL = "flux 2 pro"  # multi-ref image edit
+DEFAULT_COSTUME_MODEL = "seedream 5 pro"  # multi-ref edit; Flux 2 Pro fallback
 
 
 @dataclass
@@ -1067,27 +1067,379 @@ def run_background_remove(
 # ---------------------------------------------------------------------------
 
 
+# Locked phrases for costume multi-ref consistency
+COSTUME_OUTFIT_LOCK = (
+    "Same outfit as the costume reference(s). "
+    "Match color, cut, fabric, details exactly."
+)
+COSTUME_CLOSEUP_VIEW = (
+    "front-facing close-up portrait (not profile), face + neckline/collar"
+)
+
+
 def costume_prompt_for_slot(outfit: str, slot: str) -> str:
     """Build multi-ref I2I prompt for one identity-pack angle (clean black plate)."""
     outfit = (outfit or "").strip()
     key = _norm_slot(slot) or "front"
-    view = PROFILE_VIEW_PROMPTS.get(key) or SLOT_VIEW_HINT.get(
-        key, "character reference still"
-    )
-    body = (
-        f"{_FULL_BODY_INVENT_BODY} "
-        if key in ("front", "side")
-        else "Head unobstructed. "
-    )
+    if key == "closeup":
+        view = COSTUME_CLOSEUP_VIEW
+        body = "Head unobstructed. "
+    else:
+        view = PROFILE_VIEW_PROMPTS.get(key) or SLOT_VIEW_HINT.get(
+            key, "character reference still"
+        )
+        body = f"{_FULL_BODY_INVENT_BODY} "
+    outfit_lock = f" {COSTUME_OUTFIT_LOCK}" if key != "front" else ""
     return (
         "Keep the same person identity, face, hair, age, skin tone, and body "
         "proportions from the reference images. Do not change who they are. "
         "Preserve lighting direction on the subject from the references. "
         f"Change only the wardrobe / outfit / clothing to: {outfit}. "
+        f"{outfit_lock} "
         f"Generate a photoreal character-reference still: {view}. "
         f"{body}"
         + CLEAN_PLATE_BG
     )
+
+
+def costume_ref_order_for_slot(
+    slot: str,
+    *,
+    identity: dict[str, str],
+    costume_results: dict[str, str] | None = None,
+) -> list[str]:
+    """
+    Multi-ref image order for one costume angle.
+
+    Front: identity stills only (primary = identity front).
+    Side: [costume front] > [identity side] > other identity stills
+    Close-up: [costume front] > [costume side if any] > [identity close-up] > others
+
+    First path is primary (image_file); rest are extras.
+    """
+    key = _norm_slot(slot) or "front"
+    cos = costume_results or {}
+    id_pack = {
+        s: p
+        for s, p in (identity or {}).items()
+        if p and Path(str(p)).is_file()
+    }
+    ordered: list[str] = []
+
+    def _add(p: str | None) -> None:
+        if not p:
+            return
+        try:
+            rp = str(Path(p).resolve())
+        except OSError:
+            rp = str(p)
+        if not Path(rp).is_file():
+            return
+        if rp not in ordered:
+            ordered.append(rp)
+
+    if key == "front":
+        _add(id_pack.get("front"))
+        for s in IDENTITY_SLOTS:
+            if s != "front":
+                _add(id_pack.get(s))
+        return ordered
+
+    if key == "side":
+        _add(cos.get("front"))  # costume front first after Front OK
+        _add(id_pack.get("side"))
+        for s in IDENTITY_SLOTS:
+            if s != "side":
+                _add(id_pack.get(s))
+        return ordered
+
+    # closeup
+    _add(cos.get("front"))
+    _add(cos.get("side"))
+    _add(id_pack.get("closeup"))
+    for s in IDENTITY_SLOTS:
+        if s != "closeup":
+            _add(id_pack.get(s))
+    return ordered
+
+
+# ---------------------------------------------------------------------------
+# Optional clothing helper (compiles into costume prompt)
+# ---------------------------------------------------------------------------
+
+CLOTHING_NONE = "—"
+
+# Per-slot style presets only (never dump full garment list into one dropdown)
+CLOTHING_INNER_TOP_STYLES: tuple[str, ...] = (
+    CLOTHING_NONE,
+    "tee",
+    "blouse",
+    "button-down shirt",
+    "sweater",
+    "hoodie",
+    "tank top",
+    "turtleneck",
+    "crop top",
+    "polo",
+)
+
+CLOTHING_OUTER_STYLES: tuple[str, ...] = (
+    CLOTHING_NONE,
+    "blazer",
+    "jacket",
+    "coat",
+    "cardigan",
+    "vest",
+    "windbreaker",
+    "none",
+)
+
+CLOTHING_BOTTOM_STYLES: tuple[str, ...] = (
+    CLOTHING_NONE,
+    "jeans",
+    "trousers",
+    "skirt",
+    "shorts",
+    "leggings",
+    "suit pants",
+)
+
+CLOTHING_DRESS_STYLES: tuple[str, ...] = (
+    CLOTHING_NONE,
+    "dress (sheath)",
+    "dress (midi)",
+    "dress (gown)",
+    "dress (casual)",
+)
+
+CLOTHING_FOOTWEAR_STYLES: tuple[str, ...] = (
+    CLOTHING_NONE,
+    "sneakers",
+    "loafers",
+    "heels",
+    "boots",
+    "sandals",
+    "barefoot",
+    "socks only",
+)
+
+CLOTHING_HEADWEAR_STYLES: tuple[str, ...] = (
+    CLOTHING_NONE,
+    "cap",
+    "beanie",
+    "hat",
+    "none",
+)
+
+# Back-compat alias (union of all styles — do not use for per-slot dropdowns)
+CLOTHING_STYLE_OPTS: tuple[str, ...] = (
+    CLOTHING_NONE,
+    *CLOTHING_INNER_TOP_STYLES[1:],
+    *CLOTHING_OUTER_STYLES[1:],
+    *CLOTHING_BOTTOM_STYLES[1:],
+    *CLOTHING_DRESS_STYLES[1:],
+    *CLOTHING_FOOTWEAR_STYLES[1:],
+    *CLOTHING_HEADWEAR_STYLES[1:],
+)
+
+CLOTHING_COLOR_OPTS: tuple[str, ...] = (
+    CLOTHING_NONE,
+    "black",
+    "white",
+    "navy",
+    "charcoal",
+    "gray",
+    "beige",
+    "cream",
+    "brown",
+    "olive",
+    "burgundy",
+    "red",
+    "blue",
+    "green",
+    "pink",
+    "gold",
+    "silver",
+)
+
+CLOTHING_MATERIAL_OPTS: tuple[str, ...] = (
+    CLOTHING_NONE,
+    "cotton",
+    "linen",
+    "silk",
+    "wool",
+    "denim",
+    "leather",
+    "suede",
+    "polyester blend",
+    "knit",
+    "satin",
+    "chiffon",
+)
+
+CLOTHING_FIT_OPTS: tuple[str, ...] = (
+    CLOTHING_NONE,
+    "form-fit",
+    "regular",
+    "baggy / relaxed",
+)
+
+# Slot key → style dropdown options
+CLOTHING_SLOT_STYLES: dict[str, tuple[str, ...]] = {
+    "inner": CLOTHING_INNER_TOP_STYLES,
+    "outer": CLOTHING_OUTER_STYLES,
+    "bottom": CLOTHING_BOTTOM_STYLES,
+    "dress": CLOTHING_DRESS_STYLES,
+    "footwear": CLOTHING_FOOTWEAR_STYLES,
+    "headwear": CLOTHING_HEADWEAR_STYLES,
+}
+
+# UI labels for style dropdowns
+CLOTHING_SLOT_LABELS: dict[str, str] = {
+    "inner": "Inner top style",
+    "outer": "Outer style",
+    "bottom": "Bottom style",
+    "dress": "Dress style",
+    "footwear": "Footwear style",
+    "headwear": "Headwear style",
+}
+
+
+def _is_clothing_empty(value: str | None) -> bool:
+    v = (value or "").strip().lower()
+    return not v or v in ("—", "-", "none", "n/a", "skip")
+
+
+def _piece_phrase(
+    layer: str,
+    *,
+    style: str,
+    color: str,
+    material: str,
+    custom: str,
+) -> str:
+    """
+    One layer phrase for the compiled wardrobe prompt.
+    Custom override wins. Empty / none styles return "".
+    """
+    custom = (custom or "").strip()
+    if custom:
+        return f"{layer}: {custom}" if layer else custom
+    st = (style or "").strip()
+    if _is_clothing_empty(st):
+        return ""
+    col = (color or "").strip()
+    mat = (material or "").strip()
+    bits: list[str] = []
+    if col and not _is_clothing_empty(col):
+        bits.append(col)
+    if mat and not _is_clothing_empty(mat):
+        bits.append(mat)
+    bits.append(st)
+    body = " ".join(bits)
+    return f"{layer}: {body}" if layer else body
+
+
+def compile_clothing_helper(
+    *,
+    inner_top_style: str = "—",
+    inner_top_color: str = "—",
+    inner_top_material: str = "—",
+    inner_top_custom: str = "",
+    outer_style: str = "—",
+    outer_color: str = "—",
+    outer_material: str = "—",
+    outer_custom: str = "",
+    bottom_style: str = "—",
+    bottom_color: str = "—",
+    bottom_material: str = "—",
+    bottom_custom: str = "",
+    dress_style: str = "—",
+    dress_color: str = "—",
+    dress_material: str = "—",
+    dress_custom: str = "",
+    footwear_style: str = "—",
+    footwear_color: str = "—",
+    footwear_material: str = "—",
+    footwear_custom: str = "",
+    headwear_style: str = "—",
+    headwear_color: str = "—",
+    headwear_material: str = "—",
+    headwear_custom: str = "",
+    fit: str = "—",
+    extra_notes: str = "",
+) -> str:
+    """
+    Compile clothing slots into clean layer sentences for the wardrobe prompt.
+
+    Dress set → bottom is ignored (not compiled). Outer / headwear optional.
+    """
+    layers: list[str] = []
+    inner = _piece_phrase(
+        "Inner top",
+        style=inner_top_style,
+        color=inner_top_color,
+        material=inner_top_material,
+        custom=inner_top_custom,
+    )
+    if inner:
+        layers.append(inner)
+    outer = _piece_phrase(
+        "Outer layer",
+        style=outer_style,
+        color=outer_color,
+        material=outer_material,
+        custom=outer_custom,
+    )
+    if outer:
+        layers.append(outer)
+    dress = _piece_phrase(
+        "Dress",
+        style=dress_style,
+        color=dress_color,
+        material=dress_material,
+        custom=dress_custom,
+    )
+    if dress:
+        # Dress replaces bottom — do not include bottom layer
+        layers.append(dress)
+    else:
+        bottom = _piece_phrase(
+            "Bottom",
+            style=bottom_style,
+            color=bottom_color,
+            material=bottom_material,
+            custom=bottom_custom,
+        )
+        if bottom:
+            layers.append(bottom)
+    feet = _piece_phrase(
+        "Footwear",
+        style=footwear_style,
+        color=footwear_color,
+        material=footwear_material,
+        custom=footwear_custom,
+    )
+    if feet:
+        layers.append(feet)
+    head = _piece_phrase(
+        "Headwear",
+        style=headwear_style,
+        color=headwear_color,
+        material=headwear_material,
+        custom=headwear_custom,
+    )
+    if head:
+        layers.append(head)
+    fit_s = (fit or "").strip()
+    if fit_s and not _is_clothing_empty(fit_s):
+        layers.append(f"Fit: {fit_s}")
+    notes = (extra_notes or "").strip()
+    if notes:
+        layers.append(f"Notes: {notes}")
+    if not layers:
+        return ""
+    return ". ".join(layers) + "."
 
 
 def short_outfit_label(outfit: str, *, max_len: int = 28) -> str:
@@ -1299,15 +1651,16 @@ def edit_params_json_for_resolution(resolution: str | None) -> str | None:
 
 
 def preferred_costume_model() -> str:
-    """Prefer multi-ref Flux-family edit models."""
+    """Default costume model: Seedream 5 Pro edit, else Flux 2 Pro."""
     from media_studio.fal.models import IMAGE_EDIT_MODELS
 
     for key in (
+        "seedream 5 pro",
         "flux 2 pro",
         "flux 2 max",
         "flux 2 flex",
         "nano banana pro",
-        "seedream 5 pro",
+        "nano banana 2",
     ):
         spec = IMAGE_EDIT_MODELS.get(key)
         if spec and getattr(spec, "multi_image", False) and int(
@@ -1315,6 +1668,10 @@ def preferred_costume_model() -> str:
         ) >= 2:
             return key
     return DEFAULT_COSTUME_MODEL
+
+
+# Costume sequential angle order (Front only first → Side → Close-up)
+COSTUME_SEQ_ORDER: tuple[str, ...] = ("front", "side", "closeup")
 
 
 # ---------------------------------------------------------------------------
@@ -1601,7 +1958,12 @@ def t2i_character_model_labels() -> list[str]:
 
 
 def multi_ref_image_edit_labels() -> list[str]:
-    """Dropdown labels for multi-ref image-edit models (profile / costume)."""
+    """
+    Multi-ref image-edit models for Costume Swap / profile fill.
+
+    Parity with Create Character edit path: Flux 2 Pro/Max/Flex,
+    Nano Banana Pro/2, Seedream 5 Pro (Seedream Lite if registered).
+    """
     from media_studio.fal.models import IMAGE_EDIT_MODELS, default_image_edit_model
 
     out: list[str] = []
@@ -1612,6 +1974,7 @@ def multi_ref_image_edit_labels() -> list[str]:
         "nano banana pro",
         "nano banana 2",
         "seedream 5 pro",
+        "seedream 5 lite",  # if endpoint registered later
     ):
         spec = IMAGE_EDIT_MODELS.get(key)
         if not spec:

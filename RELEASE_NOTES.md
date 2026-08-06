@@ -12,6 +12,39 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### Costume Swap redesign (sequential angles)
+- **Front only first** → then Side → Close-up (one image each; no batch-all)
+- After Front succeeds, that costume still is **primary ref** for Side/Close-up
+- Close-up: front-facing portrait + neckline (not profile); outfit lock on later angles
+- Models aligned with multi-ref edit list; default **Seedream 5 Pro**
+- Optional clothing helper compiles into wardrobe prompt
+
+### Unified video aspect_ratio policy
+- Single module `media_studio/aspect_omit.py`: endpoint → omit | send (allowlist)
+- **Omit** (strict): FLUX 3 pure I2V (+ draft), Kling I2V only
+- **Send**: **Seedance R2V** (`auto` default | 21:9…9:16 per fal docs), H3 R2V
+  (`auto`→`adaptive`), Seedance I2V, FLUX T2V/first-last/extend/keyframes
+- Seedance R2V was incorrectly on the omit list (inverted) — fixed; UI re-enables Aspect
+- Duration for Seedance: string `"15"` / `"auto"` (not int)
+- fal errors append raw body to `outputs/aspect_debug.log` + progress line
+- Tests: `python scripts/test_aspect_policy.py`
+
+### R2V / R2I reference UI cleanup
+- **Slots**: Character (library dropdown) · Scene (library dropdown) · Prop (upload) · optional Start frame (composition only)
+- **Add another character / scene** opens another library dropdown — never OS folder dialog
+- Live **citation map**: `Image 1 = Camera Man (character) · Image 2 = Tavern (scene)` (adapts to Image N / @ImageN / model-specific tags)
+- Enhance uses the same labels in the rewrite
+- **Studio Image R2I**: Character is identity ref, not source; source only if user uploads an edit plate
+- **Studio Video R2V**: full Character/Scene/Prop pack; I2V keeps simpler Character identity slots
+- **Creative Vision**: same pack on R2I/R2V; start-frame labels hidden when not applicable (no jumbled headers)
+- Not in this pass: shot-list storyboard builder; Prop Gen tool (slot + upload only)
+
+### Creative Vision — modality tabs (R2I / R2V)
+- Image row: Text→Image | Image→Image | **R2I**; Video: Text→Video | Image→Video | **R2V** | V2V | Bridge | Extend
+- Model lists filtered per tab: pure R2V (H3 Omni, Seedance Reference, Grok ref pack) off I2V
+- I2V = start-frame layout lock (FLUX 3 no aspect_ratio); R2V = multi-ref / omni
+- R2I = build still from Character/Scene/Prop identity refs (not silent plate edit); Enhance tab-aware
+
 ### Model Guide (in-app)
 - Book icon next to Settings gear → modal catalog of registered models
 - Cards: name, modality tags, Best for, strengths, limits; filters (Image / Video / Audio / Tools / Director) + search + multi-char / native audio / draft chips
@@ -19,11 +52,11 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - FLUX 3 aspect-follows-still, H3 multi-identity, Kling multi-shot called out in limits
 
 ### Creative Vision — Character-first multi-ref (H3 Omni + multi I2V)
-- **Default**: Character 1 dropdown → identity (Image 1); **Add character** → Character 2… with **Characters n / max**
-- Optional **Start / source frame** (layout lock) separate; optional **Add prop / object**
-- Character picker never silent-fills Start unless **Use Character 1 as start frame**
+- **Default**: Character 1 dropdown → identity (Image 1); **Add another character** → Character 2… with live map
+- Optional **Start / source frame** (layout lock) clearly separate from Character/Scene/Prop
+- Character picker never silent-fills Start unless user opts in (I2V “use as start”)
 - **Advanced refs (video / audio / style)** collapsed by default (no 0/9 omni noise)
-- Enhance rewrites Character 1/2 → Image 1/2 (model citation style)
+- Enhance rewrites to Image 1/2… (model citation style)
 - FLUX 3: single character only; multi Add on H3 Omni / Seedance / multi-ref models
 
 ### FLUX 3 I2V — aspect hard-omit + Start vs Character slots

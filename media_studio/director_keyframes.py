@@ -222,6 +222,15 @@ def build_keyframe_take_arguments(
     endpoint = KEYFRAME_DRAFT_ENDPOINT if draft else KEYFRAME_ENDPOINT
     if draft:
         args = strip_resolution_for_draft(args)
+    # Unified aspect policy (keyframes send auto; draft endpoint same family)
+    from media_studio.aspect_omit import apply_aspect_policy
+
+    args = apply_aspect_policy(
+        args,
+        endpoint=endpoint,
+        mode="keyframes",
+        requested=aspect_ratio,
+    )
     return endpoint, args
 
 

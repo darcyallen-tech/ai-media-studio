@@ -54,8 +54,12 @@ Voice Clone stays under Audio.
   pure black clean plate by default; preview + Confirm; base + costume variants)
 - Remove background (Bria RMBG, manual): per slot + all-angles batch; cost shown;
   preview Confirm/Dismiss (no auto-overwrite on upload)
-- Costume swap: multi-ref model + resolution picker; cost × slots × resolution;
-  per-slot errors/retry; black clean plate; named costume child under parent
+- Costume swap (sequential): Front only → Side → Close-up (one image per step;
+  no batch-all). After Front OK, costume Front is top ref for Side/Close-up.
+  Close-up locked front-facing (not profile) + neckline. Outfit lock phrase on
+  Side/Close-up. Models: Flux 2 Pro/Max/Flex, Nano Banana Pro/2, Seedream 5 Pro
+  (default Seedream 5 Pro). Optional clothing helper (inner/outer/bottom|dress/
+  footwear/headwear). Regenerate = that angle only; named costume child under parent
 - **Scene Placer** (focused panel under Characters — not a new top-level tab):
   composite Character into Scene with pose control. Open via **Scene Placer**
   button, card **Place in scene**, or Scenes → **Scene Placer** / **Place character**.
@@ -280,11 +284,14 @@ Same-row modality sub-tabs (to the right of Image | Video):
   I2I | T2I | R2I | Region  (default I2I; model list filtered by sub-tab)
 - I2I — single source still; image-edit models only
 - T2I — no source required; text-to-image models; Size/aspect from T2I presets
-- R2I — primary + multi-ref stills; only models with max_refs > 1
+- R2I — Character · Scene · Prop identity pack (models with max_refs > 1)
 - Region — colored boxes + per-box prompts (Seedream annotation); was Standard/Region toggle
-- Source still: **Saved character** picker + upload + Previously used + From Resolve
-- Multi-reference stills (R2I only):
-    Primary source + optional “Add reference” slots up to model max
+- Source still: optional **edit plate** on R2I; I2I uses Saved character → source
+- R2I reference pack:
+    Character / Scene = library dropdowns (never OS folder); Prop = upload still
+    Character picker never silently becomes primary source
+    Live citation map (Image 1 = … · Image 2 = …) for Enhance + Generate
+    Optional upload source only when user wants a composition edit plate
     Nano Banana family / Seedream / Flux multi-ref / Grok Imagine: multi-ref
     Single-image models (e.g. Flux Kontext, MAI): not listed under R2I
     Region mode: annotated primary only (no extra refs)
@@ -323,8 +330,8 @@ Same-row modality sub-tabs (to the right of Image | Video):
   I2V | T2V | V2V | R2V  (default I2V)
   Model dropdown filtered strictly by sub-tab; MiniMax H3 Omni under R2V
   T2V cost = rate × duration (Vision T2V / H3 T2V; not image-edit fallback)
-  R2V Studio = one still + optional motion clip as Video 1; full multi-image
-    + audio omni stays Creative Vision · Omni reference
+  R2V Studio = Character · Scene · Prop pack + optional Start frame / motion clip;
+    full audio omni advanced slots stay Creative Vision when needed
 Secondary workspaces: Received, Blank Canvas, Camera Lock (map → I2V / V2V)
 - Source video + reference still (from Image “use as reference”)
 - Recently from Resolve (clips / stills from handoff history)
@@ -336,15 +343,22 @@ Secondary workspaces: Received, Blank Canvas, Camera Lock (map → I2V / V2V)
 - Grok Imagine 1.5: 1–15s · 480p–1080p; native audio; ~$0.08–0.25/s + $0.01/ref
 - FLUX 3 (BFL on fal): 5–20s (or auto) · 720p/1080p · optional native audio ·
   ~$0.17/s @720p · ~$0.29/s @1080p; First→Last requires start + end stills
-- FLUX 3 I2V **aspect hard-omit** (full + draft): never posts aspect_ratio — UI
-  **Follows still** (disabled)
-- Creative Vision **Character-first multi-ref** (H3 Omni + multi I2V): Character 1
-  library → Image 1 identity; **Add character** → 2…n; counter Characters n/max;
-  optional Start frame + props; Advanced Omni (video/audio/style) collapsed by
-  default; Character never silent Start; FLUX 3 single identity only
-- **Model Guide** (book icon next to Settings): in-app catalog of registered models
-  with modalities, Best for, strengths, limits; filter Image/Video/Audio/Tools/
-  Director; search; optional Open in workspace; same registries as pickers
+- **Unified aspect policy** (`aspect_omit.py`): endpoint omit/send for all video
+  paths. Omit: FLUX 3 pure I2V (+ draft), Kling I2V (UI **Follows still**).
+  **Seedance R2V sends** aspect_ratio (`auto` default or listed ratios per fal).
+  H3 R2V maps auto→adaptive; Seedance I2V sends.
+- Creative Vision modalities (Studio-aligned):
+  Image: **T2I** | **I2I** | **R2I** (Character/Scene/Prop identity pack)
+  Video: **T2V** | **I2V** (start-frame lock) | **R2V** (multi-ref / Omni) |
+  **V2V** | Bridge | Extend — model pickers filtered per tab
+- **R2I**: Character · Scene · Prop from libraries (Character ≠ source);
+  optional edit plate only if user uploads one
+- **R2V**: Character/Scene library dropdowns + Prop upload; “Add another
+  character/scene” up to model max (never OS folder); live Image N map;
+  H3 Omni / Seedance Reference / Grok ref live on R2V (not I2V); optional Start
+- **I2V**: start frame required for layout lock; FLUX 3 omits aspect_ratio;
+  Character secondary / use-as-start (library dropdowns, not folders)
+- **Model Guide** (book icon next to Settings): catalog with R2I/R2V tags
 - FLUX 3 **Draft first** → cheaper `/draft` preview + **Enhance to full** via
   `draft-enhance` (draft_cache); cost labels show draft vs full; est. draft ~$0.06/s
 - Video results (Studio / Vision / Director): **Send to ▾ → Video Upscale** (plus

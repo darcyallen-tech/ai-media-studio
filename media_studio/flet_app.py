@@ -291,6 +291,7 @@ class StudioImageView:
         )
 
         # Optional multi-reference stills (primary is source_path; extras when model allows)
+        # R2I uses RefPackPanel (Character/Scene/Prop); _extra_ref_paths mirrors pack paths
         self._extra_ref_paths: list[str] = []
         self.refs_hint = ft.Text(
             "",
@@ -322,6 +323,20 @@ class StudioImageView:
             ],
             spacing=4,
             tight=True,
+            visible=False,
+        )
+        # R2I: Character · Scene · Prop pack (identity refs; never silent source)
+        from media_studio.flet_ref_pack import RefPackPanel
+
+        self.ref_pack = RefPackPanel(
+            page,
+            on_change=self._on_image_ref_pack_change,
+        )
+        self.r2i_source_hint = ft.Text(
+            "Optional edit plate (source). Character picker never becomes source on R2I.",
+            size=11,
+            color=TEXT_MUTED,
+            max_lines=2,
             visible=False,
         )
 
@@ -810,7 +825,7 @@ class StudioImageView:
             page,
             on_select=self._on_character_picked,
             on_clear=self._on_character_picker_clear,
-            label_text="Saved character",
+            label_text="Saved character (→ source on I2I)",
         )
 
         # --- comparison workspace (inline: left rail + large smooth overlay) ---
@@ -1011,7 +1026,9 @@ class StudioImageView:
                 height=120,
                 width=RAIL_WIDTH - 40,
             ),
+            self.r2i_source_hint,
             self.char_picker.root,
+            self.ref_pack.root,
             self.refs_panel,
             label("Previously used", muted=True),
             self.prev_row,
@@ -1471,12 +1488,13 @@ class StudioImageView:
                 "Image prompt (freeform)" if blank else "Image prompt · multi-ref"
             )
             self.prompt_field.hint_text = (
-                "Primary still + reference stills (identity / material / look)."
+                "Character / Scene / Prop identity refs. Optional edit plate above."
             )
             self._refresh_region_overlays()
             self._update_compare_pane()
             self._set_status(
-                "R2I — multi-reference image edit (models with max refs > 1)."
+                "R2I — Character is identity ref (not source). "
+                "Upload an edit plate only if you want a composition lock."
             )
         else:
             # I2I
@@ -1490,12 +1508,21 @@ class StudioImageView:
             self._update_compare_pane()
             self._set_status("I2I — single source still · image-edit models.")
 
-        # Source still: required UI for I2I/R2I/Region; optional/hidden emphasis for T2I
+        # Source still: required UI for I2I/Region; optional edit plate on R2I; soft on T2I
         try:
             self.btn_pick.visible = True
             self.source_placeholder.visible = not bool(
                 self.state.source_path and Path(self.state.source_path).is_file()
             )
+            self.r2i_source_hint.visible = is_r2i
+            # R2I: pack owns Character; hide single char_picker + old freeform refs
+            self.char_picker.root.visible = not is_r2i and not is_t2i
+            self.ref_pack.root.visible = is_r2i
+            if is_r2i:
+                self.ref_pack.set_context(
+                    model_choice=_dd_value(self.model_dd),
+                    mode="r2i",
+                )
             if is_t2i and not (
                 self.state.source_path and Path(self.state.source_path).is_file()
             ):
@@ -2146,9 +2173,23 @@ class StudioImageView:
         return True
 
     def _on_character_picked(self, path: str, choice) -> None:
-        """Character picker → fill Image source still (Front preferred)."""
+        """
+        I2I: Character → source still (edit plate).
+        R2I: Character is identity ref only — never silently becomes source.
+        """
+        from media_studio.studio_modality import normalize_image_modality
+
         label = getattr(choice, "label", None) or Path(path).name
-        self.load_source_path(path, status=f"Character: {label}")
+        modality = normalize_image_modality(getattr(self, "_edit_mode", "i2i"))
+        if modality == "r2i":
+            # Should not fire when pack is visible; belt-and-suspenders
+            p = str(Path(path).resolve())
+            if p not in self._extra_ref_paths:
+                self._extra_ref_paths.append(p)
+            self._sync_refs_panel()
+            self._set_status(f"Character identity ref (not source): {label}")
+        else:
+            self.load_source_path(path, status=f"Character → source: {label}")
         try:
             self.page.update()
         except Exception:
@@ -2158,9 +2199,35 @@ class StudioImageView:
         # Unlink picker only — keep uploaded / strip source still
         pass
 
+    def _on_image_ref_pack_change(self) -> None:
+        """Mirror R2I Character/Scene/Prop pack into extra refs for generate."""
+        try:
+            paths = list(self.ref_pack.ordered_paths())
+        except Exception:
+            paths = []
+        # Drop any path that is the optional edit plate (source stays separate)
+        src = None
+        if self.state.source_path:
+            try:
+                src = str(Path(self.state.source_path).resolve())
+            except OSError:
+                src = self.state.source_path
+        self._extra_ref_paths = [
+            p for p in paths if not src or Path(p).resolve() != Path(src).resolve()
+        ]
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
     def refresh_character_picker(self) -> None:
         try:
             self.char_picker.refresh()
+        except Exception:
+            pass
+        try:
+            if getattr(self, "ref_pack", None):
+                self.ref_pack.refresh()
         except Exception:
             pass
 
@@ -2178,14 +2245,31 @@ class StudioImageView:
             self._extra_ref_paths = self._extra_ref_paths[:extra_cap]
 
     def _sync_refs_panel(self) -> None:
-        """Show/hide multi-ref UI; rebuild chips. Only on R2I (multi-ref models)."""
+        """
+        R2I uses RefPackPanel (Character/Scene/Prop) — hide legacy freeform chips.
+        Keep chips path as fallback if pack is empty and user had old extras.
+        """
         from media_studio.studio_modality import normalize_image_modality
 
         max_refs = self._model_max_refs()
         modality = normalize_image_modality(getattr(self, "_edit_mode", "i2i"))
-        show = modality == "r2i" and max_refs > 1
-        self.refs_panel.visible = show
-        if not show:
+        # Pack owns R2I refs — legacy freeform panel stays off
+        show_legacy = False
+        self.refs_panel.visible = show_legacy
+        try:
+            if modality == "r2i":
+                self.ref_pack.root.visible = True
+                self.ref_pack.set_context(
+                    model_choice=_dd_value(self.model_dd),
+                    mode="r2i",
+                )
+                # Mirror pack → extras for generate
+                self._on_image_ref_pack_change()
+            else:
+                self.ref_pack.root.visible = False
+        except Exception:
+            pass
+        if not show_legacy:
             return
         self._trim_extra_refs_to_model()
         extra_cap = max(0, max_refs - 1)
@@ -3082,12 +3166,27 @@ class StudioImageView:
                 "No invented camera motion unless the user asks. Locked frame."
             )
         elif modality == "r2i":
+            try:
+                pack_guide = self.ref_pack.enhance_guidance()
+                map_txt = self.ref_pack.mapping_text()
+            except Exception:
+                pack_guide = ""
+                map_txt = ""
             n_refs = len(getattr(self, "_extra_ref_paths", None) or [])
+            has_plate = bool(
+                self.state.source_path and Path(self.state.source_path).is_file()
+            )
             extra["guidance"] = (
                 "Rewrite for multi-reference image edit (R2I). "
-                "Image 1 / primary is the still to edit; extra refs are identity, "
-                "material, furniture, or style. Name each ref role in natural language. "
-                "Do not invent API parameters."
+                "Character / Scene / Prop are identity refs (not a locked start frame). "
+                + (
+                    "User uploaded a separate edit plate as the composition source. "
+                    if has_plate
+                    else "No edit plate — build the still from identity refs only. "
+                )
+                + (f"Citation map: {map_txt}. " if map_txt and "No refs" not in map_txt else "")
+                + (pack_guide + " " if pack_guide else "")
+                + "Name each ref role in natural language. Do not invent API parameters."
             )
             extra["reference_still_count"] = n_refs
         elif modality == "i2i":
@@ -3122,16 +3221,21 @@ class StudioImageView:
             + "…"
         )
         model = _dd_value(self.model_dd) or DEFAULT_IMAGE_MODEL
+        # R2I: optional edit plate as vision primary; else first identity ref
+        enhance_image = None if modality == "t2i" else self.state.source_path
+        if modality == "r2i":
+            has_plate = bool(
+                self.state.source_path and Path(self.state.source_path).is_file()
+            )
+            if not has_plate and extra_refs:
+                enhance_image = extra_refs[0]
+                extra_refs = extra_refs[1:]
         try:
             result = await asyncio.to_thread(
                 enhance_prompt,
                 prompt=prompt or "",
                 model_choice=model,
-                image_file=(
-                    None
-                    if modality == "t2i"
-                    else self.state.source_path
-                ),
+                image_file=enhance_image,
                 video_file=None,
                 parameters=json.loads(self._params_json()),
                 output_dir=self.state.output_dir,
@@ -3174,12 +3278,29 @@ class StudioImageView:
         has_source = bool(
             self.state.source_path and Path(self.state.source_path).is_file()
         )
-        if modality != "t2i" and not has_source:
+        # R2I: Character/Scene/Prop pack is enough; source is optional edit plate
+        if modality == "r2i":
+            try:
+                self._on_image_ref_pack_change()
+            except Exception:
+                pass
+            pack = list(getattr(self, "_extra_ref_paths", None) or [])
+            if not has_source and not pack:
+                self._set_status(
+                    "R2I needs Character / Scene / Prop refs "
+                    "(or an optional edit plate as source)."
+                )
+                return
+        elif modality != "t2i" and not has_source:
             self._set_status("Upload or Import from Resolve first.")
             return
 
         # Region mode: composite boxes → annotated still + color-keyed prompt
+        # R2I without edit plate: first pack still is API primary (identity, not "source")
         image_path_for_job = self.state.source_path
+        if modality == "r2i" and not has_source:
+            pack = list(getattr(self, "_extra_ref_paths", None) or [])
+            image_path_for_job = pack[0] if pack else None
         prompt = (self.prompt_field.value or "").strip()
         if modality == "region":
             if not self.region_panel.has_boxes_with_prompts() and not prompt:
@@ -3260,11 +3381,36 @@ class StudioImageView:
             self.job_progress.set_message(classify_progress(msg), self.page)
 
         # Multi-ref only on R2I; Region ships annotated primary alone; I2I primary only
-        extra_refs = (
-            list(getattr(self, "_extra_ref_paths", None) or [])
-            if modality == "r2i"
-            else []
-        )
+        # Character/Scene/Prop are identity; optional source plate is separate primary
+        extra_refs: list[str] = []
+        if modality == "r2i":
+            pack = list(getattr(self, "_extra_ref_paths", None) or [])
+            primary_res = None
+            if image_path_for_job:
+                try:
+                    primary_res = Path(image_path_for_job).resolve()
+                except OSError:
+                    primary_res = None
+            for p in pack:
+                try:
+                    if primary_res and Path(p).resolve() == primary_res:
+                        continue
+                except OSError:
+                    pass
+                if p and Path(p).is_file():
+                    extra_refs.append(p)
+            # Inject citation map into prompt when missing
+            try:
+                map_txt = self.ref_pack.mapping_text()
+                if (
+                    map_txt
+                    and "No refs" not in map_txt
+                    and "image 1" not in prompt.lower()
+                    and "<image" not in prompt.lower()
+                ):
+                    prompt = prompt.rstrip(".") + f". Refs: {map_txt}."
+            except Exception:
+                pass
 
         try:
             from media_studio.job_context import to_thread_with_job
@@ -3983,6 +4129,40 @@ def main(page: ft.Page) -> None:
         tooltip="Settings — keys, output folder, caches, retention",
         on_click=lambda e: _open_settings(e),
     )
+    btn_refresh_app = ft.IconButton(
+        icon=ft.Icons.RESTART_ALT,
+        icon_color=TEXT_MUTED,
+        tooltip="Refresh app — relaunch to load latest code",
+        on_click=None,  # set below
+    )
+
+    def _refresh_app(_e: ft.ControlEvent | None = None) -> None:
+        from media_studio.relaunch import try_relaunch
+        from media_studio.flet_dialogs import show_snack
+
+        def _err(msg: str) -> None:
+            try:
+                show_snack(page, msg)
+            except Exception:
+                pass
+            try:
+                page.update()
+            except Exception:
+                pass
+
+        def _status(msg: str) -> None:
+            try:
+                show_snack(page, msg)
+            except Exception:
+                pass
+            try:
+                page.update()
+            except Exception:
+                pass
+
+        try_relaunch(page=page, on_status=_status, on_error=_err, delay_s=1.0)
+
+    btn_refresh_app.on_click = _refresh_app
 
     def _open_model_guide(_e: ft.ControlEvent | None = None) -> None:
         from media_studio.flet_model_guide import open_model_guide_dialog
@@ -4220,6 +4400,7 @@ def main(page: ft.Page) -> None:
     header = ft.Row(
         [
             btn_settings,
+            btn_refresh_app,
             btn_model_guide,
             btn_help,
             ft.Text(APP_TITLE, size=FONT_XL, weight=ft.FontWeight.W_700, color=TEXT),
