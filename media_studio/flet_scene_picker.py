@@ -58,6 +58,7 @@ class ScenePicker:
         self._selected_id: str | None = None
         self._compact = bool(compact)
         self._enabled = True
+        self._use_sheet: bool = True  # prefer Scene sheet composite when present
         if show_hint is None:
             show_hint = not self._compact
 
@@ -112,6 +113,27 @@ class ScenePicker:
             max_lines=2,
             visible=False,
         )
+        self.ref_mode = ft.RadioGroup(
+            content=ft.Row(
+                [
+                    ft.Radio(value="sheet", label="Sheet (recommended)"),
+                    ft.Radio(value="hero", label="Hero only"),
+                ],
+                spacing=8,
+                wrap=True,
+            ),
+            value="sheet",
+            on_change=self._on_ref_mode_change,
+        )
+        self.ref_mode_row = ft.Row(
+            [
+                ft.Text("Ref:", size=11, color=TEXT_MUTED, weight=ft.FontWeight.W_600),
+                self.ref_mode,
+            ],
+            spacing=6,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            visible=False,
+        )
         main_row = ft.Row(
             [
                 ft.Stack(
@@ -125,26 +147,22 @@ class ScenePicker:
             spacing=8,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
-        if self._compact:
-            self.root = ft.Column(
-                [main_row, self.disabled_note],
-                spacing=2,
-                tight=True,
-            )
-        else:
-            self.root = ft.Column(
-                [
-                    main_row,
-                    ft.Row(
-                        [self.hint],
-                        spacing=8,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    self.disabled_note,
-                ],
-                spacing=2,
-                tight=True,
-            )
+        self.root = ft.Column(
+            [
+                main_row,
+                self.ref_mode_row,
+                ft.Row(
+                    [self.hint],
+                    spacing=8,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                )
+                if show_hint
+                else ft.Container(height=0, visible=False),
+                self.disabled_note,
+            ],
+            spacing=2,
+            tight=True,
+        )
         self.refresh()
 
     def refresh(self) -> None:
@@ -156,13 +174,12 @@ class ScenePicker:
             choice = find_scene_picker_choice(self._selected_id)
             if choice and choice.has_still:
                 self.dropdown.value = choice.label
-                self._show_thumb(choice.still_path)
-                self.btn_clear.visible = True
-                self.hint.value = choice.label
+                self._apply_choice_ui(choice, notify=False)
             else:
                 self.clear(notify=False)
         else:
             self.dropdown.value = _NONE
+            self.ref_mode_row.visible = False
         try:
             self.page.update()
         except Exception:
@@ -176,6 +193,12 @@ class ScenePicker:
         self.thumb_empty.visible = True
         self.btn_clear.visible = False
         self.hint.value = "Pick a saved scene or variation"
+        self.ref_mode_row.visible = False
+        self._use_sheet = True
+        try:
+            self.ref_mode.value = "sheet"
+        except Exception:
+            pass
         if notify and self.on_clear:
             try:
                 self.on_clear()
@@ -195,15 +218,14 @@ class ScenePicker:
             self.thumb.visible = False
             self.thumb_empty.visible = True
             self.btn_clear.visible = False
+            self.ref_mode_row.visible = False
             return
         choice = find_scene_picker_choice(scene_id)
         if not choice or not choice.has_still:
             return
         self._selected_id = choice.id
         self.dropdown.value = choice.label
-        self._show_thumb(choice.still_path)
-        self.btn_clear.visible = True
-        self.hint.value = choice.label
+        self._apply_choice_ui(choice, notify=False)
 
     def set_enabled(self, enabled: bool, *, reason: str = "") -> None:
         """Enable/disable for single-ref models."""
@@ -231,13 +253,39 @@ class ScenePicker:
         return self._selected_id
 
     @property
+    def use_sheet(self) -> bool:
+        return bool(self._use_sheet)
+
+    @property
     def selected_path(self) -> str | None:
         if not self._selected_id:
             return None
         ch = find_scene_picker_choice(self._selected_id)
-        if ch and ch.has_still:
-            return ch.still_path
-        return None
+        if not ch:
+            return None
+        return ch.ref_path(use_sheet=self._use_sheet)
+
+    def _apply_choice_ui(
+        self, choice: ScenePickerChoice, *, notify: bool
+    ) -> None:
+        has_sheet = bool(choice.has_sheet)
+        self.ref_mode_row.visible = has_sheet
+        if has_sheet:
+            if self.ref_mode.value not in ("sheet", "hero"):
+                self.ref_mode.value = "sheet"
+            self._use_sheet = self.ref_mode.value != "hero"
+        else:
+            self._use_sheet = False
+        path = choice.ref_path(use_sheet=self._use_sheet) or choice.still_path
+        label = choice.ref_label(use_sheet=self._use_sheet)
+        self._show_thumb(path or "")
+        self.btn_clear.visible = True
+        self.hint.value = label
+        if notify and self.on_select and path:
+            try:
+                self.on_select(path, choice)
+            except Exception:
+                pass
 
     def _show_thumb(self, path: str) -> None:
         if path and Path(path).is_file():
@@ -277,13 +325,24 @@ class ScenePicker:
                 pass
             return
         self._selected_id = choice.id
-        self._show_thumb(choice.still_path)
-        self.btn_clear.visible = True
-        self.hint.value = choice.label
+        if choice.has_sheet:
+            self.ref_mode.value = "sheet"
+            self._use_sheet = True
+        self._apply_choice_ui(choice, notify=True)
         try:
-            self.on_select(choice.still_path, choice)
+            self.page.update()
         except Exception:
             pass
+
+    async def _on_ref_mode_change(self, e: ft.ControlEvent) -> None:
+        val = (self.ref_mode.value or "sheet").strip().lower()
+        self._use_sheet = val != "hero"
+        if not self._selected_id:
+            return
+        choice = find_scene_picker_choice(self._selected_id)
+        if choice is None:
+            return
+        self._apply_choice_ui(choice, notify=True)
         try:
             self.page.update()
         except Exception:

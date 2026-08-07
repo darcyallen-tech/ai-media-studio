@@ -126,6 +126,19 @@ Local only (data/scenes.json + data/scene_stills/). Not a Library replacement.
 - **Angle pack** (per scene/variation): Hero / wide (required) + Left(B) / Right(C).
   One-click Generate Left / Right / Reverse (I2I from hero; strong lateral camera
   language; does not overwrite hero). Est. cost + model/quality; preview enlarge.
+- **Make scene sheet** (single-shot location bible — no per-angle pipeline):
+  card button on base + variations. Mode: **From description (T2I)** (default
+  when no still) or **From this still (I2I)** (hero/variation as lock). Helpers
+  (each None): Location type (+ Custom free-text) · Condition · Time/light ·
+  Camera language · Sheet density (Standard/Compact/Rich) + landmarks notes;
+  optional **Include exterior / entrance elevation**; No people / No logos.
+  Default tone: short production-design / location-bible line (no MLS/brochure
+  negation spam). Real-estate tone only if Camera = Documentary/real-estate.
+  **Creative direction for Enhance (optional)** — Enhance-only; rewrites collapsible
+  sheet prompt. Models: Nano Banana 2 suggested + other T2I/I2I. **# sheets** when
+  model allows batch. Per-result: expand · Set as primary sheet · Save as variation
+  (under scene) · Discard. List: sheet thumb + Expand; variations collapse under
+  scene. Preferred R2V/Director ref = primary sheet; picker **Sheet | Hero only**.
 - Scenes support **variations + multi-angle packs** for Director location refs
 - Director multi-ref: **Scene pack Hero only | Full pack** (default Hero only when
   character also bound); single-ref always Hero; ref budget unique-asset based

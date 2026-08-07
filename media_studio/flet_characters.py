@@ -6276,6 +6276,39 @@ class CharactersView:
             color=TEXT_MUTED,
             max_lines=2,
         )
+        # Character sheet thumb + expand (same pattern as Scenes)
+        sheet_path = c.sheet_file() if c.has_sheet() else None
+        sheet_thumb: ft.Control | None = None
+        if sheet_path and Path(sheet_path).is_file():
+            sh_img = ft.Image(
+                src=sheet_path,
+                width=_THUMB,
+                height=_THUMB,
+                fit=ft.BoxFit.COVER,
+                border_radius=6,
+            )
+            sheet_thumb = ft.Column(
+                [
+                    ft.Text("Sheet", size=10, color=TEXT_MUTED),
+                    ft.GestureDetector(
+                        content=sh_img,
+                        on_tap=self._make_preview_path(
+                            sheet_path, f"{c.name} · Character sheet"
+                        ),
+                    ),
+                    ft.TextButton(
+                        content="Expand",
+                        on_click=self._make_preview_path(
+                            sheet_path, f"{c.name} · Character sheet"
+                        ),
+                        style=ft.ButtonStyle(color=ACCENT),
+                        height=28,
+                    ),
+                ],
+                spacing=2,
+                tight=True,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            )
         missing = ft.Text(
             "Still file missing",
             size=FONT_SM,
@@ -6451,9 +6484,15 @@ class CharactersView:
         if costumes_col is not None:
             body.controls.append(costumes_col)
 
+        left_thumbs: list[ft.Control] = [thumb]
+        if sheet_thumb is not None:
+            left_thumbs.append(sheet_thumb)
         return ft.Container(
             content=ft.Row(
-                [thumb, body],
+                [
+                    ft.Row(left_thumbs, spacing=8),
+                    body,
+                ],
                 spacing=12,
                 vertical_alignment=ft.CrossAxisAlignment.START,
             ),

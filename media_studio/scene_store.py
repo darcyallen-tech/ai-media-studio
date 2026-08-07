@@ -227,6 +227,8 @@ class SavedScene:
     # Optional multi-angle pack (each variation keeps its own)
     angle_b_path: str = ""
     angle_c_path: str = ""
+    # Single-shot location-bible / scene reference sheet (composite)
+    sheet_path: str = ""
 
     def display_notes(self) -> str:
         """Secondary list line — short notes only, never a full T2I dump."""
@@ -359,6 +361,21 @@ class SavedScene:
     def is_base(self) -> bool:
         return not self.is_variation()
 
+    def has_sheet(self) -> bool:
+        p = self.sheet_file()
+        return bool(p)
+
+    def sheet_file(self) -> str | None:
+        return self._resolve_path(self.sheet_path)
+
+    def preferred_ref_path(self, *, use_sheet: bool = True) -> str | None:
+        """R2V / Director preferred still: composite sheet when present."""
+        if use_sheet:
+            sh = self.sheet_file()
+            if sh:
+                return sh
+        return self.resolved_still_path()
+
     def aspect_badge(self) -> str:
         """Short badge for list thumbs (e.g. 16:9)."""
         a = normalize_scene_aspect(self.aspect)
@@ -467,6 +484,7 @@ def _from_dict(item: dict[str, Any]) -> SavedScene | None:
         parent_id=parent_id,
         angle_b_path=str(item.get("angle_b_path") or "").strip(),
         angle_c_path=str(item.get("angle_c_path") or "").strip(),
+        sheet_path=str(item.get("sheet_path") or "").strip(),
     )
 
 
@@ -486,6 +504,8 @@ def _to_dict(s: SavedScene) -> dict[str, Any]:
         d["angle_b_path"] = s.angle_b_path
     if (s.angle_c_path or "").strip():
         d["angle_c_path"] = s.angle_c_path
+    if (s.sheet_path or "").strip():
+        d["sheet_path"] = s.sheet_path
     return d
 
 
@@ -634,6 +654,7 @@ def add_scene(
         parent_id=pid,
         angle_b_path="",
         angle_c_path="",
+        sheet_path="",
     )
     scenes = load_scenes()
     scenes.append(entry)
@@ -704,12 +725,64 @@ def update_scene(
         parent_id=found.parent_id,
         angle_b_path=found.angle_b_path,
         angle_c_path=found.angle_c_path,
+        sheet_path=found.sheet_path,
     )
     scenes[idx] = updated
     save_scenes(scenes)
     # Drop previous owned still if replaced
     if still_path is not None and old_still and old_still != new_still:
         _delete_owned(old_still)
+    return updated
+
+
+def set_scene_sheet(
+    scene_id: str,
+    sheet_path: str | Path | None,
+    *,
+    clear: bool = False,
+) -> SavedScene | None:
+    """
+    Store or clear the composite scene reference sheet.
+
+    Does not modify hero / angle pack stills.
+    """
+    scenes = load_scenes()
+    found: SavedScene | None = None
+    idx = -1
+    for i, s in enumerate(scenes):
+        if s.id == scene_id:
+            found = s
+            idx = i
+            break
+    if found is None or idx < 0:
+        return None
+    old = (found.sheet_path or "").strip()
+    new_sheet = ""
+    if not clear and sheet_path is not None and str(sheet_path).strip():
+        src = Path(sheet_path)
+        if not src.is_file():
+            raise FileNotFoundError(f"Sheet image missing: {src}")
+        new_sheet = _store_path(
+            src, scene_id=found.id, name=f"{found.name}-sheet"
+        )
+    updated = SavedScene(
+        id=found.id,
+        name=found.name,
+        still_path=found.still_path,
+        notes=found.notes,
+        created_at=found.created_at,
+        updated_at=_now_iso(),
+        locked=found.locked,
+        aspect=found.aspect,
+        parent_id=found.parent_id,
+        angle_b_path=found.angle_b_path,
+        angle_c_path=found.angle_c_path,
+        sheet_path=new_sheet,
+    )
+    scenes[idx] = updated
+    save_scenes(scenes)
+    if old and old != new_sheet:
+        _delete_owned(old)
     return updated
 
 
@@ -784,6 +857,7 @@ def set_scene_angle(
         parent_id=found.parent_id,
         angle_b_path=ab or "",
         angle_c_path=ac or "",
+        sheet_path=found.sheet_path,
     )
     scenes[idx] = updated
     save_scenes(scenes)
@@ -919,6 +993,7 @@ def set_scene_locked(scene_id: str, locked: bool) -> SavedScene | None:
             parent_id=s.parent_id,
             angle_b_path=s.angle_b_path,
             angle_c_path=s.angle_c_path,
+            sheet_path=s.sheet_path,
         )
         save_scenes(scenes)
         return scenes[i]
@@ -985,14 +1060,14 @@ def delete_scene(
     save_scenes(keep)
     keep_paths: set[str] = set()
     for s in keep:
-        for raw in (s.still_path, s.angle_b_path, s.angle_c_path):
+        for raw in (s.still_path, s.angle_b_path, s.angle_c_path, s.sheet_path):
             try:
                 if raw:
                     keep_paths.add(str(Path(raw).resolve()))
             except OSError:
                 pass
     for s in to_wipe:
-        for raw in (s.still_path, s.angle_b_path, s.angle_c_path):
+        for raw in (s.still_path, s.angle_b_path, s.angle_c_path, s.sheet_path):
             try:
                 p = str(Path(raw).resolve()) if raw else ""
                 if p and p not in keep_paths:
@@ -1099,6 +1174,393 @@ def t2i_scene_model_labels() -> list[str]:
     from media_studio.studio_modality import models_for_image_modality
 
     return models_for_image_modality("t2i") or ["Flux 2 Pro (T2I)"]
+
+
+# ---------------------------------------------------------------------------
+# Scene reference sheet (single-shot location bible) — no per-angle pipeline
+# ---------------------------------------------------------------------------
+
+SHEET_HELPER_NONE = HELPER_NONE
+
+SHEET_LOCATION_TYPES: list[str] = with_none(
+    [
+        "Urban street",
+        "Residential interior",
+        "Commercial interior",
+        "Industrial",
+        "Park/exterior",
+        "Custom",
+    ]
+)
+SHEET_CONDITIONS: list[str] = with_none(
+    [
+        "Pristine",
+        "Lived-in",
+        "Damaged/aftermath",
+        "Under construction",
+        "Abandoned",
+        "Custom",
+    ]
+)
+SHEET_TIME_LIGHT: list[str] = with_none(
+    [
+        "Day clear",
+        "Overcast",
+        "Golden hour",
+        "Night practicals",
+        "Dusk",
+        "Custom",
+    ]
+)
+SHEET_CAMERA_LANG: list[str] = with_none(
+    [
+        "Documentary/real-estate",
+        "Cinematic wide",
+        "Architectural elevation",
+        "Custom",
+    ]
+)
+# Density always has a real value (no skip) — default Standard
+SHEET_DENSITY_OPTS: tuple[str, ...] = ("Standard", "Compact", "Rich")
+
+# Default baked style — short once; no long MLS/brochure negation spam
+SHEET_DEFAULT_STYLE = (
+    "production design / location reference sheet — clear, consistent, photoreal panels"
+)
+
+_SHEET_DENSITY_PANELS: dict[str, str] = {
+    "Compact": (
+        "Grid panels (compact, 4–5 cells): Overview/plan, North, South/East composite "
+        "or two cardinals, and Details/materials. Keep labels small and clear."
+    ),
+    "Standard": (
+        "Grid panels (standard): Overview/plan, North, South, East, West, and "
+        "Details/materials. Labeled cells on a neutral presentation background."
+    ),
+    "Rich": (
+        "Grid panels (rich, 7–9 cells): Overview/plan, North, South, East, West, "
+        "Details/materials, plus optional overhead inset and damage/material callouts. "
+        "Still one single still — not separate files."
+    ),
+}
+
+# Explicit camera-language phrasing — only when user selects that option
+_SHEET_CAMERA_LANG_LINES: dict[str, str] = {
+    "Documentary/real-estate": (
+        "Camera language (user-selected): documentary / real-estate photographic "
+        "clarity — clean informative frames of the location. Still a location "
+        "reference sheet, not a sales listing brochure."
+    ),
+    "Cinematic wide": (
+        "Camera language (user-selected): cinematic wide establishing language — "
+        "dramatic but coherent multi-panel documentation of one place."
+    ),
+    "Architectural elevation": (
+        "Camera language (user-selected): architectural elevation / plan-oriented "
+        "language — clear orthographic-leaning or elevation-style documentation panels."
+    ),
+}
+
+# Phrases that must not appear unless user asked (camera = Documentary/real-estate
+# or creative direction). Used by tests and Enhance guidance.
+_SHEET_REAL_ESTATE_BAN: tuple[str, ...] = (
+    "listing photo",
+    "mls",
+    "real-estate brochure",
+    "real estate brochure",
+    "staging language",
+    "hero listing",
+    "listing shot",
+    "for sale",
+    "open house",
+    "property marketing",
+    "zillow",
+    "redfin",
+)
+
+
+def preferred_scene_sheet_model(*, mode: str = "t2i") -> str:
+    """Suggest Nano Banana 2 when registered; else Seedream / Flux."""
+    m = (mode or "t2i").strip().lower()
+    if m in ("i2i", "edit", "from_still"):
+        labs = scene_edit_model_labels()
+        prefer = (
+            "nano banana 2",
+            "nano banana pro",
+            "seedream 5 pro",
+            "flux 2 pro",
+            "flux 2 max",
+        )
+        low_map = {lab.lower(): lab for lab in labs}
+        for key in prefer:
+            for lab_l, lab in low_map.items():
+                if key in lab_l:
+                    return lab
+        return labs[0] if labs else preferred_scene_edit_model()
+    labs = t2i_scene_model_labels()
+    prefer = (
+        "nano banana 2",
+        "nano banana pro",
+        "seedream 5 pro",
+        "flux 2 pro",
+        "flux 2 max",
+        "flux 2",
+    )
+    low_map = {lab.lower(): lab for lab in labs}
+    for key in prefer:
+        for lab_l, lab in low_map.items():
+            if key in lab_l:
+                return lab
+    return labs[0] if labs else "Flux 2 Pro (T2I)"
+
+
+def scene_sheet_model_labels(*, mode: str = "t2i") -> list[str]:
+    m = (mode or "t2i").strip().lower()
+    if m in ("i2i", "edit", "from_still"):
+        return scene_edit_model_labels()
+    labs = t2i_scene_model_labels()
+    # Put preferred first
+    pref = preferred_scene_sheet_model(mode="t2i")
+    if pref in labs:
+        return [pref] + [x for x in labs if x != pref]
+    return labs
+
+
+def _sheet_camera_lang_line(camera_lang: str | None) -> str | None:
+    """
+    Explicit camera-language sentence, or None for neutral production-design only.
+
+    Documentary/real-estate appears ONLY when the user selected that option.
+    """
+    cam = active_helper(camera_lang)
+    if not cam or cam == "Custom":
+        return None
+    return _SHEET_CAMERA_LANG_LINES.get(cam)
+
+
+def assemble_scene_sheet_brief(
+    *,
+    location_type: str | None = None,
+    condition: str | None = None,
+    time_light: str | None = None,
+    camera_lang: str | None = None,
+    density: str | None = None,
+    landmarks: str | None = None,
+    custom_location: str | None = None,
+    include_exterior_entrance: bool = False,
+    no_people: bool = True,
+    no_logos: bool = True,
+) -> str:
+    """Merge helpers + free-text into a short location brief for the sheet prompt."""
+    bits: list[str] = []
+    loc = active_helper(location_type)
+    cond = active_helper(condition)
+    tl = active_helper(time_light)
+    dens = (density or "Standard").strip() or "Standard"
+    if dens not in SHEET_DENSITY_OPTS:
+        dens = "Standard"
+    note = (landmarks or "").strip()
+    custom = (custom_location or "").strip()
+
+    if loc and loc != "Custom":
+        bits.append(loc.lower())
+    elif loc == "Custom":
+        if custom:
+            bits.append(f"custom location: {custom.rstrip('.')}")
+        elif note:
+            bits.append("custom location (see landmarks)")
+        else:
+            bits.append("custom location")
+    if cond and cond != "Custom":
+        bits.append(f"condition: {cond.lower()}")
+    elif cond == "Custom" and note:
+        bits.append("custom condition (see landmarks)")
+    if tl and tl != "Custom":
+        bits.append(f"time/light: {tl.lower()}")
+    # Camera language is applied as a dedicated line in assemble_scene_sheet_prompt
+    # — do not dump raw helper name here as marketing tone.
+    if include_exterior_entrance:
+        bits.append("include exterior / entrance elevation panel when relevant")
+    if note:
+        bits.append(note.rstrip("."))
+    if no_people:
+        bits.append("no people visible")
+    if no_logos:
+        bits.append("no readable logos or text")
+    bits.append(f"sheet density: {dens.lower()}")
+    if not bits:
+        return ""
+    text = ", ".join(bits)
+    return text[0].upper() + text[1:] + ("." if not text.endswith(".") else "")
+
+
+def assemble_scene_sheet_prompt(
+    *,
+    mode: str = "t2i",
+    location_type: str | None = None,
+    condition: str | None = None,
+    time_light: str | None = None,
+    camera_lang: str | None = None,
+    density: str | None = None,
+    landmarks: str | None = None,
+    custom_location: str | None = None,
+    include_exterior_entrance: bool = False,
+    no_people: bool = True,
+    no_logos: bool = True,
+    scene_name: str = "",
+) -> str:
+    """
+    Single-still scene reference sheet prompt (location bible).
+
+    Always one composite grid — no multi-step angle generation.
+    Does **not** take creative_direction (Enhance-only; never inject here).
+
+    Default tone is production-design / location reference. Documentary /
+    real-estate wording appears only when Camera language is that option.
+    """
+    dens = (density or "Standard").strip() or "Standard"
+    if dens not in SHEET_DENSITY_OPTS:
+        dens = "Standard"
+    panels = _SHEET_DENSITY_PANELS.get(dens, _SHEET_DENSITY_PANELS["Standard"])
+    if include_exterior_entrance:
+        panels += (
+            " Also include an exterior / entrance elevation panel when the location "
+            "has a street-facing or entry facade."
+        )
+    brief = assemble_scene_sheet_brief(
+        location_type=location_type,
+        condition=condition,
+        time_light=time_light,
+        camera_lang=camera_lang,
+        density=dens,
+        landmarks=landmarks,
+        custom_location=custom_location,
+        include_exterior_entrance=include_exterior_entrance,
+        no_people=no_people,
+        no_logos=no_logos,
+    )
+    m = (mode or "t2i").strip().lower()
+    is_i2i = m in ("i2i", "edit", "from_still", "from this still")
+
+    core = (
+        "Create a SINGLE still: a clean professional multi-panel location reference "
+        "sheet (scene sheet) on a neutral presentation background. "
+        f"Style: {SHEET_DEFAULT_STYLE}. "
+        f"{panels} "
+        "Lock architecture, materials, damage state, and lighting direction across "
+        "ALL panels — same place documented consistently. Small clear labels under "
+        "each panel (Overview/plan, North, South, East, West, Details/materials as "
+        "present). Do not redesign the location between panels. No text logos on "
+        "architecture beyond panel labels. Photoreal."
+    )
+    if is_i2i:
+        mode_line = (
+            "Image-to-image DOCUMENTATION of the provided reference still only. "
+            "The source still is AUTHORITATIVE — document this exact room/street; "
+            "do not restyle, retheme, or invent a different location. Expand into "
+            "labeled multi-view panels of the same place."
+        )
+    else:
+        mode_line = (
+            "Text-to-image: invent ONE coherent location from the brief below, "
+            "then document it consistently as a labeled multi-panel sheet."
+        )
+    bits = [core, mode_line]
+    cam_line = _sheet_camera_lang_line(camera_lang)
+    if cam_line:
+        bits.append(cam_line)
+    # No long negation spam when camera is None — default style line is enough
+    if brief:
+        bits.append(f"Location brief: {brief}")
+    if (scene_name or "").strip():
+        bits.append(f"Scene name (soft): {scene_name.strip()}.")
+    return " ".join(bits)
+
+
+def scene_sheet_enhance_guidance(
+    *,
+    camera_lang: str | None = None,
+    mode: str = "t2i",
+) -> str:
+    """
+    Guidance for Grok Enhance — short. Location-bible framing by default.
+
+    Real-estate tone only if Camera language is Documentary/real-estate
+    (or user asks in creative_direction). Avoid long NOT MLS/brochure lists.
+    """
+    cam = active_helper(camera_lang)
+    allow_re = bool(cam and "real-estate" in cam.lower())
+    m = (mode or "t2i").strip().lower()
+    is_i2i = m in ("i2i", "edit", "from_still")
+    bits = [
+        "Rewrite into one model-ready prompt for a SINGLE multi-panel location "
+        f"reference sheet. Style: {SHEET_DEFAULT_STYLE}. "
+        "Weave helpers and creative_direction into optimized_prompt only — "
+        "do not leave creative_direction as a separate field. "
+        "Keep panel structure; lock architecture/materials/damage/lighting. Photoreal.",
+    ]
+    if is_i2i:
+        bits.append("I2I: source still is authoritative — document only; do not restyle.")
+    else:
+        bits.append("T2I: invent one coherent location then document it consistently.")
+    if allow_re:
+        bits.append(
+            "User selected Documentary/real-estate — that photographic clarity is allowed."
+        )
+    if cam and "cinematic" in cam.lower():
+        bits.append("Honor cinematic wide language.")
+    if cam and "architectural" in cam.lower():
+        bits.append("Honor architectural elevation / plan language.")
+    return " ".join(bits)
+
+
+def scene_sheet_max_images(model_label: str | None, *, mode: str = "t2i") -> int:
+    """Max batch size for scene sheet generate (1 if unknown)."""
+    m = (mode or "t2i").strip().lower()
+    try:
+        if m in ("i2i", "edit", "from_still"):
+            from media_studio.fal.models import resolve_image_edit_model
+
+            spec = resolve_image_edit_model(model_label)
+            if spec:
+                return max(1, int(getattr(spec, "max_num_images", 1) or 1))
+        else:
+            from media_studio.vision_registry import find_vision_model
+
+            spec = find_vision_model(model_label, "text_to_image")
+            if spec:
+                return max(1, int(getattr(spec, "max_num_images", 1) or 1))
+    except Exception:
+        pass
+    return 1
+
+
+def prompt_has_banned_real_estate(text: str | None) -> bool:
+    """True if prompt contains marketing/listing phrases (for smoke tests)."""
+    low = (text or "").lower()
+    return any(b in low for b in _SHEET_REAL_ESTATE_BAN)
+
+
+def estimate_scene_sheet_cost(
+    *,
+    model_label: str | None = None,
+    mode: str = "t2i",
+    quality: str | None = None,
+) -> str:
+    m = (mode or "t2i").strip().lower()
+    if m in ("i2i", "edit", "from_still"):
+        try:
+            from media_studio.character_store import estimate_costume_swap_cost
+
+            return estimate_costume_swap_cost(
+                1, model_key=model_label or preferred_scene_sheet_model(mode="i2i")
+            )
+        except Exception:
+            pass
+    return estimate_scene_t2i_cost(
+        t2i_label=model_label or preferred_scene_sheet_model(mode="t2i"),
+        quality=quality,
+    )
 
 
 def scene_aspect_ui_options(model_label: str | None = None) -> list[str]:
@@ -1235,58 +1697,104 @@ def prune_unlocked_scenes(*, retention_days: int) -> dict[str, int]:
 class ScenePickerChoice:
     id: str
     label: str
-    still_path: str
+    still_path: str  # preferred (sheet when present, else hero)
     is_variation: bool = False
     parent_id: str | None = None
     aspect: str = ""
+    hero_path: str = ""
+    sheet_path: str = ""
 
     @property
     def has_still(self) -> bool:
         try:
-            return bool(self.still_path) and Path(self.still_path).is_file()
+            p = self.ref_path(use_sheet=True) or self.still_path
+            return bool(p) and Path(p).is_file()
         except OSError:
             return False
+
+    @property
+    def has_sheet(self) -> bool:
+        p = (self.sheet_path or "").strip()
+        try:
+            return bool(p) and Path(p).is_file()
+        except OSError:
+            return False
+
+    def ref_path(self, *, use_sheet: bool = True) -> str | None:
+        if use_sheet and self.has_sheet:
+            try:
+                return str(Path(self.sheet_path).resolve())
+            except OSError:
+                return self.sheet_path
+        for cand in (self.hero_path, self.still_path):
+            p = (cand or "").strip()
+            if p:
+                try:
+                    if Path(p).is_file():
+                        return str(Path(p).resolve())
+                except OSError:
+                    return p
+        return None
+
+    def ref_label(self, *, use_sheet: bool = True) -> str:
+        base = (self.label or "").strip() or "Scene"
+        if use_sheet and self.has_sheet:
+            return f"{base} sheet"
+        return base
 
 
 def scene_picker_choices() -> list[ScenePickerChoice]:
     """
     Flat list for dropdowns: bases first, then each variation.
     Labels use display_name (user Name), not long generate prompts.
+    Prefer composite scene sheet when present (single ref).
     """
     out: list[ScenePickerChoice] = []
+
+    def _choice(
+        s: SavedScene,
+        *,
+        label: str,
+        is_variation: bool,
+        parent_id: str | None = None,
+    ) -> ScenePickerChoice | None:
+        hero = s.resolved_still_path()
+        if not hero:
+            return None
+        sheet = s.sheet_file() or ""
+        preferred = sheet if sheet else hero
+        return ScenePickerChoice(
+            id=s.id,
+            label=label,
+            still_path=preferred,
+            is_variation=is_variation,
+            parent_id=parent_id,
+            aspect=s.aspect_badge() or "",
+            hero_path=hero,
+            sheet_path=sheet,
+        )
+
     for base in list_base_scenes():
-        bp = base.resolved_still_path()
-        if bp:
-            out.append(
-                ScenePickerChoice(
-                    id=base.id,
-                    label=base.display_name(),
-                    still_path=bp,
-                    is_variation=False,
-                    aspect=base.aspect_badge() or "",
-                )
-            )
+        ch = _choice(base, label=base.display_name(), is_variation=False)
+        if ch:
+            out.append(ch)
         for kid in list_scene_variations(base.id):
-            kp = kid.resolved_still_path()
-            if not kp:
-                continue
-            # Child display name; nest under parent if not already prefixed
             kname = kid.display_name()
             bname = base.display_name()
-            if bname and not kname.lower().startswith(bname.lower()[: min(12, len(bname))]):
+            if bname and not kname.lower().startswith(
+                bname.lower()[: min(12, len(bname))]
+            ):
                 label = f"{bname} – {kname}"
             else:
                 label = kname
-            out.append(
-                ScenePickerChoice(
-                    id=kid.id,
-                    label=label,
-                    still_path=kp,
-                    is_variation=True,
-                    parent_id=base.id,
-                    aspect=kid.aspect_badge() or base.aspect_badge() or "",
-                )
+            kch = _choice(
+                kid,
+                label=label,
+                is_variation=True,
+                parent_id=base.id,
             )
+            if kch:
+                out.append(kch)
     return out
 
 

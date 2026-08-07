@@ -12,6 +12,17 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### Scene reference sheets (single-shot) + multi-gen variants
+- **Make scene sheet**: T2I/I2I one-shot location bible; helpers + exterior toggle
+- Tone: short production-design line (no MLS/brochure spam); RE only if Camera = Documentary/real-estate
+- Enhance-only creative direction; collapsible sheet prompt so Generate stays on-screen
+- **# sheets** batch when model allows; per-result expand / set primary / save as
+  variation under scene / discard
+- List: Scene sheet **thumbnail + Expand** (opacity vs hero when source exists);
+  same Character sheet thumb+Expand on Characters tab
+- Preferred R2V/Director ref = primary sheet; Sheet | Hero only toggle
+- Smoke: `python scripts/smoke_scene_sheet.py`
+
 ### Character sheet angles (Phase 1) + composite sheet (Phase 2)
 - Optional pack slots beyond Front/Side/Close-up: **Back · ¾ front · ¾ back · Top**
 - **Generate sheet angles** on base + costume rows (needs Front): checklist, multi-ref

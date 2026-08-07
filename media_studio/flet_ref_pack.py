@@ -297,9 +297,18 @@ class RefPackPanel:
                         f"{tag} = character identity / likeness for “{lab}”."
                     )
             elif it.role == "scene":
-                lines.append(
-                    f"{tag} = scene / location plate for “{it.label}”."
-                )
+                lab = it.label or ""
+                if lab.lower().endswith(" sheet") or lab.lower().startswith(
+                    "scene sheet"
+                ):
+                    lines.append(
+                        f"{tag} = {lab} — multi-panel location-bible sheet as one ref "
+                        "(match architecture/materials/lighting; do not invent a new place)."
+                    )
+                else:
+                    lines.append(
+                        f"{tag} = scene / location plate for “{lab}”."
+                    )
             else:
                 lines.append(f"{tag} = prop / object ref “{it.label}”.")
         lines.append(
@@ -459,9 +468,36 @@ class RefPackPanel:
         self._notify()
 
     def _set_scene(self, index: int, path: str, choice: Any) -> None:
-        label = getattr(choice, "label", None) or Path(path).name
+        """Single scene ref — prefer composite Scene sheet when picker selects it."""
         sid = getattr(choice, "id", None)
-        p = str(Path(path).resolve()) if path else ""
+        p = (path or "").strip()
+        label = ""
+        try:
+            if hasattr(choice, "ref_path") and hasattr(choice, "ref_label"):
+                use_sheet = True
+                if 0 <= index < len(self._scene_pickers):
+                    pick = self._scene_pickers[index]
+                    use_sheet = bool(getattr(pick, "use_sheet", True))
+                p = choice.ref_path(use_sheet=use_sheet) or p
+                label = choice.ref_label(use_sheet=use_sheet)
+        except Exception:
+            pass
+        if not label:
+            label = getattr(choice, "label", None) or (
+                Path(p).name if p else "Scene"
+            )
+            try:
+                sp = getattr(choice, "sheet_path", "") or ""
+                if p and sp and Path(p).resolve() == Path(sp).resolve():
+                    base = getattr(choice, "label", None) or "Scene"
+                    label = f"{base} sheet"
+            except OSError:
+                pass
+        if p:
+            try:
+                p = str(Path(p).resolve())
+            except OSError:
+                pass
         while len(self._scenes) <= index:
             self._scenes.append(RefItem("scene", "", "", None))
         self._scenes[index] = RefItem("scene", p, label, sid)

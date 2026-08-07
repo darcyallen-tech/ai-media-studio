@@ -125,7 +125,7 @@ Dashboards:
 | **Frame Editor** | Aleph 2.0 keyframe edit via **Runware** + optional fal 1080p proxy |
 | **Audio** | Music, SFX, Ambience, VO, Voice clone, **Video → SFX** |
 | **Characters** | Identity pack (+ sheet angles Back/¾/Top + **Make sheet** composite), costume children, bg-remove, lock; **Scene Placer**; app-wide **Character picker** |
-| **Scenes** | Location plates (T2I/upload), variations, multi-angle packs; handoff to **Scene Placer** |
+| **Scenes** | Location plates, variations, **Make scene sheet** (batch + primary/variation accept, in-tab expand); **Scene Placer** |
 | **Library** | History; filters including **From Resolve**; Send to Studio / Tools / Frame Editor / Resolve |
 
 ### Creative Vision highlights
