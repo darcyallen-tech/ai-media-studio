@@ -67,6 +67,58 @@ class AspectPolicy:
 # OMIT list (strict): FLUX 3 pure I2V + Kling I2V only.
 # Seedance R2V ACCEPTS aspect_ratio (auto | ratios) — SEND, not omit.
 ENDPOINT_ASPECT_POLICIES: tuple[tuple[str, AspectPolicy], ...] = (
+    # --- SEND: Seedance 2.5 (more specific path first) ---
+    (
+        "bytedance/seedance-2.5/reference-to-video",
+        AspectPolicy(
+            kind="send",
+            allowed=(
+                "auto",
+                "21:9",
+                "16:9",
+                "4:3",
+                "1:1",
+                "3:4",
+                "9:16",
+            ),
+            default="auto",
+            note="Seedance 2.5 R2V aspect enum (default auto).",
+        ),
+    ),
+    (
+        "bytedance/seedance-2.5/image-to-video",
+        AspectPolicy(
+            kind="send",
+            allowed=(
+                "auto",
+                "21:9",
+                "16:9",
+                "4:3",
+                "1:1",
+                "3:4",
+                "9:16",
+            ),
+            default="auto",
+            note="Seedance 2.5 I2V aspect enum (default auto).",
+        ),
+    ),
+    (
+        "bytedance/seedance-2.5/text-to-video",
+        AspectPolicy(
+            kind="send",
+            allowed=(
+                "auto",
+                "21:9",
+                "16:9",
+                "4:3",
+                "1:1",
+                "3:4",
+                "9:16",
+            ),
+            default="auto",
+            note="Seedance 2.5 T2V aspect enum (default auto).",
+        ),
+    ),
     # --- SEND: Seedance 2.0 Reference-to-Video (standard + fast) — fal docs ---
     (
         "bytedance/seedance-2.0/fast/reference-to-video",
@@ -496,11 +548,21 @@ SEEDANCE_R2V_ASPECTS: frozenset[str] = frozenset(
 
 
 def is_seedance_reference_endpoint(endpoint: str | None) -> bool:
-    """True for Seedance 2.0 reference-to-video (standard or fast)."""
+    """True for Seedance 2.0/2.5 reference-to-video (standard or fast)."""
     ep = (endpoint or "").strip().lower()
     if not ep:
         return False
     return "seedance" in ep and "reference-to-video" in ep
+
+
+def is_seedance_25_endpoint(endpoint: str | None) -> bool:
+    ep = (endpoint or "").strip().lower()
+    return "seedance-2.5" in ep
+
+
+def seedance_duration_max(endpoint: str | None) -> int:
+    """2.5 allows up to 30s; 2.0/fast cap at 15."""
+    return 30 if is_seedance_25_endpoint(endpoint) else 15
 
 
 def sanitize_seedance_r2v_arguments(
@@ -512,7 +574,7 @@ def sanitize_seedance_r2v_arguments(
     Allowlist + coerce types for Seedance R2V / fast R2V / V2V ref-edit.
 
     - Drop negative_prompt and any non-schema keys
-    - duration → str ("4".."15" or "auto"), never int
+    - duration → str ("4".."15" or "auto" for 2.0; "4".."30" or "auto" for 2.5)
     - resolution ∈ {480p, 720p}; map 1080p/4k → 720p
     - aspect_ratio default "auto" if missing/empty; never omit for this endpoint
     """
@@ -521,6 +583,7 @@ def sanitize_seedance_r2v_arguments(
 
     raw = dict(arguments or {})
     out: dict[str, Any] = {}
+    dur_max = seedance_duration_max(endpoint)
 
     # Prompt
     if raw.get("prompt") is not None:
@@ -546,7 +609,7 @@ def sanitize_seedance_r2v_arguments(
         else:
             try:
                 n = int(round(float(d_s)))
-                n = max(4, min(15, n))
+                n = max(4, min(dur_max, n))
                 out["duration"] = str(n)
             except (TypeError, ValueError):
                 out["duration"] = "5"

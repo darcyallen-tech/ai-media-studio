@@ -88,6 +88,45 @@ _BEST_FOR: dict[str, BestFor] = {
         "longer / higher-res video when needed",
         "Seedance for longer or higher-res motion when Kling length/res is limiting.",
     ),
+    "seedance 2.5": BestFor(
+        "long take + high ref count R2V / action",
+        "Seedance 2.5: up to 30s single-pass, up to 50 multimodal refs (Character/Scene sheets), "
+        "native audio, strong action. Token est. ~$0.0214/1k tokens. "
+        "Limitation: partner photoreal-face filter.",
+    ),
+    "seedance 2.5 reference": BestFor(
+        "long take + high ref count R2V / action",
+        "Seedance 2.5 R2V — long takes, many Character/Scene/Prop refs (sheets bind as real image_urls), "
+        "action-friendly. Limitation: photoreal face / partner filter.",
+    ),
+    "seedance 2.5 · reference-to-video": BestFor(
+        "long take + high ref count R2V / action",
+        "Seedance 2.5 R2V — long takes, high ref count, action. Photoreal face filter applies.",
+    ),
+    "seedance 2.5 i2v": BestFor(
+        "long still→motion (up to 30s) with native audio",
+        "Seedance 2.5 I2V: animate a still up to 30s, optional end frame, native audio.",
+    ),
+    "seedance 2.5 t2v": BestFor(
+        "long cinematic T2V (up to 30s)",
+        "Seedance 2.5 T2V: up to 30s single-pass with native audio and strong prompt adherence.",
+    ),
+    "seedance 2.5 · text→video": BestFor(
+        "long cinematic T2V (up to 30s)",
+        "Seedance 2.5 T2V: up to 30s single-pass with native audio.",
+    ),
+    "seedance 2.5 · image→video": BestFor(
+        "long still→motion (up to 30s) with native audio",
+        "Seedance 2.5 I2V: animate a still up to 30s with native audio.",
+    ),
+    "video · seedance 2.5 – reference-to-video": BestFor(
+        "long take + high ref count R2V / action",
+        "Studio Seedance 2.5 R2V — long takes, many refs, action. Photoreal face filter.",
+    ),
+    "video · seedance 2.5 – image-to-video": BestFor(
+        "long still→motion (up to 30s) with native audio",
+        "Studio Seedance 2.5 I2V — up to 30s, native audio.",
+    ),
     "veo 3.1": BestFor(
         "top cinematic T2V quality",
         "Highest quality text→video; expensive — check est. cost (rate × seconds).",

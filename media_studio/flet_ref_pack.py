@@ -82,6 +82,10 @@ def max_character_slots(model_choice: str | None, *, mode: str = "") -> int:
         return 1
     if "omni" in raw or "h3" in raw:
         return 9
+    if "seedance" in raw and "2.5" in raw and (
+        "reference" in raw or "r2v" in raw or m in ("r2v", "reference_to_video")
+    ):
+        return 12  # 2.5 allows many image refs (total multimodal ≤50)
     if "seedance" in raw and "reference" in raw:
         return 9
     if "grok" in raw and "reference" in raw:
@@ -100,6 +104,10 @@ def max_scene_slots(model_choice: str | None, *, mode: str = "") -> int:
     m = (mode or "").lower()
     if "omni" in raw or "h3" in raw:
         return 3
+    if "seedance" in raw and "2.5" in raw and (
+        "reference" in raw or "r2v" in raw or m in ("r2v", "reference_to_video")
+    ):
+        return 4
     if "seedance" in raw and "reference" in raw:
         return 2
     if "grok" in raw and "reference" in raw:
@@ -113,6 +121,8 @@ def max_prop_slots(model_choice: str | None, *, mode: str = "") -> int:
     raw = (model_choice or "").lower()
     if "omni" in raw or "h3" in raw:
         return 4
+    if "seedance" in raw and "2.5" in raw:
+        return 6
     if m := (mode or "").lower():
         if m in ("r2i", "reference_to_image", "r2v", "reference_to_video"):
             return 3

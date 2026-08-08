@@ -2189,7 +2189,8 @@ class ToolsView:
             title="Sky / Weather",
             description=(
                 "Still sky swap or V2V sky/weather on exterior clips. "
-                "Roofline and architecture locked."
+                "Optional sky reference still; roofline and architecture locked. "
+                "Still result → Use for V2V sets that plate as sky ref."
             ),
             image_labels=sky_labels(),
             video_labels=video_sky_labels(),
@@ -2204,6 +2205,9 @@ class ToolsView:
                 "time_of_day": self.sky_time.value,
             },
             button_label="Apply sky",
+            enable_v2v_ref=True,
+            v2v_ref_label="Sky reference",
+            suggest_kling_on_video=True,
         )
         self.amenity_dd = styled_dropdown(
             label_text="Amenity",
@@ -2516,10 +2520,24 @@ class ToolsView:
                     *,
                     tool_label: str = "",
                 ) -> None:
+                    is_vid = False
+                    try:
+                        is_vid = Path(result).suffix.lower() in {
+                            ".mp4",
+                            ".mov",
+                            ".webm",
+                            ".m4v",
+                            ".avi",
+                            ".mkv",
+                        }
+                    except Exception:
+                        is_vid = False
                     self.result_pane.show(
                         source,
                         result,
                         tool_label=tool_label or label,
+                        # Soft “Upscale this clip?” after V2V / any video tool result
+                        offer_upscale_prompt=is_vid,
                     )
 
                 return _cb

@@ -40,16 +40,25 @@ def test_likeness_reason_maps() -> None:
     p = detect_content_policy_violation(
         "partner_validation_failed: likeness of real people",
         context="Generate",
+        model_hint="Seedance 2.5 · Reference-to-Video",
     )
     assert p is not None
     assert p.kind == "likeness"
     assert "stylized" in p.short_reason.lower() or "character-sheet" in p.short_reason.lower()
+    assert "seedance" in p.short_reason.lower()
+    p_n = detect_content_policy_violation(
+        "partner_validation_failed: likeness of real people",
+        context="Generate",
+        model_hint="FLUX 3 · Identity ref (R2V)",
+    )
+    assert p_n is not None
+    assert "seedance" not in p_n.short_reason.lower()
     fe = friendly_error(
         "partner_validation_failed: likeness of real people",
         context="Generate",
     )
     assert "real people" in fe.lower() or "stylized" in fe.lower()
-    print("OK likeness map + friendly_error")
+    print("OK likeness map + friendly_error (Seedance vs neutral)")
 
 
 def test_banner_toggle() -> None:
@@ -62,10 +71,18 @@ def test_banner_toggle() -> None:
         b, endpoint="bytedance/seedance-2.0/reference-to-video"
     )
     assert b.visible is True
+    assert set_seedance_likeness_banner_visible(
+        b, endpoint="bytedance/seedance-2.5/reference-to-video"
+    )
+    assert b.visible is True
     assert not set_seedance_likeness_banner_visible(b, endpoint="fal-ai/flux-pro")
     assert b.visible is False
     assert set_seedance_likeness_banner_visible(
         b, model_choice="Video · Seedance 2.0 – Reference-to-Video"
+    )
+    assert b.visible is True
+    assert set_seedance_likeness_banner_visible(
+        b, model_choice="Seedance 2.5 · Reference-to-Video"
     )
     assert b.visible is True
     assert not set_seedance_likeness_banner_visible(

@@ -256,6 +256,19 @@ def _video_entries() -> list[GuideEntry]:
             lims.append(f"Est. ~${float(cps):.3f}/s")
 
         notes = (getattr(spec, "notes", None) or "").strip()
+        final_strengths = strengths or notes or short
+        if "seedance" in key.lower() and "2.5" in key.lower():
+            final_strengths = _join(
+                short or "Long take + high ref count + action",
+                "Up to 30s single-pass, multimodal refs (R2V), native audio, strong action.",
+                detail or notes,
+            )
+            lims = [
+                "Partner photoreal-face filter may reject people refs",
+                "480p/720p; token billing $0.0214/1k tokens (video refs ×0.6)",
+            ] + [x for x in lims if x]
+            flags.add("native_audio")
+            flags.add("multi_ref")
         out.append(
             GuideEntry(
                 key=key,
@@ -263,7 +276,7 @@ def _video_entries() -> list[GuideEntry]:
                 family="video",
                 modalities=tuple(mods) or ("Video",),
                 best_for=short or "Video generation / edit",
-                strengths=strengths or notes or short,
+                strengths=final_strengths,
                 limitations=_join(*lims),
                 flags=frozenset(flags),
                 open_target="studio_video",
@@ -317,6 +330,22 @@ def _video_entries() -> list[GuideEntry]:
                     flags.add("draft")
                 if getattr(spec, "omit_aspect_ratio", False):
                     lims.append("Aspect follows still (no aspect_ratio)")
+                strengths = detail or (getattr(spec, "notes", "") or short)
+                # Seedance 2.5: surface strengths / face-filter limitation for Guide
+                if "seedance" in key.lower() and "2.5" in key.lower():
+                    strengths = _join(
+                        short or "Long take + high ref count + action",
+                        "Up to 30s single-pass, up to 50 multimodal refs (R2V), "
+                        "native audio, strong action / physics.",
+                        detail,
+                    )
+                    lims = [
+                        "Partner photoreal-face filter may reject people refs",
+                        "480p/720p only on fal; token billing $0.0214/1k tokens",
+                        "Video refs billed (×0.6); image/audio refs free",
+                    ] + [x for x in lims if x]
+                    flags.add("native_audio")
+                    flags.add("multi_ref")
                 out.append(
                     GuideEntry(
                         key=f"vision:{key}",
@@ -324,7 +353,7 @@ def _video_entries() -> list[GuideEntry]:
                         family="video",
                         modalities=tuple(mods),
                         best_for=short or default_mod,
-                        strengths=detail or (getattr(spec, "notes", "") or short),
+                        strengths=strengths,
                         limitations=_join(*lims),
                         flags=frozenset(flags),
                         open_target="vision",

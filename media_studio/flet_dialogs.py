@@ -265,19 +265,25 @@ def maybe_show_generation_stopped_dialog(
     message: str | BaseException | None,
     *,
     context: str = "",
+    model_hint: str | None = None,
 ) -> ContentPolicyInfo | None:
     """
     If ``message`` is a content/policy rejection, show Generation stopped popup.
 
     Returns the structured info when a dialog was shown (also useful for status).
     Credits dialogs take precedence when both could match.
+
+    ``model_hint``: pass active model label/endpoint so Seedance-specific
+    likeness copy is not shown on non-Seedance models.
     """
     if page is None or message is None:
         return None
     # Don't steal the credits flow
     if detect_credits_error(message, context=context) is not None:
         return None
-    info = detect_content_policy_violation(message, context=context)
+    info = detect_content_policy_violation(
+        message, context=context, model_hint=model_hint
+    )
     if info is None:
         return None
     show_generation_stopped_dialog(page, info)
@@ -415,8 +421,8 @@ def set_seedance_likeness_banner_visible(
     model_choice: str | None = None,
 ) -> bool:
     """
-    Show banner only for Seedance 2.0 reference-to-video models.
-    Returns the new visibility.
+    Show banner only for Seedance reference-to-video (2.0 / 2.5 / fast).
+    Returns the new visibility. Never shown for non-Seedance models.
     """
     if banner is None:
         return False

@@ -663,12 +663,22 @@ def run_sky(
     custom_prompt: str | None = None,
     prompt: str | None = None,  # alias from DualMedia cards
     time_of_day: str | None = None,
+    reference_image: str | None = None,
+    sky_ref_path: str | None = None,  # alias
     output_dir: str | Path,
     on_progress: ProgressCallback | None = None,
 ) -> ToolResult:
     mode_l = (mode or "image").strip().lower()
     note = custom_prompt if custom_prompt is not None else prompt
+    sky_ref = reference_image or sky_ref_path
     if mode_l == "video":
+        v_prompt = video_sky_prompt(sky_preset, note)
+        if sky_ref and Path(sky_ref).is_file():
+            v_prompt = (
+                v_prompt.rstrip(".")
+                + ". Match sky color, cloud structure, and ambient light of the "
+                "reference still; keep architecture and camera motion locked."
+            )
         return _run_v2v_tool(
             video_path=video_path,
             model_label=model_label,
@@ -676,13 +686,16 @@ def run_sky(
             video_model_map={
                 "kling o3 standard sky": "kling o3 standard edit",
                 "kling o3 pro sky": "kling o3 pro edit",
+                "kling o1 standard sky": "kling o1 standard edit",
+                "kling o1 pro sky": "kling o1 pro edit",
                 "seedance v2v sky": "seedance 2.0 v2v",
             },
-            prompt=video_sky_prompt(sky_preset, note),
+            prompt=v_prompt,
             output_dir=output_dir,
             scenario="sky",
             on_progress=on_progress,
             empty_status="Upload an exterior video for sky/weather pass.",
+            reference_image=sky_ref,
         )
     spec = find_tool(model_label, SKY_MODELS) or next(iter(SKY_MODELS.values()))
     if not image_path:
@@ -722,6 +735,20 @@ def _run_v2v_tool(
     spec = find_tool(model_label, registry) or next(iter(registry.values()))
     model_choice = video_model_map.get(spec.key, "kling o3 standard edit")
     refs = [reference_image] if reference_image and Path(reference_image).is_file() else None
+    # Duration-based est. (never “1 image” on V2V)
+    dur_s: float | None = None
+    try:
+        from media_studio.pricing import probe_video_duration
+
+        dur_s = probe_video_duration(path)
+    except Exception:
+        dur_s = None
+    est_lbl = format_tool_cost(spec, mode="video", duration_s=dur_s)
+    if refs and on_progress:
+        try:
+            on_progress(f"Sky ref: {Path(refs[0]).name}")
+        except Exception:
+            pass
     result = run_video_edit(
         prompt=prompt,
         video_path=path,
@@ -737,7 +764,7 @@ def _run_v2v_tool(
             ok=False,
             status=result.status or f"{spec.label} failed.",
             metrics_line=result.metrics_line or "",
-            cost_label=result.cost_estimate or format_tool_cost(spec),
+            cost_label=result.cost_estimate or est_lbl,
             notes=list(result.notes or []),
         )
     tr = ToolResult(
@@ -745,7 +772,7 @@ def _run_v2v_tool(
         path=result.path,
         status=result.status or f"{spec.label} OK.",
         metrics_line=result.metrics_line or "",
-        cost_label=result.cost_estimate or format_tool_cost(spec),
+        cost_label=result.cost_estimate or est_lbl,
         notes=list(result.notes or []) + ([spec.notes] if spec.notes else []),
     )
     if tr.path:

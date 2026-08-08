@@ -1093,6 +1093,36 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
             "Est. ~$0.30/s @720p, higher at 1080p/4K."
         ),
     ),
+    "seedance 2.5 i2v": VideoModelSpec(
+        key="seedance 2.5 i2v",
+        label="Video · Seedance 2.5 – Image-to-Video",
+        endpoint="bytedance/seedance-2.5/image-to-video",
+        task="image_to_video",
+        image_field=None,
+        i2v_image_field="image_url",
+        keep_audio_param=None,
+        generate_audio_param="generate_audio",
+        default_generate_audio=True,
+        duration_param="duration",
+        duration_as_int=False,
+        default_duration="5",
+        min_duration_seconds=4.0,
+        max_duration_seconds=30.0,
+        allowed_durations=("auto",) + tuple(str(i) for i in range(4, 31)),
+        resolution_param="resolution",
+        allowed_resolutions=("480p", "720p"),
+        default_resolution="720p",
+        aspect_ratio_param="aspect_ratio",
+        allowed_aspect_ratios=("auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"),
+        default_aspect_ratio="auto",
+        cost_per_second=0.473,
+        cost_per_second_by_resolution={"480p": 0.2205, "720p": 0.473},
+        notes=(
+            "Seedance 2.5 I2V — up to 30s single-pass with native audio. "
+            "Optional end frame. 480p/720p. Token est. ~$0.0214/1k tokens "
+            "(≈$0.47/s @720p 16:9). Partner photoreal-face filter."
+        ),
+    ),
     "seedance 2.0 fast i2v": VideoModelSpec(
         key="seedance 2.0 fast i2v",
         label="Video · Seedance 2.0 Fast – Image-to-Video",
@@ -1165,6 +1195,48 @@ VIDEO_MODELS: dict[str, VideoModelSpec] = {
             "Seedance 2.0 Reference-to-Video — multi-ref from still(s) (+ optional video). "
             "aspect_ratio: auto (default) or listed ratios · res 480p/720p. "
             "Prompt: @Image1 / @Video1. Est. ~$0.18/s @720p."
+        ),
+    ),
+    "seedance 2.5 reference": VideoModelSpec(
+        key="seedance 2.5 reference",
+        label="Video · Seedance 2.5 – Reference-to-Video",
+        endpoint="bytedance/seedance-2.5/reference-to-video",
+        task="image_to_video",
+        image_field="image_urls",
+        multi_image=True,
+        max_ref_images=30,
+        i2v_image_field="image_urls",
+        keep_audio_param=None,
+        generate_audio_param="generate_audio",
+        default_generate_audio=True,
+        duration_param="duration",
+        duration_as_int=False,
+        default_duration="5",
+        min_duration_seconds=4.0,
+        max_duration_seconds=30.0,
+        allowed_durations=("auto",) + tuple(str(i) for i in range(4, 31)),
+        resolution_param="resolution",
+        allowed_resolutions=("480p", "720p"),
+        default_resolution="720p",
+        aspect_ratio_param="aspect_ratio",
+        allowed_aspect_ratios=(
+            "auto",
+            "21:9",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+        ),
+        default_aspect_ratio="auto",
+        auto_image_refs_in_prompt=True,
+        cost_per_second=0.473,
+        cost_per_second_by_resolution={"480p": 0.2205, "720p": 0.473},
+        notes=(
+            "Seedance 2.5 R2V — up to 50 multimodal refs (image/video/audio), "
+            "up to 30s native take, native audio. Cite [Image1]/[Video1]. "
+            "Token est. $0.0214/1k tokens; video refs ×0.6. "
+            "Strengths: long take, high ref count, action. Limitation: photoreal face filter."
         ),
     ),
     # Motion-preserving edits via reference-to-video (source clip as @Video1)
@@ -1609,6 +1681,19 @@ _ALIASES: dict[str, str] = {
     "seedance 2.0 fast v2v": "seedance 2.0 fast v2v",
     "video · seedance 2.0 fast – v2v / ref edit": "seedance 2.0 fast v2v",
     "bytedance/seedance-2.0/fast/reference-to-video": "seedance 2.0 fast v2v",
+    # Seedance 2.5
+    "seedance 2.5": "seedance 2.5 i2v",
+    "seedance 2.5 i2v": "seedance 2.5 i2v",
+    "seedance 2.5 image-to-video": "seedance 2.5 i2v",
+    "video · seedance 2.5 – image-to-video": "seedance 2.5 i2v",
+    "bytedance/seedance-2.5/image-to-video": "seedance 2.5 i2v",
+    "seedance 2.5 reference": "seedance 2.5 reference",
+    "seedance 2.5 r2v": "seedance 2.5 reference",
+    "seedance 2.5 reference-to-video": "seedance 2.5 reference",
+    "video · seedance 2.5 – reference-to-video": "seedance 2.5 reference",
+    "bytedance/seedance-2.5/reference-to-video": "seedance 2.5 reference",
+    "seedance 2.5 t2v": "seedance 2.5 i2v",  # Studio has no pure T2V path; map to I2V
+    "bytedance/seedance-2.5/text-to-video": "seedance 2.5 i2v",
     # MiniMax H3 (Hailuo-03)
     "minimax h3": "minimax h3 i2v",
     "minimax h3 i2v": "minimax h3 i2v",
@@ -1689,6 +1774,8 @@ def model_dropdown_choices() -> list[str]:
         "kling 2.5 turbo pro i2v",
         "grok imagine 1.5 i2v",
         "grok imagine 1.5 reference",
+        "seedance 2.5 i2v",
+        "seedance 2.5 reference",
         "seedance 2.0 i2v",
         "seedance 2.0 fast i2v",
         "seedance 2.0 reference",

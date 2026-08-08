@@ -117,7 +117,7 @@ Dashboards:
 | Tab | What it does |
 |-----|----------------|
 | **Studio** | Image (scenarios, Region edit, compare) · Video (Received / Blank / Camera Lock) |
-| **Tools** | Image \| Video tools + large result viewer (upscale, **Inpaint**, **Denoise**, **Slow Mo**, cleanup, sky, …) |
+| **Tools** | Image \| Video tools + large result viewer (Upscale, **Inpaint**, **Denoise**, **Slow Mo**, cleanup, **Sky/Weather** sky-ref + still→V2V, …); video results **Send to Upscale** |
 | **Creative Vision** | Image: **T2I · I2I · R2I** · Video: **T2V · I2V · R2V · V2V** · Bridge · Extend (Studio-aligned) |
 | **Director** | **Multi-shot** cuts (Kling / Imagine) · **Keyframe Take** continuous pins (FLUX 3) · FLUX continuous I2V / first→last |
 | **VFX** | In-scene effects on a plate + **Element plates** (black / clean for Screen·Add in Resolve); fire, smoke, energy, weather, debris, lens packs |
@@ -132,7 +132,7 @@ Dashboards:
 
 - **Text → Image** — invent stills (no source). Still-only helpers (framing / lens / lighting / style); **no camera motion** on rebuild or Enhance. T2I models include Flux family, **Nano Banana** / 2 / Pro, **Seedream** 4.5 / 5 Lite / 5 Pro, Recraft (see FEATURES.txt). **# Images 1–4** multi-variant; **cost always × count** (including sequential singles); separate Library rows; sequential if the API is one-at-a-time (per-tab busy only).
 - **Studio Image** — same 1–4 multi-variant pattern when generating edits. Est. cost scales with **# Images** even when the model max is 1 per call (e.g. Flux 2 Pro · 4 images → ~4× rate). Multi-reference stills when the model allows (primary + optional refs); single-image models stay one still. Region edit uses the annotated primary only; box L/T/W/H map to the source image content rect on both the small preview and large Comparison stage. **Previously used** + **From Resolve** stills.
-- **Image → Image** — creative plate edits with optional **multi-ref** (primary + up to 3 refs). **R2I** — build a still from Character/style/prop refs (not plate-edit). **R2V** — multi identity / Omni (H3, Seedance Reference); **I2V** is start-frame lock only (R2V models stay off that list).
+- **Image → Image** — creative plate edits with optional **multi-ref** (primary + up to 3 refs). **R2I** — build a still from Character/style/prop refs (not plate-edit). **R2V** — multi identity / Omni (H3, Seedance 2.0/2.5 Reference); **I2V** is start-frame lock only (R2V models stay off that list). **Seedance 2.5**: up to 30s, 50 multimodal refs, token-based cost est.
 - T2I / still results: **Send to ▾ → Start frame / End frame** (bridge handoff) without re-exporting from disk.
 - Every helper that feeds Rebuild/Enhance has **(None)** — omit that dimension. Same pattern in Studio scene builders and Audio builders where helpers inject text.
 - **Creative direction for Enhance** (optional) — steers Grok Enhance only; **not** sent raw on Generate. Empty = helpers + prompt only.

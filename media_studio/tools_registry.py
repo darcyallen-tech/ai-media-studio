@@ -27,6 +27,8 @@ class ToolSpec:
     requires_ref: bool = False  # ref required (e.g. Kontext inpaint)
     # How to pass ref: "reference_image_url" | "fill_image" (flux-lora-fill object)
     ref_mode: str = "reference_image_url"
+    # V2V tools: when set, cost UI uses rate × duration (not "1 image")
+    cost_per_second: float | None = None
 
 
 # --- Upscalers (image) ---
@@ -546,15 +548,21 @@ SKY_MODELS: dict[str, ToolSpec] = {
 }
 
 # Video sky / weather V2V (motion-stable exterior sky)
+# Kling family = camera-locked edit endpoints used elsewhere in the app.
 VIDEO_SKY_MODELS: dict[str, ToolSpec] = {
     "kling o3 standard sky": ToolSpec(
         key="kling o3 standard sky",
         label="Kling O3 Standard (V2V sky)",
         category="sky",
         endpoint="fal-ai/kling-video/o3/standard/video-to-video/edit",
-        cost_estimate_usd=0.63,
-        notes="Default video. Sky/weather only under camera motion; architecture locked.",
+        cost_estimate_usd=0.63,  # ~5s × $0.126
+        cost_per_second=0.126,
+        notes=(
+            "Recommended for camera-locked exterior sky/weather. "
+            "Optional sky-ref still; architecture + motion locked. Est. ~$0.13/s."
+        ),
         extra_defaults={"keep_audio": True},
+        supports_ref=True,
     ),
     "kling o3 pro sky": ToolSpec(
         key="kling o3 pro sky",
@@ -562,8 +570,32 @@ VIDEO_SKY_MODELS: dict[str, ToolSpec] = {
         category="sky",
         endpoint="fal-ai/kling-video/o3/pro/video-to-video/edit",
         cost_estimate_usd=0.84,
-        notes="Higher-quality V2V sky/weather pass.",
+        cost_per_second=0.168,
+        notes="Higher-quality V2V sky/weather. Est. ~$0.17/s.",
         extra_defaults={"keep_audio": True},
+        supports_ref=True,
+    ),
+    "kling o1 standard sky": ToolSpec(
+        key="kling o1 standard sky",
+        label="Kling O1 Standard (V2V sky)",
+        category="sky",
+        endpoint="fal-ai/kling-video/o1/standard/video-to-video/edit",
+        cost_estimate_usd=0.63,
+        cost_per_second=0.126,
+        notes="Kling O1 Standard V2V sky — motion-preserving. Est. ~$0.13/s.",
+        extra_defaults={"keep_audio": True},
+        supports_ref=True,
+    ),
+    "kling o1 pro sky": ToolSpec(
+        key="kling o1 pro sky",
+        label="Kling O1 Pro (V2V sky)",
+        category="sky",
+        endpoint="fal-ai/kling-video/o1/video-to-video/edit",
+        cost_estimate_usd=0.84,
+        cost_per_second=0.168,
+        notes="Kling O1 Pro V2V sky. Est. ~$0.17/s.",
+        extra_defaults={"keep_audio": True},
+        supports_ref=True,
     ),
     "seedance v2v sky": ToolSpec(
         key="seedance v2v sky",
@@ -571,8 +603,10 @@ VIDEO_SKY_MODELS: dict[str, ToolSpec] = {
         category="sky",
         endpoint="bytedance/seedance-2.0/reference-to-video",
         cost_estimate_usd=1.50,
-        notes="Seedance sky transfer via @Video1 (+ optional sky ref still).",
+        cost_per_second=0.30,
+        notes="Seedance sky transfer via @Video1 (+ optional sky ref still). Est. ~$0.30/s.",
         extra_defaults={},
+        supports_ref=True,
     ),
 }
 
@@ -1878,11 +1912,45 @@ def video_sky_prompt(preset: str | None = None, user_prompt: str | None = None) 
     )
 
 
-def format_tool_cost(spec: ToolSpec, num_images: int = 1) -> str:
-    """Still-tool estimate — total job cost (per-image × N when batching)."""
+def format_tool_cost(
+    spec: ToolSpec,
+    num_images: int = 1,
+    *,
+    mode: str | None = None,
+    duration_s: float | None = None,
+) -> str:
+    """
+    Tool cost estimate.
+
+    Still: per-image (or batch). V2V: rate × duration — never “1 image” on video.
+    """
     from media_studio.pricing import format_job_cost
 
     cat = (spec.category or "").lower()
+    mode_l = (mode or "").strip().lower()
+    cps = getattr(spec, "cost_per_second", None)
+    # Explicit still mode always "1 image"; video mode always duration-based
+    want_video_cost = mode_l in ("video", "v2v") or (
+        mode_l not in ("image", "still")
+        and cps is not None
+        and (
+            "v2v" in (spec.key or "").lower()
+            or "video-to-video" in (spec.endpoint or "").lower()
+        )
+    )
+    if want_video_cost:
+        secs = float(duration_s) if duration_s and duration_s > 0 else 5.0
+        if cps is not None and float(cps) > 0:
+            amount = float(cps) * secs
+        else:
+            # Flat estimate assumed for ~5s ballpark
+            amount = float(spec.cost_estimate_usd) * (secs / 5.0)
+        dur_txt = f"{secs:.0f}" if abs(secs - round(secs)) < 1e-6 else f"{secs:.1f}"
+        unit = f"{dur_txt}s"
+        if duration_s is None or duration_s <= 0:
+            unit = f"{dur_txt}s · duration unknown"
+        return format_job_cost(round(max(0.05, amount), 3), unit=unit, model=spec.label)
+
     n = max(1, int(num_images or 1))
     max_n = max(1, int(getattr(spec, "max_num_images", 1) or 1))
     if cat == "inpaint" and max_n > 1:

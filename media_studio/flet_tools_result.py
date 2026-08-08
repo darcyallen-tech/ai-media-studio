@@ -436,6 +436,7 @@ class ToolsResultPane:
         result_path: str,
         *,
         tool_label: str = "",
+        offer_upscale_prompt: bool = False,
     ) -> None:
         """Publish a successful tool result to the large viewer."""
         self.source_path = _exists(source_path)
@@ -464,6 +465,52 @@ class ToolsResultPane:
             self.page.update()
         except Exception:
             pass
+        # Soft prompt after V2V / video results (never auto-runs)
+        if offer_upscale_prompt and _is_video(self.result_path):
+            try:
+                self._maybe_offer_upscale(self.result_path)
+            except Exception:
+                pass
+
+    def _maybe_offer_upscale(self, video_path: str) -> None:
+        """Optional soft dialog: Upscale this clip? → Tools Upscale preload."""
+        from media_studio.flet_send_to import send_to_tool
+
+        async def _yes(_e: ft.ControlEvent | None = None) -> None:
+            close_dialog(self.page)
+            handler = send_to_tool(
+                self.state,
+                "upscale",
+                video_path,
+                as_video=True,
+                status_cb=lambda m: self._status(m),
+            )
+            await handler(_e)
+
+        async def _no(_e: ft.ControlEvent | None = None) -> None:
+            close_dialog(self.page)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Upscale this clip?", color=TEXT),
+            content=ft.Text(
+                "Open Tools → Video → Upscale with this result pre-loaded. "
+                "You choose model, target, and confirm cost — nothing runs automatically.",
+                color=TEXT_MUTED,
+                size=FONT_SM,
+            ),
+            actions=[
+                ft.TextButton("Not now", on_click=_no),
+                ft.FilledButton(
+                    content="Send to Upscale",
+                    on_click=_yes,
+                    style=ft.ButtonStyle(bgcolor=ACCENT, color=TEXT),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+            bgcolor=PANEL_ELEVATED,
+        )
+        show_dialog(self.page, dlg)
 
     def clear(self) -> None:
         self.source_path = None
@@ -735,6 +782,7 @@ class ToolsResultPane:
         from media_studio.flet_send_to import (
             build_send_menu_items,
             make_send_menu_button,
+            send_to_tool,
         )
 
         img = path if _is_image(path) else None
@@ -745,11 +793,42 @@ class ToolsResultPane:
             video_path=vid,
             status_cb=lambda m: self._status(m),
         )
+        # Explicit top-level Upscale for video results (same as Video Upscale)
+        if vid:
+            from media_studio.flet_send_to import _item
+
+            # Prefer a dedicated leaf before the Send menu for one-click path
+            up_handler = send_to_tool(
+                self.state,
+                "upscale",
+                vid,
+                as_video=True,
+                status_cb=lambda m: self._status(m),
+            )
+            self.btn_send_upscale = ft.OutlinedButton(
+                content="Send to Upscale",
+                icon=ft.Icons.HIGH_QUALITY,
+                on_click=up_handler,
+                style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+                tooltip="Open Tools → Video → Upscale with this clip as source (confirm cost before run)",
+            )
+        else:
+            self.btn_send_upscale = None
         btn = make_send_menu_button(items)
-        if btn is None:
+        row_controls: list[ft.Control] = []
+        if getattr(self, "btn_send_upscale", None) is not None:
+            row_controls.append(self.btn_send_upscale)
+        if btn is not None:
+            row_controls.append(btn)
+        if not row_controls:
             self.send_host.visible = False
             return
-        self.send_host.content = btn
+        self.send_host.content = ft.Row(
+            row_controls,
+            spacing=8,
+            wrap=True,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
         self.send_host.visible = True
 
     def _send_image(self, path: str) -> Callable:

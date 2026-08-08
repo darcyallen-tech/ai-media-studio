@@ -48,6 +48,8 @@ MODEL_OPTIONS: list[str] = [""] + [
     "kling 2.5 turbo pro i2v",
     "grok imagine 1.5 i2v",
     "grok imagine 1.5 reference",
+    "seedance 2.5 i2v",
+    "seedance 2.5 reference",
     "seedance 2.0 i2v",
     "seedance 2.0 fast i2v",
     "seedance 2.0 reference",

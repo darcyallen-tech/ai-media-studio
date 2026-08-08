@@ -12,6 +12,27 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 
 **Library, Resolve handoff, Frame Editor, tools, and cost polish.**
 
+### Tools · Sky / Weather workflow + Send to Upscale
+- **Sky reference** still: upload · Previously used · From Resolve; suggested still-sky
+  result with **Use as sky ref**
+- **Use for V2V**: still sky result → set as sky ref, switch to Video, prefer Kling O3
+  Standard; optional Studio clip as V2V source
+- V2V models: Kling O3 Standard/Pro + O1 Standard/Pro + Seedance; est. cost is
+  **duration-based** (never “1 image” on V2V)
+- Video results: **Send to Upscale** + soft “Upscale this clip?” → Tools Video Upscale
+  preload (user confirms model/cost)
+- Smoke: `python scripts/smoke_sky_weather_workflow.py`
+
+### Seedance 2.5 (fal) — T2V / I2V / R2V
+- Creative Vision: **Seedance 2.5** Text→Video, Image→Video, Reference-to-Video
+  (`bytedance/seedance-2.5/…`) — up to **30s**, **480p/720p**, native audio
+- R2V: up to **50 multimodal refs**; Character/Scene **Sheet | Front/Hero** bind as real `image_urls`
+- Est. cost from fal token formula (**$0.0214 / 1k tokens**; video refs ×**0.6**; image/audio free)
+- Partner photoreal-face filter: Seedance banner + Generation stopped popup
+  (Seedance-specific copy only on Seedance models)
+- Studio Video: Seedance 2.5 I2V + R2V
+- Smoke: `python scripts/smoke_seedance_25.py`
+
 ### Scene reference sheets (single-shot) + multi-gen variants
 - **Make scene sheet**: T2I/I2I one-shot location bible; helpers + exterior toggle
 - Tone: short production-design line (no MLS/brochure spam); RE only if Camera = Documentary/real-estate

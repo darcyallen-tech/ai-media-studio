@@ -1078,6 +1078,20 @@ class CreativeVisionView:
                     generate_audio=bool(audio) if audio is not None else False,
                     draft_mode=draft_on,
                 )
+            has_vrefs = False
+            try:
+                from media_studio.vision_registry import is_seedance_25_spec
+
+                if is_seedance_25_spec(spec):
+                    has_vrefs = bool(
+                        getattr(self, "ref_video_paths", None)
+                        and any(
+                            p and Path(p).is_file()
+                            for p in (self.ref_video_paths or [])
+                        )
+                    )
+            except Exception:
+                has_vrefs = False
             return format_vision_cost(
                 spec,
                 duration_token=self._duration_token_for_cost(spec),
@@ -1087,6 +1101,7 @@ class CreativeVisionView:
                 aspect_ratio=_dd(self.aspect_dd),
                 generate_audio=audio,
                 num_images=self._num_images_for_cost(),
+                has_video_refs=has_vrefs,
             )
         except Exception:
             return "Est. cost: —"
@@ -3500,6 +3515,20 @@ class CreativeVisionView:
             audio = None
             if spec.supports_audio and not is_still_mode(self._mode):
                 audio = bool(self.gen_audio.value)
+            has_vrefs = False
+            try:
+                from media_studio.vision_registry import is_seedance_25_spec
+
+                if is_seedance_25_spec(spec):
+                    has_vrefs = bool(
+                        getattr(self, "ref_video_paths", None)
+                        and any(
+                            p and Path(p).is_file()
+                            for p in (self.ref_video_paths or [])
+                        )
+                    )
+            except Exception:
+                has_vrefs = False
             est = estimate_vision_cost(
                 spec,
                 duration_token=self._duration_token_for_cost(spec),
@@ -3509,6 +3538,7 @@ class CreativeVisionView:
                 aspect_ratio=_dd(self.aspect_dd),
                 generate_audio=audio,
                 num_images=self._num_images_for_cost(),
+                has_video_refs=has_vrefs,
             )
             ok = await confirm_cost_if_needed(
                 self.page,
@@ -3832,7 +3862,15 @@ class CreativeVisionView:
                 )
 
                 raw_err = result.status or "Failed."
-                policy = detect_content_policy_violation(raw_err, context="Generate")
+                model_hint = (
+                    getattr(spec, "label", None)
+                    or getattr(spec, "endpoint", None)
+                    or _dd(self.model_dd)
+                    or ""
+                )
+                policy = detect_content_policy_violation(
+                    raw_err, context="Generate", model_hint=str(model_hint)
+                )
                 err = (
                     policy.short_reason
                     if policy is not None
@@ -3843,6 +3881,20 @@ class CreativeVisionView:
                 log_err = f"{dbg}\n{raw_err}" if dbg else raw_err
                 self.job_progress.finish_error(log_err, self.page)
                 self.status.value = err
+                if policy is not None:
+                    try:
+                        from media_studio.flet_dialogs import (
+                            maybe_show_generation_stopped_dialog,
+                        )
+
+                        maybe_show_generation_stopped_dialog(
+                            self.page,
+                            raw_err,
+                            context="Generate",
+                            model_hint=str(model_hint),
+                        )
+                    except Exception:
+                        pass
                 self._result_paths = []
                 try:
                     self.variant_host.visible = False
@@ -3854,7 +3906,18 @@ class CreativeVisionView:
                 friendly_error,
             )
 
-            policy = detect_content_policy_violation(exc, context="Generate")
+            model_hint = ""
+            try:
+                model_hint = (
+                    getattr(self._current_spec(), "label", None)
+                    or _dd(self.model_dd)
+                    or ""
+                )
+            except Exception:
+                model_hint = _dd(self.model_dd) or ""
+            policy = detect_content_policy_violation(
+                exc, context="Generate", model_hint=str(model_hint)
+            )
             err = (
                 policy.short_reason
                 if policy is not None
@@ -3864,6 +3927,20 @@ class CreativeVisionView:
             log_err = f"{dbg}\n{exc}" if dbg else str(exc)
             self.job_progress.finish_error(log_err, self.page)
             self.status.value = err
+            if policy is not None:
+                try:
+                    from media_studio.flet_dialogs import (
+                        maybe_show_generation_stopped_dialog,
+                    )
+
+                    maybe_show_generation_stopped_dialog(
+                        self.page,
+                        exc,
+                        context="Generate",
+                        model_hint=str(model_hint),
+                    )
+                except Exception:
+                    pass
             traceback.print_exc()
         finally:
             self.state.clear_busy("vision")

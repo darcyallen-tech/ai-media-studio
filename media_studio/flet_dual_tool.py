@@ -69,6 +69,10 @@ class DualMediaToolCard:
         grade_ref_mode: bool = False,
         primary_label: str = "Source",
         grade_label: str = "Source look (grade ref)",
+        # Sky / Weather: optional V2V sky-ref still (+ still→V2V handoff)
+        enable_v2v_ref: bool = False,
+        v2v_ref_label: str = "Sky reference",
+        suggest_kling_on_video: bool = False,
     ) -> None:
         self.page = page
         self.state = state
@@ -80,11 +84,17 @@ class DualMediaToolCard:
         self.on_result = on_result
         self.tool_label = tool_label or title
         self.grade_ref_mode = bool(grade_ref_mode)
+        self.enable_v2v_ref = bool(enable_v2v_ref)
+        self.v2v_ref_label = v2v_ref_label or "Sky reference"
+        self.suggest_kling_on_video = bool(suggest_kling_on_video)
         self._mode = "image"
         self._mode_locked = False
         self.source_path: str | None = None  # primary (AI plate when grade_ref_mode)
         self.grade_path: str | None = None  # grade reference still
+        self.v2v_ref_path: str | None = None  # sky / style ref still for V2V
         self._result_path: str | None = None
+        self._last_still_result: str | None = None  # still result for "Use as sky ref"
+        self._video_duration_s: float | None = None
 
         self.mode_dd = styled_dropdown(
             label_text="Mode",
@@ -148,6 +158,79 @@ class DualMediaToolCard:
             on_click=self._pick_grade,
             style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
             visible=grade_ref_mode,
+        )
+        # Optional V2V ref still (Sky / Weather)
+        self.v2v_ref_preview = ft.Image(
+            src="", fit=ft.BoxFit.CONTAIN, width=140, height=90, visible=False
+        )
+        self.v2v_ref_placeholder = ft.Container(
+            content=ft.Text(
+                self.v2v_ref_label,
+                color=TEXT_MUTED,
+                size=FONT_SM,
+                text_align=ft.TextAlign.CENTER,
+            ),
+            alignment=ft.Alignment.CENTER,
+            width=140,
+            height=90,
+            bgcolor=PANEL_ELEVATED,
+            border_radius=6,
+            border=ft.Border.all(1, BORDER),
+            visible=self.enable_v2v_ref,
+        )
+        self.v2v_ref_caption = ft.Text(
+            self.v2v_ref_label,
+            size=11,
+            color=TEXT_MUTED,
+            visible=self.enable_v2v_ref,
+        )
+        self.btn_upload_v2v_ref = ft.OutlinedButton(
+            content="Upload sky ref",
+            icon=ft.Icons.WB_SUNNY_OUTLINED,
+            on_click=self._pick_v2v_ref,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            visible=self.enable_v2v_ref,
+        )
+        self.btn_clear_v2v_ref = ft.TextButton(
+            content="Clear sky ref",
+            on_click=self._clear_v2v_ref,
+            style=ft.ButtonStyle(color=TEXT_MUTED),
+            visible=False,
+        )
+        self.v2v_ref_prev_strip = PreviousSourcesStrip(
+            page,
+            get_output_dir=lambda: self.state.output_dir,
+            on_load=self._on_v2v_ref_from_strip,
+            media_kind="image",
+        )
+        self.v2v_ref_resolve_strip = ResolveSourcesStrip(
+            page,
+            on_load=self._on_v2v_ref_from_strip,
+            media_kind="image",
+        )
+        # Suggested still-sky result → one-click as sky ref
+        self.suggested_ref_row = ft.Row(
+            spacing=6,
+            wrap=True,
+            visible=False,
+            tight=True,
+        )
+        self.btn_use_still_as_ref = ft.TextButton(
+            content="Use as sky ref",
+            on_click=self._use_still_result_as_ref,
+            style=ft.ButtonStyle(color=ACCENT_BRIGHT),
+            visible=False,
+        )
+        self.btn_use_for_v2v = ft.OutlinedButton(
+            content="Use for V2V",
+            icon=ft.Icons.MOVIE_CREATION_OUTLINED,
+            on_click=self._use_still_for_v2v,
+            style=ft.ButtonStyle(color=TEXT, side=ft.BorderSide(1, BORDER)),
+            visible=False,
+            tooltip=(
+                "Set this still sky result as the sky reference and switch to "
+                "Video mode (pick/source clip for camera-locked V2V)."
+            ),
         )
         self.prev_strip = PreviousSourcesStrip(
             page,
@@ -263,16 +346,43 @@ class DualMediaToolCard:
             tight=True,
             visible=self.grade_ref_mode,
         )
+        self.v2v_ref_col = ft.Column(
+            [
+                self.v2v_ref_caption,
+                self.v2v_ref_preview,
+                self.v2v_ref_placeholder,
+                self.btn_upload_v2v_ref,
+                self.btn_clear_v2v_ref,
+                self.v2v_ref_prev_strip.root if self.enable_v2v_ref else ft.Container(height=0),
+                self.v2v_ref_resolve_strip.root if self.enable_v2v_ref else ft.Container(height=0),
+            ],
+            spacing=6,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            tight=True,
+            visible=self.enable_v2v_ref,
+        )
+        media_row_controls = [primary_col]
+        if self.grade_ref_mode:
+            media_row_controls.append(grade_col)
+        if self.enable_v2v_ref:
+            media_row_controls.append(self.v2v_ref_col)
         self.root = panel(
             ft.Column(
                 [
                     section_title(title),
                     ft.Text(description, size=FONT_SM, color=TEXT_MUTED),
                     ft.Row(
-                        [primary_col, grade_col],
+                        media_row_controls,
                         spacing=16,
                         vertical_alignment=ft.CrossAxisAlignment.START,
                         tight=True,
+                    ),
+                    self.suggested_ref_row,
+                    ft.Row(
+                        [self.btn_use_still_as_ref, self.btn_use_for_v2v],
+                        spacing=8,
+                        wrap=True,
+                        visible=self.enable_v2v_ref,
                     ),
                     ft.Row([self.model_dd], spacing=0),
                     self.model_best_for,
@@ -290,15 +400,27 @@ class DualMediaToolCard:
                 # No form scroll — Tools host ListView is the only scroll
             ),
         )
+        if self.enable_v2v_ref:
+            try:
+                self.v2v_ref_prev_strip.refresh()
+                self.v2v_ref_resolve_strip.refresh()
+            except Exception:
+                pass
 
     def _registry(self) -> dict:
         return self.video_registry if self._mode == "video" else self.image_registry
 
     def _cost(self) -> str:
-        labels = self._video_labels if self._mode == "video" else self._image_labels
         reg = self._registry()
         spec = find_tool(_dd_value(self.model_dd), reg)
-        return format_tool_cost(spec) if spec else "Est. cost: —"
+        if not spec:
+            return "Est. cost: —"
+        if self._mode == "video":
+            dur = self._video_duration_s
+            return format_tool_cost(
+                spec, mode="video", duration_s=dur if dur and dur > 0 else None
+            )
+        return format_tool_cost(spec, mode="image")
 
     def _set_status(self, msg: str, is_error: bool = False) -> None:
         self.status.value = msg
@@ -522,6 +644,18 @@ class DualMediaToolCard:
             except Exception:
                 pass
         self._refresh_models()
+        if as_video:
+            try:
+                from media_studio.pricing import probe_video_duration
+
+                self._video_duration_s = probe_video_duration(resolved)
+            except Exception:
+                self._video_duration_s = None
+            if self.suggest_kling_on_video:
+                self._prefer_kling_v2v_model()
+            self.cost_text.value = self._cost()
+        else:
+            self._video_duration_s = None
         if self.grade_ref_mode:
             self.status.value = status or f"AI plate: {name}"
         else:
@@ -531,6 +665,166 @@ class DualMediaToolCard:
         except Exception:
             pass
         return True
+
+    def _prefer_kling_v2v_model(self) -> None:
+        """When source is a clip, prefer Kling O3 Standard for camera-lock cost/lock."""
+        labels = self._video_labels or []
+        if not labels:
+            return
+        prefer = None
+        for lab in labels:
+            low = lab.lower()
+            if "kling" in low and "o3" in low and "standard" in low:
+                prefer = lab
+                break
+        if prefer is None:
+            for lab in labels:
+                if "kling" in lab.lower():
+                    prefer = lab
+                    break
+        if prefer:
+            try:
+                self.model_dd.value = prefer
+            except Exception:
+                pass
+
+    def load_v2v_ref(self, path: str, *, status: str | None = None) -> bool:
+        """Load optional sky / style reference still for V2V."""
+        try:
+            p = Path(path)
+            if not p.is_file():
+                self.status.value = f"Sky ref missing: {path}"
+                return False
+            resolved = str(p.resolve())
+        except OSError:
+            return False
+        self.v2v_ref_path = resolved
+        self.v2v_ref_preview.src = resolved
+        self.v2v_ref_preview.visible = True
+        self.v2v_ref_placeholder.visible = False
+        self.btn_clear_v2v_ref.visible = True
+        self.status.value = status or f"{self.v2v_ref_label}: {Path(resolved).name}"
+        try:
+            self.v2v_ref_prev_strip.record_and_refresh(resolved)
+        except Exception:
+            pass
+        try:
+            self.page.update()
+        except Exception:
+            pass
+        return True
+
+    def _on_v2v_ref_from_strip(self, path: str) -> None:
+        self.load_v2v_ref(path, status=f"Sky ref ← {Path(path).name}")
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _pick_v2v_ref(self, e: ft.ControlEvent) -> None:
+        try:
+            files = await pick_image(
+                self.page, dialog_title=self.v2v_ref_label or "Sky reference still"
+            )
+        except Exception as exc:
+            self.status.value = f"Picker error: {exc}"
+            self.page.update()
+            return
+        if not files or not files[0].path:
+            return
+        self.load_v2v_ref(files[0].path)
+        self.page.update()
+
+    async def _clear_v2v_ref(self, e: ft.ControlEvent | None = None) -> None:
+        self.v2v_ref_path = None
+        self.v2v_ref_preview.src = ""
+        self.v2v_ref_preview.visible = False
+        self.v2v_ref_placeholder.visible = True
+        self.btn_clear_v2v_ref.visible = False
+        self.status.value = f"{self.v2v_ref_label} cleared"
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    async def _use_still_result_as_ref(self, e: ft.ControlEvent) -> None:
+        p = self._last_still_result or self._result_path
+        if not p or not Path(p).is_file():
+            self.status.value = "No still sky result to use as sky ref."
+            self.page.update()
+            return
+        self.load_v2v_ref(p, status=f"Sky ref ← result {Path(p).name}")
+        self.page.update()
+
+    async def _use_still_for_v2v(self, e: ft.ControlEvent) -> None:
+        """
+        Path A: still sky result → set as sky ref, switch to Video, prefer Kling.
+        Source clip: reuse Studio video_source if present, else prompt upload.
+        """
+        still = self._last_still_result or self._result_path
+        if not still or not Path(still).is_file():
+            self.status.value = "Generate a still sky result first."
+            self.page.update()
+            return
+        self.load_v2v_ref(still, status=f"Sky ref ← {Path(still).name}")
+        # Switch to video mode for V2V
+        self.force_mode("video", clear_source=False)
+        # Prefer existing Studio clip as V2V source when available
+        clip = getattr(self.state, "video_source_path", None)
+        if clip and Path(str(clip)).is_file():
+            self.load_source(
+                str(clip),
+                as_video=True,
+                status=f"V2V source ← Studio clip · sky ref {Path(still).name}",
+            )
+        else:
+            self.source_path = None
+            self.preview.visible = False
+            self.video_label.visible = False
+            self.placeholder.visible = True
+            self.btn_upload.content = "Upload video"
+            self.status.value = (
+                f"Sky ref set ({Path(still).name}). Upload or pick source clip for V2V."
+            )
+        if self.suggest_kling_on_video:
+            self._prefer_kling_v2v_model()
+        self.cost_text.value = self._cost()
+        self.btn_use_for_v2v.visible = False
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def _update_still_handoff_ui(self, result_path: str | None) -> None:
+        """After still sky success: offer Use as sky ref / Use for V2V."""
+        if not self.enable_v2v_ref:
+            return
+        ok = bool(result_path and Path(result_path).is_file())
+        is_still = ok and Path(result_path).suffix.lower() in {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".webp",
+            ".bmp",
+            ".gif",
+        }
+        if is_still:
+            self._last_still_result = result_path
+            self.btn_use_still_as_ref.visible = True
+            self.btn_use_for_v2v.visible = True
+            name = Path(result_path).name
+            self.suggested_ref_row.controls = [
+                ft.Text(
+                    f"Still sky result: {name}",
+                    size=FONT_SM,
+                    color=TEXT_MUTED,
+                ),
+            ]
+            self.suggested_ref_row.visible = True
+        else:
+            self.btn_use_still_as_ref.visible = bool(self._last_still_result)
+            # Keep Use for V2V if we still have a prior still result
+            self.btn_use_for_v2v.visible = bool(self._last_still_result)
 
     def load_grade_ref(self, path: str, *, status: str | None = None) -> bool:
         """Load grade-reference still (Match Look source look)."""
@@ -636,6 +930,9 @@ class DualMediaToolCard:
                 kwargs["video_path"] = None
         else:
             kwargs["image_path"] = self.source_path
+        if self.enable_v2v_ref and self.v2v_ref_path and Path(self.v2v_ref_path).is_file():
+            kwargs["reference_image"] = self.v2v_ref_path
+            kwargs["sky_ref_path"] = self.v2v_ref_path
         kwargs.update(self.get_extra_kwargs())
         try:
             from media_studio.job_context import to_thread_with_job
@@ -648,6 +945,8 @@ class DualMediaToolCard:
                 done = result.status or "OK"
                 self.job_progress.finish_ok(done, self.page)
                 self.status.value = done
+                if self._mode != "video":
+                    self._update_still_handoff_ui(result.path)
                 self._emit_result(result.path)
             else:
                 err = result.status or "Failed."

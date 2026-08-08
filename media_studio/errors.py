@@ -101,10 +101,16 @@ _LIKENESS_MARKERS = (
     "celebrity",
 )
 
-_LIKENESS_REASON = (
+_LIKENESS_REASON_SEEDANCE = (
     "The reference images may look like real people. Seedance’s partner filter "
     "often blocks photoreal faces (including AI-generated ones that look "
     "photographic). Try stylized characters or a character-sheet layout."
+)
+
+_LIKENESS_REASON_NEUTRAL = (
+    "The reference images may look like real people. The provider’s content "
+    "or face filter often blocks photoreal faces (including AI-generated ones "
+    "that look photographic). Try stylized characters or a character-sheet layout."
 )
 
 
@@ -112,6 +118,7 @@ def detect_content_policy_violation(
     exc: BaseException | str,
     *,
     context: str = "",
+    model_hint: str | None = None,
 ) -> ContentPolicyInfo | None:
     """
     If this looks like a fal/partner content or face-filter rejection, return
@@ -120,12 +127,16 @@ def detect_content_policy_violation(
     Detects:
     - type-like tokens: content_policy_violation, partner_validation_failed
     - message phrases: likeness / real people / private information / sensitive content
+
+    ``model_hint`` (endpoint / label / key): Seedance-specific likeness copy only
+    when the active model is Seedance — never show Seedance text on other models.
     """
     raw = str(exc).strip() if not isinstance(exc, str) else exc.strip()
     if not raw:
         return None
     low = raw.lower()
     ctx = (context or "").lower()
+    hint = (model_hint or "").lower()
     combined = f"{ctx} {low}"
 
     has_type = any(m in combined for m in _POLICY_TYPE_MARKERS)
@@ -139,11 +150,16 @@ def detect_content_policy_violation(
     if not (has_type or has_likeness or has_blocked):
         return None
 
+    # Seedance-specific wording only when model is Seedance (or error already names it)
+    is_seedance = "seedance" in hint or "seedance" in combined
+
     if has_likeness or (
         "partner_validation" in combined
         and any(w in combined for w in ("face", "person", "people", "likeness", "photo"))
     ):
-        reason = _LIKENESS_REASON
+        reason = (
+            _LIKENESS_REASON_SEEDANCE if is_seedance else _LIKENESS_REASON_NEUTRAL
+        )
         kind: Literal["likeness", "other"] = "likeness"
     else:
         # Shortened provider message (drop long JSON / stack noise)

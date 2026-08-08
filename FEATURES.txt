@@ -372,13 +372,17 @@ Secondary workspaces: Received, Blank Canvas, Camera Lock (map → I2V / V2V)
 - Source video + reference still (from Image “use as reference”)
 - Recently from Resolve (clips / stills from handoff history)
 - Camera-lock style prompts for furniture / day-night / etc.
-- Models: Kling family, Seedance 2.0 I2V/V2V/reference, MiniMax H3 I2V + Omni
+- Models: Kling family, Seedance 2.0/2.5 I2V/V2V/reference, MiniMax H3 I2V + Omni
   Reference (still + optional motion plate as Video 1), **Grok Imagine Video 1.5**
   I2V + R2V (up to 7 stills), **FLUX 3** I2V + First→Last + Extend (V2V), others on fal
 - MiniMax H3: 5–15s · 2K · ~$0.26/s; native stereo on output
 - Grok Imagine 1.5: 1–15s · 480p–1080p; native audio; ~$0.08–0.25/s + $0.01/ref
 - FLUX 3 (BFL on fal): 5–20s (or auto) · 720p/1080p · optional native audio ·
   ~$0.17/s @720p · ~$0.29/s @1080p; First→Last requires start + end stills
+- **Seedance 2.5** (fal bytedance/seedance-2.5/*): T2V · I2V · R2V — up to **30s**,
+  **480p/720p**, native audio; R2V up to **50 multimodal** refs (Character/Scene sheets
+  as real `image_urls`). Token est. **$0.0214/1k tokens** (video refs ×0.6; image/audio free).
+  Strengths: long take, high ref count, action. Limitation: partner photoreal-face filter.
 - **Unified aspect policy** (`aspect_omit.py`): endpoint omit/send for all video
   paths. Omit: FLUX 3 pure I2V (+ draft), Kling I2V (UI **Follows still**).
   **Seedance R2V sends** aspect_ratio (`auto` default or listed ratios per fal).
@@ -391,7 +395,7 @@ Secondary workspaces: Received, Blank Canvas, Camera Lock (map → I2V / V2V)
   optional edit plate only if user uploads one
 - **R2V**: Character/Scene library dropdowns + Prop upload; “Add another
   character/scene” up to model max (never OS folder); live Image N map;
-  H3 Omni / Seedance Reference / Grok ref live on R2V (not I2V); optional Start
+  H3 Omni / Seedance 2.0+2.5 Reference / Grok ref live on R2V (not I2V); optional Start
 - **I2V**: start frame required for layout lock; FLUX 3 omits aspect_ratio;
   Character secondary / use-as-start (library dropdowns, not folders)
 - **Model Guide** (book icon next to Settings): catalog with R2I/R2V tags
@@ -447,10 +451,20 @@ Video tools:
   Slow Mo / Interpolate (RIFE default, FILM for large motion; 2×–5× factor)
   Object remove, Sky / Weather, Mirror / Glass, Amenity On, Restore, Re-Aspect
 
+  **Sky / Weather (Image + Video):**
+  - Still: Nano Banana / Flux sky replace + sky type / time helpers + Enhance
+  - **Sky reference** still (upload · Previously used · From Resolve); still-sky
+    result offers **Use as sky ref** and **Use for V2V** (sets ref, Video mode,
+    prefers Kling O3 Standard; Studio clip prefilled when present)
+  - V2V: Kling O3 Standard/Pro, Kling O1 Standard/Pro, Seedance; optional sky ref
+    still; helpers-only when no ref (current). Est. cost = rate × duration (not “1 image”)
+  - Video result → **Send to Upscale** + optional soft “Upscale this clip?”
+    (Tools Video Upscale preload; user confirms model/cost)
+
 Each tool: model select, prompt + Enhance where prompts exist (not pure Topaz
 control jobs), cost estimate as job total, result → play / Show in folder /
-Resolve / Library. Image tools with source: Export before/after ▾
-(side-by-side or vertical stack) on the large result pane.
+Resolve / Library / **Send to Upscale** (video). Image tools with source: Export
+before/after ▾ (side-by-side or vertical stack) on the large result pane.
 
 ==============================================================================
 CREATIVE VISION
@@ -513,10 +527,16 @@ Modes (left → right):
       - T2V / I2V / first→last / extend · 5–20s (or auto) · 720p/1080p
       - Optional generate_audio · Est. ~$0.17/s @720p · ~$0.29/s @1080p
       - Also Studio Video I2V / First→Last / Extend (V2V)
+    Seedance 2.5 on fal (bytedance/seedance-2.5/*):
+      - T2V / I2V / R2V · auto or 4–30s · 480p/720p · native audio
+      - R2V: up to 50 multimodal refs; cite [Image1]/[Video1]/[Audio1]
+      - Token billing $0.0214/1k tokens; video refs ×0.6 (image/audio free)
+      - Partner photoreal-face filter; Generation stopped popup + banner on R2V
 
   Image → Video (I2V)
-    Start still → motion (Veo, Kling O3 Pro, Seedance 2.0, Hailuo 02, MiniMax H3,
+    Start still → motion (Veo, Kling O3 Pro, Seedance 2.0/2.5, Hailuo 02, MiniMax H3,
       Grok Imagine 1.5, FLUX 3, …)
+    Seedance 2.5 I2V: up to 30s · 480p/720p · optional end frame · native audio
     MiniMax H3 I2V: first frame still; optional last-frame still (first→last
       transitions: day→night, porch→interior); 5–15s · 2K · native stereo
     Grok Imagine 1.5 I2V: start still + motion prompt; native audio; 480p–1080p

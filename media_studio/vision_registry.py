@@ -796,6 +796,40 @@ T2V_MODELS: dict[str, VisionModelSpec] = {
         duration_as_int=True,
         extra_defaults={"generate_audio": True, "safety_tolerance": 2},
     ),
+    "seedance 2.5 t2v": VisionModelSpec(
+        key="seedance 2.5 t2v",
+        label="Seedance 2.5 · Text→Video",
+        mode="text_to_video",
+        endpoint="bytedance/seedance-2.5/text-to-video",
+        # 5s @720p 16:9 ≈ $2.31 (token formula); UI scales by duration
+        cost_estimate_usd=2.31,
+        cost_per_second=0.473,  # approx 16:9 720p; estimate_vision_cost uses tokens
+        cost_per_second_by_resolution={"480p": 0.2205, "720p": 0.473},
+        notes=(
+            "ByteDance Seedance 2.5 T2V — up to 30s single-pass with native audio. "
+            "480p/720p · duration auto or 4–30s · aspect auto|ratios. "
+            "Token billing ~$0.0214/1k tokens (≈$0.47/s @720p 16:9). "
+            "Partner photoreal-face filter may reject some people prompts."
+        ),
+        duration_choices=("auto",) + tuple(str(i) for i in range(4, 31)),
+        default_duration="5",
+        aspect_choices=(
+            "auto",
+            "21:9",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+        ),
+        default_aspect="auto",
+        resolution_choices=("480p", "720p"),
+        default_resolution="720p",
+        supports_audio=True,
+        supports_negative=False,
+        duration_as_int=False,
+        extra_defaults={"generate_audio": True},
+    ),
 }
 
 # ---------------------------------------------------------------------------
@@ -858,6 +892,41 @@ I2V_MODELS: dict[str, VisionModelSpec] = {
         supports_audio=False,
         resolution_choices=(),
         extra_defaults={},
+    ),
+    "seedance 2.5 i2v": VisionModelSpec(
+        key="seedance 2.5 i2v",
+        label="Seedance 2.5 · Image→Video",
+        mode="image_to_video",
+        endpoint="bytedance/seedance-2.5/image-to-video",
+        cost_estimate_usd=2.31,
+        cost_per_second=0.473,
+        cost_per_second_by_resolution={"480p": 0.2205, "720p": 0.473},
+        notes=(
+            "Seedance 2.5 I2V — animate a still up to 30s with native audio. "
+            "Optional end frame. 480p/720p · duration auto|4–30. "
+            "Token est. ~$0.0214/1k tokens (image refs not billed). "
+            "Partner photoreal-face filter may reject photoreal people stills."
+        ),
+        duration_choices=("auto",) + tuple(str(i) for i in range(4, 31)),
+        default_duration="5",
+        aspect_choices=(
+            "auto",
+            "21:9",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+        ),
+        default_aspect="auto",
+        resolution_choices=("480p", "720p"),
+        default_resolution="720p",
+        supports_audio=True,
+        supports_negative=False,
+        supports_end_frame=True,
+        duration_as_int=False,
+        image_field="image_url",
+        extra_defaults={"generate_audio": True},
     ),
     "hailuo 02 i2v": VisionModelSpec(
         key="hailuo 02 i2v",
@@ -1146,6 +1215,47 @@ R2V_MODELS: dict[str, VisionModelSpec] = {
         max_refs=9,
         duration_as_int=False,  # API expects string "15" / "auto", not int
         image_field="image_urls",
+        extra_defaults={"generate_audio": True},
+    ),
+    "seedance 2.5 reference": VisionModelSpec(
+        key="seedance 2.5 reference",
+        label="Seedance 2.5 · Reference-to-Video",
+        mode="reference_to_video",
+        endpoint="bytedance/seedance-2.5/reference-to-video",
+        cost_estimate_usd=2.31,
+        cost_per_second=0.473,
+        cost_per_second_by_resolution={"480p": 0.2205, "720p": 0.473},
+        notes=(
+            "Seedance 2.5 R2V — up to 50 multimodal refs (images/video/audio), "
+            "up to 30s single-pass, native audio. Cite [Image1] / [Video1] / [Audio1]. "
+            "Character/Scene sheets bind as real image_urls. "
+            "Token est. $0.0214/1k tokens; video refs ×0.6 (image/audio refs free). "
+            "Limitation: partner photoreal-face filter. Strengths: long take, high ref count, action."
+        ),
+        duration_choices=("auto",) + tuple(str(i) for i in range(4, 31)),
+        default_duration="5",
+        aspect_choices=(
+            "auto",
+            "21:9",
+            "16:9",
+            "4:3",
+            "1:1",
+            "3:4",
+            "9:16",
+        ),
+        default_aspect="auto",
+        omit_aspect_ratio=False,
+        resolution_choices=("480p", "720p"),
+        default_resolution="720p",
+        supports_audio=True,
+        supports_negative=False,
+        max_refs=30,  # images; total multimodal cap 50 with video/audio
+        max_ref_videos=10,
+        max_ref_audios=10,
+        max_total_refs=50,
+        duration_as_int=False,
+        image_field="image_urls",
+        prompt_citation_style="plain",
         extra_defaults={"generate_audio": True},
     ),
     # FLUX 3 listed under R2V as identity-ref emphasis (still single-image API)
@@ -1454,6 +1564,73 @@ def duration_seconds(token: str | None) -> float:
     return max(0.5, secs)
 
 
+# fal Seedance 2.5 supported frame sizes (authoritative for token cost)
+_SEEDANCE_25_FRAMES: dict[tuple[str, str], tuple[int, int]] = {
+    ("480p", "21:9"): (992, 432),
+    ("480p", "16:9"): (864, 496),
+    ("480p", "4:3"): (752, 560),
+    ("480p", "1:1"): (640, 640),
+    ("480p", "3:4"): (560, 752),
+    ("480p", "9:16"): (496, 864),
+    ("720p", "21:9"): (1470, 630),
+    ("720p", "16:9"): (1280, 720),
+    ("720p", "4:3"): (1112, 834),
+    ("720p", "1:1"): (960, 960),
+    ("720p", "3:4"): (834, 1112),
+    ("720p", "9:16"): (720, 1280),
+}
+SEEDANCE_25_TOKEN_USD_PER_1K = 0.0214
+SEEDANCE_25_VIDEO_REF_MULTIPLIER = 0.6
+
+
+def is_seedance_25_endpoint(endpoint: str | None) -> bool:
+    ep = (endpoint or "").strip().lower()
+    return "seedance-2.5" in ep or "seedance/2.5" in ep
+
+
+def is_seedance_25_spec(spec: VisionModelSpec | None) -> bool:
+    if spec is None:
+        return False
+    if is_seedance_25_endpoint(spec.endpoint):
+        return True
+    return "2.5" in (spec.key or "").lower() and "seedance" in (spec.key or "").lower()
+
+
+def estimate_seedance_25_cost(
+    *,
+    duration_s: float,
+    resolution: str | None = "720p",
+    aspect_ratio: str | None = "16:9",
+    has_video_refs: bool = False,
+    input_video_duration_s: float = 0.0,
+) -> float:
+    """
+    Seedance 2.5 fal token formula (authoritative).
+
+    tokens = (height * width * (input_video_duration + output_duration) * 24) / 1024
+    cost = tokens / 1000 * $0.0214  (same rate at 480p and 720p)
+    If any video references: cost × 0.6 (input + output seconds both count).
+    Image and audio references are not billed.
+    """
+    res = (resolution or "720p").strip().lower()
+    if res not in ("480p", "720p"):
+        res = "720p"
+    ar = (aspect_ratio or "16:9").strip().lower()
+    if ar in ("auto", "default", "", "—", "none", "follows still"):
+        ar = "16:9"
+    wh = _SEEDANCE_25_FRAMES.get((res, ar)) or _SEEDANCE_25_FRAMES[(res, "16:9")]
+    w, h = wh
+    out_dur = max(0.5, float(duration_s or 5.0))
+    in_dur = 0.0
+    if has_video_refs:
+        in_dur = max(0.0, float(input_video_duration_s or 0.0))
+    tokens = (h * w * (in_dur + out_dur) * 24.0) / 1024.0
+    cost = (tokens / 1000.0) * SEEDANCE_25_TOKEN_USD_PER_1K
+    if has_video_refs:
+        cost *= SEEDANCE_25_VIDEO_REF_MULTIPLIER
+    return round(max(0.05, cost), 3)
+
+
 def clamp_vision_num_images(spec: VisionModelSpec, n: int | None) -> int:
     """UI batch count for stills: 1..VISION_BATCH_MAX (sequential if API is 1-at-a-time)."""
     try:
@@ -1474,6 +1651,8 @@ def estimate_vision_cost(
     aspect_ratio: str | None = None,
     generate_audio: bool | None = None,
     num_images: int | None = None,
+    has_video_refs: bool = False,
+    input_video_duration_s: float = 0.0,
 ) -> float:
     """
     Conservative USD ballpark for UI (not billing).
@@ -1481,6 +1660,8 @@ def estimate_vision_cost(
     Video modes: **total job cost** = rate × selected duration (seconds), then
     resolution / audio multipliers. Never show a bare per-second rate as the total.
     Still modes: per-image × count (multi-variant batch).
+
+    Seedance 2.5 uses fal's token formula ($0.0214/1k tokens; video refs ×0.6).
     """
     if is_still_mode(spec.mode):
         # Flat per-image estimates; bump for large aspect / higher resolution
@@ -1509,6 +1690,16 @@ def estimate_vision_cost(
     dur_token = duration_token if duration_token not in (None, "") else spec.default_duration
     secs = duration_seconds(dur_token)
     default_secs = duration_seconds(spec.default_duration) or 8.0
+
+    # Seedance 2.5 — token formula (prefer over flat $/s tables)
+    if is_seedance_25_spec(spec):
+        return estimate_seedance_25_cost(
+            duration_s=secs,
+            resolution=resolution or spec.default_resolution or "720p",
+            aspect_ratio=aspect_ratio or spec.default_aspect or "16:9",
+            has_video_refs=bool(has_video_refs),
+            input_video_duration_s=float(input_video_duration_s or 0.0),
+        )
 
     by_res = getattr(spec, "cost_per_second_by_resolution", None) or {}
     rate: float | None = None
@@ -1565,12 +1756,15 @@ def format_vision_cost(
     aspect_ratio: str | None = None,
     generate_audio: bool | None = None,
     num_images: int | None = None,
+    has_video_refs: bool = False,
+    input_video_duration_s: float = 0.0,
 ) -> str:
     """
     Human label for the **total** estimated job cost.
 
     Video: ``Est. cost: $X.XX · {duration}s ({model})``
     Still: ``Est. cost: $X.XX · N image(s) ({model})`` — per-image × count
+    Seedance 2.5 with video refs notes the ×0.6 video-ref flag.
     """
     from media_studio.pricing import format_job_cost
 
@@ -1581,6 +1775,8 @@ def format_vision_cost(
         aspect_ratio=aspect_ratio,
         generate_audio=generate_audio,
         num_images=num_images,
+        has_video_refs=has_video_refs,
+        input_video_duration_s=input_video_duration_s,
     )
     if is_still_mode(spec.mode):
         n = clamp_vision_num_images(spec, num_images)
@@ -1592,7 +1788,10 @@ def format_vision_cost(
     dur_token = duration_token if duration_token not in (None, "") else spec.default_duration
     secs = duration_seconds(dur_token)
     dur_txt = f"{secs:.0f}" if abs(secs - round(secs)) < 1e-6 else f"{secs:.1f}"
-    return format_job_cost(amt, unit=f"{dur_txt}s", model=spec.label)
+    unit = f"{dur_txt}s"
+    if is_seedance_25_spec(spec) and has_video_refs:
+        unit = f"{dur_txt}s · video-ref ×0.6"
+    return format_job_cost(amt, unit=unit, model=spec.label)
 
 
 def build_vision_arguments(
@@ -1850,8 +2049,36 @@ def build_vision_arguments(
             if auds:
                 args["reference_audio_urls"] = auds
         elif "image_urls" in (spec.image_field or "") or "seedance" in ep:
+            # Seedance 2.0/2.5 R2V: image_urls + optional video_urls / audio_urls
             cap_i = max(1, int(spec.max_refs or 9))
-            args["image_urls"] = imgs[:cap_i]
+            cap_v = max(0, int(getattr(spec, "max_ref_videos", 0) or 0))
+            cap_a = max(0, int(getattr(spec, "max_ref_audios", 0) or 0))
+            total_cap = int(getattr(spec, "max_total_refs", 0) or 0) or 0
+            if not cap_v and "seedance" in ep:
+                cap_v = 3 if "2.5" not in ep else 10
+            if not cap_a and "seedance" in ep:
+                cap_a = 3 if "2.5" not in ep else 10
+            if not total_cap and "seedance-2.5" in ep:
+                total_cap = 50
+            use_imgs = imgs[:cap_i]
+            use_vids = vids[:cap_v] if cap_v else []
+            use_auds = auds[:cap_a] if cap_a else []
+            if total_cap > 0:
+                while len(use_imgs) + len(use_vids) + len(use_auds) > total_cap:
+                    if use_auds:
+                        use_auds.pop()
+                    elif use_imgs and len(use_imgs) > 1:
+                        use_imgs.pop()
+                    elif use_vids:
+                        use_vids.pop()
+                    else:
+                        break
+            if use_imgs:
+                args["image_urls"] = use_imgs
+            if use_vids:
+                args["video_urls"] = use_vids
+            if use_auds:
+                args["audio_urls"] = use_auds
         elif "reference_image" in (spec.image_field or ""):
             field = spec.image_field or "reference_image_urls"
             args[field] = imgs[: max(1, int(spec.max_refs or 7))]
