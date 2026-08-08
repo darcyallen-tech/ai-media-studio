@@ -68,7 +68,10 @@ Voice Clone stays under Audio.
 - R2V character ref (Creative Vision + Studio): when a **Character Sheet** exists,
   default identity ref is the **composite sheet** (one image_url; citation
   ``Name sheet`` / ``Parent / Costume sheet``). Toggle under character row:
-  **Sheet (recommended)** | **Front only**. Never sends all angle stills when sheet selected.
+  **Sheet (recommended)** | **Front only**. When Sheet is selected and a sheet
+  file exists, that composite is the **only** identity image sent for the slot
+  (payload path matches citation; no silent Front fallback). Front only when the
+  user picks Front. Never dumps all angle stills when sheet selected.
 - Generate missing Front/Side/Close-up from existing identity stills (multi-ref I2I;
   pure black clean plate by default; preview + Confirm; base + costume variants)
 - Remove background (Bria RMBG, manual): per slot + all-angles batch; cost shown;
@@ -138,7 +141,8 @@ Local only (data/scenes.json + data/scene_stills/). Not a Library replacement.
   sheet prompt. Models: Nano Banana 2 suggested + other T2I/I2I. **# sheets** when
   model allows batch. Per-result: expand · Set as primary sheet · Save as variation
   (under scene) · Discard. List: sheet thumb + Expand; variations collapse under
-  scene. Preferred R2V/Director ref = primary sheet; picker **Sheet | Hero only**.
+  scene. Preferred R2V/Director ref = primary sheet; picker **Sheet | Hero only**
+  (Sheet selected → composite bytes sent; Hero only → hero plate; no silent swap).
 - Scenes support **variations + multi-angle packs** for Director location refs
 - Director multi-ref: **Scene pack Hero only | Full pack** (default Hero only when
   character also bound); single-ref always Hero; ref budget unique-asset based

@@ -3371,6 +3371,15 @@ class CreativeVisionView:
             self.page.update()
             return
         if self._mode == "reference_to_image":
+            bind_errs = []
+            try:
+                bind_errs = self.ref_pack.rebind_from_pickers()
+            except Exception:
+                bind_errs = []
+            if bind_errs:
+                self.status.value = bind_errs[0]
+                self.page.update()
+                return
             pack = self._ref_pack_paths()
             if not pack:
                 self.status.value = (
@@ -3388,6 +3397,15 @@ class CreativeVisionView:
                 self.page.update()
                 return
         if self._mode == "reference_to_video" or self._is_omni_model():
+            bind_errs = []
+            try:
+                bind_errs = self.ref_pack.rebind_from_pickers()
+            except Exception:
+                bind_errs = []
+            if bind_errs:
+                self.status.value = bind_errs[0]
+                self.page.update()
+                return
             pack = self._ref_pack_paths()
             has_omni = bool(
                 pack
@@ -3616,6 +3634,15 @@ class CreativeVisionView:
                         gen_prompt = gen_prompt.rstrip(".") + ". " + note
             except Exception:
                 pass
+            # Re-resolve Sheet|Front / Sheet|Hero so payload bytes match citation map
+            try:
+                if self._mode in (
+                    "reference_to_video",
+                    "reference_to_image",
+                ) or self._is_omni_model():
+                    self.ref_pack.rebind_from_pickers()
+            except Exception:
+                pass
             primary_still, assembled = self._assemble_character_first_refs()
             pack_paths = self._ref_pack_paths()
             # Inject live citation map for multi-ref
@@ -3630,17 +3657,34 @@ class CreativeVisionView:
                     gen_prompt.rstrip(".")
                     + f". Refs: {map_txt}."
                 )
+            # Surface which files are bound (citation map = payload order)
+            try:
+                bind_lines = self.ref_pack.bind_status_lines()
+                if bind_lines and self._mode in (
+                    "reference_to_video",
+                    "reference_to_image",
+                ):
+                    self.status.value = " · ".join(bind_lines)
+                    self.page.update()
+            except Exception:
+                pass
             # R2V / R2I: full pack. Character is NEVER forced as source for R2I.
+            # Pack order owns Image 1…N — do NOT let an optional Start frame steal
+            # the first slot (FLUX 3 Identity/R2V is single-image and would then
+            # ignore the character/scene sheet entirely).
             if self._mode == "reference_to_video" or self._is_omni_model():
                 vision_refs = list(pack_paths) if pack_paths else list(assembled)
+                primary_still = pack_paths[0] if pack_paths else primary_still
+                # Multi-ref / omni only: append composition start as extra plate
                 if (
                     getattr(self, "_start_is_composition", False)
                     and self.start_path
                     and Path(self.start_path).is_file()
+                    and self.start_path not in vision_refs
                 ):
-                    primary_still = self.start_path
-                else:
-                    primary_still = pack_paths[0] if pack_paths else primary_still
+                    max_r = int(getattr(spec, "max_refs", 0) or 0)
+                    if max_r > 1 or self._is_omni_model():
+                        vision_refs = list(vision_refs) + [self.start_path]
             elif self._mode == "reference_to_image":
                 # First ref is edit primary only for multi-ref API; stills are identity
                 vision_refs = list(pack_paths)

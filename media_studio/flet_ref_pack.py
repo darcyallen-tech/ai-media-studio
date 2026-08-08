@@ -39,6 +39,8 @@ class RefItem:
     path: str
     label: str
     source_id: str | None = None  # character or scene id
+    # True when this slot was bound to a composite sheet file (not Front/Hero).
+    is_sheet: bool = False
 
 
 @dataclass
@@ -241,12 +243,152 @@ class RefPackPanel:
                 p.refresh()
             except Exception:
                 pass
+        # Pickers refresh with notify=False — re-resolve paths so RefItems
+        # match Sheet|Front / Sheet|Hero and never keep a stale Front path.
+        self.rebind_from_pickers(update_ui=False)
         self._rebuild_lists()
         self._update_mapping()
         self._sync_add_buttons()
 
-    def ordered_items(self) -> list[RefItem]:
-        """Citation order: all characters, then scenes, then props."""
+    def rebind_from_pickers(self, *, update_ui: bool = True) -> list[str]:
+        """
+        Re-resolve Character/Scene slots from live pickers + library store.
+
+        When Ref = Sheet and a sheet file exists, that path is the **only**
+        identity/scene image for the slot (no silent Front/Hero fallback).
+        When Sheet is selected but the file is missing, path is cleared and an
+        error string is returned — Front/Hero is not substituted.
+
+        Returns a list of human-readable error messages (empty if ok).
+        """
+        from media_studio.character_store import find_picker_choice
+        from media_studio.scene_store import find_scene_picker_choice
+
+        errors: list[str] = []
+
+        n_char = max(len(self._char_pickers), 1)
+        while len(self._chars) < n_char:
+            self._chars.append(RefItem("character", "", "", None))
+        if len(self._chars) > len(self._char_pickers) and self._char_pickers:
+            self._chars = self._chars[: len(self._char_pickers)]
+
+        for i, pick in enumerate(self._char_pickers):
+            cid = getattr(pick, "selected_id", None)
+            if not cid:
+                if i < len(self._chars):
+                    self._chars[i] = RefItem("character", "", "", None)
+                continue
+            choice = find_picker_choice(cid)
+            if choice is None:
+                errors.append(f"Character {i + 1}: library entry not found.")
+                self._chars[i] = RefItem("character", "", "", cid)
+                continue
+            use_sheet = bool(getattr(pick, "use_sheet", True))
+            # Trust radio when present (covers edge cases after store reload)
+            try:
+                mode_val = (getattr(pick, "ref_mode", None) and pick.ref_mode.value) or ""
+                if str(mode_val).strip().lower() == "sheet":
+                    use_sheet = True
+                elif str(mode_val).strip().lower() == "front":
+                    use_sheet = False
+            except Exception:
+                pass
+            if use_sheet and not choice.has_sheet:
+                base = (choice.label or "Character").strip() or "Character"
+                errors.append(
+                    f"Character {i + 1} ({base}): Sheet selected but no sheet file. "
+                    "Make a Character Sheet or switch to Front only."
+                )
+                self._chars[i] = RefItem(
+                    "character", "", f"{base} sheet (missing)", cid, is_sheet=True
+                )
+                continue
+            path = choice.ref_path(use_sheet=use_sheet)
+            label = choice.ref_label(use_sheet=use_sheet)
+            if not path or not Path(path).is_file():
+                base = (choice.label or "Character").strip() or "Character"
+                errors.append(f"Character {i + 1} ({base}): still file missing.")
+                self._chars[i] = RefItem("character", "", base, cid)
+                continue
+            try:
+                path = str(Path(path).resolve())
+            except OSError:
+                pass
+            is_sheet = bool(
+                use_sheet
+                and choice.has_sheet
+                and choice.sheet_path
+                and Path(path).resolve()
+                == Path(choice.sheet_path).resolve()
+            )
+            self._chars[i] = RefItem(
+                "character", path, label or Path(path).name, cid, is_sheet=is_sheet
+            )
+
+        n_scene = max(len(self._scene_pickers), 1)
+        while len(self._scenes) < n_scene:
+            self._scenes.append(RefItem("scene", "", "", None))
+        if len(self._scenes) > len(self._scene_pickers) and self._scene_pickers:
+            self._scenes = self._scenes[: len(self._scene_pickers)]
+
+        for i, pick in enumerate(self._scene_pickers):
+            sid = getattr(pick, "selected_id", None)
+            if not sid:
+                if i < len(self._scenes):
+                    self._scenes[i] = RefItem("scene", "", "", None)
+                continue
+            choice = find_scene_picker_choice(sid)
+            if choice is None:
+                errors.append(f"Scene {i + 1}: library entry not found.")
+                self._scenes[i] = RefItem("scene", "", "", sid)
+                continue
+            use_sheet = bool(getattr(pick, "use_sheet", True))
+            try:
+                mode_val = (getattr(pick, "ref_mode", None) and pick.ref_mode.value) or ""
+                if str(mode_val).strip().lower() == "sheet":
+                    use_sheet = True
+                elif str(mode_val).strip().lower() in ("hero", "front"):
+                    use_sheet = False
+            except Exception:
+                pass
+            if use_sheet and not choice.has_sheet:
+                base = (choice.label or "Scene").strip() or "Scene"
+                errors.append(
+                    f"Scene {i + 1} ({base}): Sheet selected but no sheet file. "
+                    "Make a Scene Sheet or switch to Hero only."
+                )
+                self._scenes[i] = RefItem(
+                    "scene", "", f"{base} sheet (missing)", sid, is_sheet=True
+                )
+                continue
+            path = choice.ref_path(use_sheet=use_sheet)
+            label = choice.ref_label(use_sheet=use_sheet)
+            if not path or not Path(path).is_file():
+                base = (choice.label or "Scene").strip() or "Scene"
+                errors.append(f"Scene {i + 1} ({base}): still file missing.")
+                self._scenes[i] = RefItem("scene", "", base, sid)
+                continue
+            try:
+                path = str(Path(path).resolve())
+            except OSError:
+                pass
+            is_sheet = bool(
+                use_sheet
+                and choice.has_sheet
+                and choice.sheet_path
+                and Path(path).resolve()
+                == Path(choice.sheet_path).resolve()
+            )
+            self._scenes[i] = RefItem(
+                "scene", path, label or Path(path).name, sid, is_sheet=is_sheet
+            )
+
+        if update_ui:
+            self._update_mapping()
+        return errors
+
+    def _collect_ordered(self) -> list[RefItem]:
+        """Citation order from current RefItems (no rebind)."""
         out: list[RefItem] = []
         for it in self._chars:
             if it.path and Path(it.path).is_file():
@@ -259,8 +401,24 @@ class RefPackPanel:
                 out.append(it)
         return out
 
+    def ordered_items(self) -> list[RefItem]:
+        """
+        Citation order: all characters, then scenes, then props.
+
+        Always re-resolves Character/Scene paths from pickers so Image N labels
+        match the files that will be uploaded.
+        """
+        self.rebind_from_pickers(update_ui=False)
+        return self._collect_ordered()
+
     def ordered_paths(self) -> list[str]:
         return [it.path for it in self.ordered_items()]
+
+    def bind_status_lines(self) -> list[str]:
+        """Short lines: ``Image 1 ← Heidi Gym Outfit Dark Blue sheet``."""
+        style = citation_style_for_model(self._model_choice, mode=self._mode)
+        items = self.ordered_items()
+        return [f"{style.tag(i)} ← {it.label}" for i, it in enumerate(items, start=1)]
 
     def mapping_text(self) -> str:
         style = citation_style_for_model(self._model_choice, mode=self._mode)
@@ -413,36 +571,39 @@ class RefPackPanel:
         Prefer path from CharacterPicker (sheet composite when selected).
         Citation label: ``Camera Man sheet`` or picker label (Front only).
         Never expands to all individual angle stills.
+        Never falls back to Front when Sheet is selected but missing.
         """
         cid = getattr(choice, "id", None)
         use_sheet = True
-        # Prefer picker path (already sheet-or-front resolved) when valid
         p = (path or "").strip()
         label = ""
+        is_sheet = False
         try:
+            if 0 <= index < len(self._char_pickers):
+                pick = self._char_pickers[index]
+                use_sheet = bool(getattr(pick, "use_sheet", True))
             if hasattr(choice, "ref_path") and hasattr(choice, "ref_label"):
-                # Read toggle from matching picker when available
-                if 0 <= index < len(self._char_pickers):
-                    pick = self._char_pickers[index]
-                    use_sheet = bool(getattr(pick, "use_sheet", True))
-                p = choice.ref_path(use_sheet=use_sheet) or p
-                label = choice.ref_label(use_sheet=use_sheet)
+                if use_sheet and not getattr(choice, "has_sheet", False):
+                    # Sheet mode without a file — do not send Front
+                    base = getattr(choice, "label", None) or "Character"
+                    label = f"{base} sheet (missing)"
+                    p = ""
+                else:
+                    p = choice.ref_path(use_sheet=use_sheet) or ""
+                    label = choice.ref_label(use_sheet=use_sheet)
+                    is_sheet = bool(use_sheet and getattr(choice, "has_sheet", False))
         except Exception:
             pass
         if not label:
             label = getattr(choice, "label", None) or (
                 Path(p).name if p else "Character"
             )
-            # If path is the composite sheet file, force sheet citation
             try:
                 sp = getattr(choice, "sheet_path", "") or ""
-                if (
-                    p
-                    and sp
-                    and Path(p).resolve() == Path(sp).resolve()
-                ):
+                if p and sp and Path(p).resolve() == Path(sp).resolve():
                     base = getattr(choice, "label", None) or "Character"
                     label = f"{base} sheet"
+                    is_sheet = True
             except OSError:
                 pass
         if p:
@@ -452,7 +613,7 @@ class RefPackPanel:
                 pass
         while len(self._chars) <= index:
             self._chars.append(RefItem("character", "", "", None))
-        self._chars[index] = RefItem("character", p, label, cid)
+        self._chars[index] = RefItem("character", p, label, cid, is_sheet=is_sheet)
         self._update_mapping()
         self._sync_add_buttons()
         self._notify()
@@ -472,14 +633,21 @@ class RefPackPanel:
         sid = getattr(choice, "id", None)
         p = (path or "").strip()
         label = ""
+        use_sheet = True
+        is_sheet = False
         try:
+            if 0 <= index < len(self._scene_pickers):
+                pick = self._scene_pickers[index]
+                use_sheet = bool(getattr(pick, "use_sheet", True))
             if hasattr(choice, "ref_path") and hasattr(choice, "ref_label"):
-                use_sheet = True
-                if 0 <= index < len(self._scene_pickers):
-                    pick = self._scene_pickers[index]
-                    use_sheet = bool(getattr(pick, "use_sheet", True))
-                p = choice.ref_path(use_sheet=use_sheet) or p
-                label = choice.ref_label(use_sheet=use_sheet)
+                if use_sheet and not getattr(choice, "has_sheet", False):
+                    base = getattr(choice, "label", None) or "Scene"
+                    label = f"{base} sheet (missing)"
+                    p = ""
+                else:
+                    p = choice.ref_path(use_sheet=use_sheet) or ""
+                    label = choice.ref_label(use_sheet=use_sheet)
+                    is_sheet = bool(use_sheet and getattr(choice, "has_sheet", False))
         except Exception:
             pass
         if not label:
@@ -491,6 +659,7 @@ class RefPackPanel:
                 if p and sp and Path(p).resolve() == Path(sp).resolve():
                     base = getattr(choice, "label", None) or "Scene"
                     label = f"{base} sheet"
+                    is_sheet = True
             except OSError:
                 pass
         if p:
@@ -500,7 +669,7 @@ class RefPackPanel:
                 pass
         while len(self._scenes) <= index:
             self._scenes.append(RefItem("scene", "", "", None))
-        self._scenes[index] = RefItem("scene", p, label, sid)
+        self._scenes[index] = RefItem("scene", p, label, sid, is_sheet=is_sheet)
         self._update_mapping()
         self._sync_add_buttons()
         self._notify()
@@ -612,8 +781,18 @@ class RefPackPanel:
             )
 
     def _update_mapping(self) -> None:
-        self.mapping_label.value = self.mapping_text()
-        n = len(self.ordered_items())
+        # Use raw items (already rebound by callers) to avoid rebind recursion.
+        style = citation_style_for_model(self._model_choice, mode=self._mode)
+        items = self._collect_ordered()
+        if not items:
+            self.mapping_label.value = "No refs yet — add Character / Scene / Prop."
+        else:
+            bits = [
+                f"{style.tag(i)} = {it.label} ({it.role})"
+                for i, it in enumerate(items, start=1)
+            ]
+            self.mapping_label.value = " · ".join(bits)
+        n = len(items)
         self.count_label.value = (
             f"{n} ref(s) · Characters {self._cap_char()} max · "
             f"Scenes {self._cap_scene()} max · Props {self._cap_prop()} max"

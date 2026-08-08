@@ -575,20 +575,45 @@ class CharacterPickerChoice:
 
         When ``use_sheet`` and a composite sheet exists, return that only —
         never expand to all individual angle stills.
+
+        When ``use_sheet`` is False (Front only), return Front plate only —
+        never the composite sheet (``still_path`` may prefer sheet when present).
         """
         if use_sheet and self.has_sheet:
             try:
                 return str(Path(self.sheet_path).resolve())
             except OSError:
                 return self.sheet_path
+        # Front only — do not fall back to still_path if that is the sheet
+        sheet_resolved: Path | None = None
+        if self.has_sheet:
+            try:
+                sheet_resolved = Path(self.sheet_path).resolve()
+            except OSError:
+                sheet_resolved = None
         for cand in (self.front_path, self.still_path):
             p = (cand or "").strip()
-            if p:
-                try:
-                    if Path(p).is_file():
-                        return str(Path(p).resolve())
-                except OSError:
+            if not p:
+                continue
+            try:
+                rp = Path(p).resolve()
+                if not rp.is_file():
+                    continue
+                if sheet_resolved is not None and rp == sheet_resolved:
+                    # Skip composite when Front-only mode
+                    continue
+                return str(rp)
+            except OSError:
+                if sheet_resolved is None or p != (self.sheet_path or "").strip():
                     return p
+        # Last resort: Front even if resolution checks failed
+        fp = (self.front_path or "").strip()
+        if fp:
+            try:
+                if Path(fp).is_file():
+                    return str(Path(fp).resolve())
+            except OSError:
+                return fp
         return None
 
     def ref_label(self, *, use_sheet: bool = True) -> str:
@@ -609,10 +634,16 @@ def character_r2v_ref_for_id(
 
     Returns ``(path, label)``. Path is the composite sheet when preferred and
     available; never a list of angle stills.
+
+    When ``use_sheet`` and the sheet file is missing, returns ``(None, "… sheet (missing)")``
+    so callers can error instead of silently using Front.
     """
     ch = find_picker_choice(char_id) if char_id else None
     if ch is None:
         return None, ""
+    if use_sheet and not ch.has_sheet:
+        base = (ch.label or "Character").strip() or "Character"
+        return None, f"{base} sheet (missing)"
     return ch.ref_path(use_sheet=use_sheet), ch.ref_label(use_sheet=use_sheet)
 
 

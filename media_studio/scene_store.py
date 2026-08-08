@@ -1721,19 +1721,44 @@ class ScenePickerChoice:
             return False
 
     def ref_path(self, *, use_sheet: bool = True) -> str | None:
+        """
+        Single scene image for R2V/R2I.
+
+        Sheet mode → composite only. Hero mode → hero plate only (never sheet
+        via preferred still_path fallback).
+        """
         if use_sheet and self.has_sheet:
             try:
                 return str(Path(self.sheet_path).resolve())
             except OSError:
                 return self.sheet_path
+        sheet_resolved: Path | None = None
+        if self.has_sheet:
+            try:
+                sheet_resolved = Path(self.sheet_path).resolve()
+            except OSError:
+                sheet_resolved = None
         for cand in (self.hero_path, self.still_path):
             p = (cand or "").strip()
-            if p:
-                try:
-                    if Path(p).is_file():
-                        return str(Path(p).resolve())
-                except OSError:
+            if not p:
+                continue
+            try:
+                rp = Path(p).resolve()
+                if not rp.is_file():
+                    continue
+                if sheet_resolved is not None and rp == sheet_resolved:
+                    continue
+                return str(rp)
+            except OSError:
+                if sheet_resolved is None or p != (self.sheet_path or "").strip():
                     return p
+        hp = (self.hero_path or "").strip()
+        if hp:
+            try:
+                if Path(hp).is_file():
+                    return str(Path(hp).resolve())
+            except OSError:
+                return hp
         return None
 
     def ref_label(self, *, use_sheet: bool = True) -> str:
@@ -1805,3 +1830,24 @@ def find_scene_picker_choice(scene_id: str | None) -> ScenePickerChoice | None:
         if ch.id == scene_id:
             return ch
     return None
+
+
+def scene_r2v_ref_for_id(
+    scene_id: str | None,
+    *,
+    use_sheet: bool = True,
+) -> tuple[str | None, str]:
+    """
+    Resolve a single R2V scene path + citation label for a scene id.
+
+    Returns ``(path, label)``. Path is the composite sheet when preferred and
+    available; never a silent Hero fallback when sheet was requested but missing
+    (caller should check ``has_sheet`` / empty path).
+    """
+    ch = find_scene_picker_choice(scene_id) if scene_id else None
+    if ch is None:
+        return None, ""
+    if use_sheet and not ch.has_sheet:
+        base = (ch.label or "Scene").strip() or "Scene"
+        return None, f"{base} sheet (missing)"
+    return ch.ref_path(use_sheet=use_sheet), ch.ref_label(use_sheet=use_sheet)

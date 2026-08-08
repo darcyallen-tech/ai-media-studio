@@ -56,6 +56,18 @@ See also [README.md](README.md) (install) and [FEATURES.txt](FEATURES.txt) (capa
 - fal errors append raw body to `outputs/aspect_debug.log` + progress line
 - Tests: `python scripts/test_aspect_policy.py`
 
+### Fix: R2V Sheet ref must send the sheet file (not Front/Hero)
+- **Bug**: Citation map could say `Heidi sheet` / `Modern Gym sheet` while FLUX 3
+  Identity/R2V (and other image-ref models) still received Front / hero stills
+- **Fix**: Live rebind from Character/Scene pickers on refresh + generate — when
+  **Ref = Sheet** and a saved sheet exists, that file is the only identity/scene
+  image for the slot; Front/Hero only when the user picks **Front only** / **Hero only**
+- Citation map labels match payload bytes; status lines `Image N ← … sheet`
+- Missing sheet + Sheet selected → clear error (no silent Front/Hero fallback)
+- Optional Start frame no longer steals Image 1 on single-image R2V (e.g. FLUX 3)
+- Applies to all R2V image-ref models (FLUX 3, Seedance, H3, Kling, …)
+- Smoke: `python scripts/smoke_r2v_sheet_bind.py`
+
 ### R2V / R2I reference UI cleanup
 - **Slots**: Character (library dropdown) · Scene (library dropdown) · Prop (upload) · optional Start frame (composition only)
 - **Add another character / scene** opens another library dropdown — never OS folder dialog

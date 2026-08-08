@@ -217,11 +217,14 @@ def run_vision(
                 progress(f"Uploading end frame: {Path(last_frame_path).name}")
                 last_url = upload_file(Path(last_frame_path), on_progress=progress)
         elif mode == "reference_to_video":
-            # Character / multi-ref first — optional start frame as primary image_url
+            # R2V identity pack: image_path is first bound ref (Character sheet/Front).
+            # Do not treat it as a layout-locked start frame. Deduped against ref_paths.
             if image_path and Path(image_path).is_file():
-                progress(f"Uploading optional start/identity: {Path(image_path).name}")
-                image_url = upload_file(Path(image_path), on_progress=progress)
-            # refs uploaded below
+                source_still_path = Path(image_path)
+                progress(f"Bound Image 1 ← {source_still_path.name}")
+                progress(f"Uploading identity/ref: {source_still_path.name}")
+                image_url = upload_file(source_still_path, on_progress=progress)
+            # remaining pack refs uploaded below (skip duplicate of Image 1)
         elif mode == "bridge":
             fp = Path(first_frame_path) if first_frame_path else None
             lp = Path(last_frame_path) if last_frame_path else None
@@ -250,6 +253,7 @@ def run_vision(
                     or mode == "reference_to_video"
                     or int(spec.max_refs or 0) > 0
                 ) else 8
+                img_n = 1 if (image_url and source_still_path) else 0
                 for rp in ref_paths or []:
                     try:
                         p = Path(rp)
@@ -260,6 +264,8 @@ def run_vision(
                             source_still_path.resolve()
                         ):
                             continue
+                        img_n += 1
+                        progress(f"Bound Image {img_n} ← {p.name}")
                         progress(f"Uploading ref still: {p.name}")
                         u = upload_file(p, on_progress=progress)
                         if u not in ref_urls:
